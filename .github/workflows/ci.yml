@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run reversi-engine tests
+        run: cargo test -p reversi-engine
+
+      - name: Build GDExtension library
+        run: cargo build -p reversi-godot
+
+      - name: Verify shared library exists
+        run: ls target/debug/libreversi_godot.so
