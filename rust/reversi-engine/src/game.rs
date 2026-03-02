@@ -243,6 +243,14 @@ mod tests {
     }
 
     #[test]
+    fn test_pass_rejected_when_has_moves() {
+        let mut game = Game::new();
+        // Black has legal moves at game start, so pass should be rejected
+        let result = game.pass_turn();
+        assert_eq!(result, Err(MoveError::NoFlips));
+    }
+
+    #[test]
     fn test_pass_when_no_moves() {
         // Create a board where one player has no moves
         let mut board = Board::empty();

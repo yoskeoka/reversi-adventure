@@ -227,5 +227,5 @@ game.set_board_from_string(s: String) -> bool
 
 # History
 game.get_move_count() -> int
-game.get_move_history() -> String          # comma-separated "rc" format
+game.get_move_history() -> String          # Othello notation (e.g., "F5D6C3PS")
 ```
