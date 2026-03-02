@@ -16,6 +16,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Run clippy
+        run: cargo clippy --workspace -- -D warnings
+
       - name: Run reversi-engine tests
         run: cargo test -p reversi-engine
 

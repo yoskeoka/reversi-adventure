@@ -51,7 +51,7 @@ pub fn flipped_pieces(board: &Board, color: Color, pos: Position) -> u64 {
         let mut c = pos.col as i8 + dc;
 
         // Walk in this direction, collecting opponent pieces
-        while r >= 0 && r < 8 && c >= 0 && c < 8 {
+        while (0..8).contains(&r) && (0..8).contains(&c) {
             let bit = 1u64 << (r as u8 * 8 + c as u8);
             if opp & bit != 0 {
                 line |= bit;

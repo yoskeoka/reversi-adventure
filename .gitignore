@@ -5,3 +5,13 @@
 godot/.godot/
 godot/.nomedia
 *.translation
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

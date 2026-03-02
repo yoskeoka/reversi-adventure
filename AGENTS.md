@@ -76,3 +76,16 @@ Keep the main context window clean by delegating to subagents.
 - One task per subagent for focused execution
 - Clear, specific instructions with expected output format
 - Set scope boundaries -- subagents must not modify files without explicit instruction
+
+## Build & Lint Commands
+
+- **Test**: `cargo test -p reversi-engine`
+- **Build (GDExtension)**: `cargo build -p reversi-godot`
+- **Lint**: `cargo clippy --workspace -- -D warnings`
+
+## Tech Stack
+
+- **Game engine**: Godot 4.5 (GDScript)
+- **Core engine**: Rust (reversi-engine crate, pure logic)
+- **GDExtension bridge**: Rust (reversi-godot crate, gdext v0.4.5)
+- **Cargo workspace**: root Cargo.toml with members `rust/reversi-engine` and `rust/reversi-godot`

@@ -26,7 +26,7 @@ impl ReversiGame {
     /// Returns the cell state: 0=empty, 1=black, 2=white.
     #[func]
     fn get_cell(&self, row: i32, col: i32) -> i32 {
-        if row < 0 || row >= 8 || col < 0 || col >= 8 {
+        if !(0..8).contains(&row) || !(0..8).contains(&col) {
             return 0;
         }
         match self.game.board().get(Position::new(row as u8, col as u8)) {
@@ -97,7 +97,7 @@ impl ReversiGame {
     /// Makes a move. Returns the status (0/1/2) or -1 on error.
     #[func]
     fn play(&mut self, row: i32, col: i32) -> i32 {
-        if row < 0 || row >= 8 || col < 0 || col >= 8 {
+        if !(0..8).contains(&row) || !(0..8).contains(&col) {
             return -1;
         }
         match self.game.play(Position::new(row as u8, col as u8)) {
@@ -147,7 +147,7 @@ impl ReversiGame {
         self.game.move_history().len() as i32
     }
 
-    /// Returns the move history as a comma-separated string.
+    /// Returns the move history in standard Othello notation.
     #[func]
     fn get_move_history(&self) -> GString {
         GString::from(&self.game.move_history_string())
