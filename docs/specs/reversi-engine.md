@@ -191,9 +191,12 @@ enum MoveError {
 
 ### Move History Format
 
-Comma-separated positions as `rc` (e.g., `34,53,24,...`). Pass = `--`.
+Standard Othello notation. Each move is 2 characters: column letter (A-H) + row number (1-8). Moves are concatenated without separators. Pass = `PS`.
 
-Example: `34,53,24,--,56`
+Example: `F5D6C3D3C4` (five moves, no passes)
+Example with pass: `F5D6C3PSC4`
+
+Column A = left (col 0), column H = right (col 7). Row 1 = top (row 0), row 8 = bottom (row 7).
 
 ## GDScript Bridge API
 

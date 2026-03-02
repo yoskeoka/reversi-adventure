@@ -139,17 +139,22 @@ impl Game {
         }
     }
 
-    /// Serializes the move history to a comma-separated string.
-    /// Moves are "rc" (e.g., "34"), passes are "--".
+    /// Serializes the move history to standard Othello notation.
+    /// Each move is 2 characters: column letter (A-H) + row number (1-8).
+    /// Moves are concatenated without separators: "F5D6C3...".
+    /// Pass is represented as "PS".
     pub fn move_history_string(&self) -> String {
         self.move_history
             .iter()
             .map(|m| match m {
-                Some(pos) => format!("{}{}", pos.row, pos.col),
-                None => "--".to_string(),
+                Some(pos) => {
+                    let col_letter = (b'A' + pos.col) as char;
+                    let row_number = pos.row + 1;
+                    format!("{}{}", col_letter, row_number)
+                }
+                None => "PS".to_string(),
             })
-            .collect::<Vec<_>>()
-            .join(",")
+            .collect::<String>()
     }
 }
 
@@ -232,9 +237,9 @@ mod tests {
     #[test]
     fn test_move_history_string() {
         let mut game = Game::new();
-        game.play(Position::new(2, 3)).unwrap();
-        game.play(Position::new(2, 2)).unwrap();
-        assert_eq!(game.move_history_string(), "23,22");
+        game.play(Position::new(2, 3)).unwrap(); // D3
+        game.play(Position::new(2, 2)).unwrap(); // C3
+        assert_eq!(game.move_history_string(), "D3C3");
     }
 
     #[test]
