@@ -1,0 +1,7 @@
+# Rust
+/target/
+
+# Godot
+godot/.godot/
+godot/.nomedia
+*.translation
