@@ -2,12 +2,17 @@ use godot::prelude::*;
 use reversi_engine::board::Board;
 use reversi_engine::game::Game;
 use reversi_engine::types::{Color, GameStatus, Position};
+use reversi_ai::config::AiConfig;
+use reversi_ai::eval::novice::NoviceEvaluator;
+use reversi_ai::eval::strategic::StrategicEvaluator;
+use reversi_ai::player::AiPlayer;
 
 /// GDScript-callable wrapper for the Reversi game engine.
 #[derive(GodotClass)]
 #[class(base=RefCounted)]
 pub struct ReversiGame {
     game: Game,
+    ai: Option<AiPlayer>,
     base: Base<RefCounted>,
 }
 
@@ -16,6 +21,7 @@ impl IRefCounted for ReversiGame {
     fn init(base: Base<RefCounted>) -> Self {
         Self {
             game: Game::new(),
+            ai: None,
             base,
         }
     }
@@ -151,5 +157,92 @@ impl ReversiGame {
     #[func]
     fn get_move_history(&self) -> GString {
         GString::from(&self.game.move_history_string())
+    }
+
+    /// Sets up the AI with the given evaluator and depth configuration.
+    /// evaluator_name: "strategic" or "novice".
+    /// Returns false if evaluator_name is unknown.
+    #[func]
+    fn set_ai(
+        &mut self,
+        evaluator_name: GString,
+        opening_depth: i32,
+        midgame_depth: i32,
+        endgame_depth: i32,
+    ) -> bool {
+        let name = evaluator_name.to_string();
+        let config = AiConfig::new(
+            opening_depth as u8,
+            midgame_depth as u8,
+            endgame_depth as u8,
+        );
+        let evaluator: Box<dyn reversi_ai::eval::BoardEvaluator> = match name.as_str() {
+            "strategic" => Box::new(StrategicEvaluator::new()),
+            "novice" => Box::new(NoviceEvaluator::new()),
+            _ => return false,
+        };
+        self.ai = Some(AiPlayer::new(evaluator, config));
+        true
+    }
+
+    /// Returns the AI's best move as Vector2i (row, col).
+    /// Returns (-1, -1) if no AI is set or game is over.
+    #[func]
+    fn ai_think(&mut self) -> Vector2i {
+        let Some(ai) = &mut self.ai else {
+            return Vector2i::new(-1, -1);
+        };
+        if self.game.is_game_over() {
+            return Vector2i::new(-1, -1);
+        }
+        let board = *self.game.board();
+        let color = self.game.current_turn();
+        let result = ai.think(&board, color);
+        Vector2i::new(result.best_move.row as i32, result.best_move.col as i32)
+    }
+
+    /// Returns the AI's move explanation as a VarDictionary.
+    /// Returns empty VarDictionary if no AI is set or game is over.
+    #[func]
+    fn ai_explain_move(&mut self) -> VarDictionary {
+        let Some(ai) = &mut self.ai else {
+            return VarDictionary::new();
+        };
+        if self.game.is_game_over() {
+            return VarDictionary::new();
+        }
+        let board = *self.game.board();
+        let color = self.game.current_turn();
+        let explanation = ai.explain(&board, color);
+
+        let mut pv_arr = Array::<Vector2i>::new();
+        for pos in &explanation.pv {
+            pv_arr.push(Vector2i::new(pos.row as i32, pos.col as i32));
+        }
+
+        let mut factors = VarDictionary::new();
+        factors.set("corner_control", explanation.factors.corner_control);
+        factors.set("stability", explanation.factors.stability);
+        factors.set("mobility", explanation.factors.mobility);
+        factors.set("edge_control", explanation.factors.edge_control);
+        factors.set("parity", explanation.factors.parity);
+        factors.set("piece_count", explanation.factors.piece_count);
+
+        let mut dict = VarDictionary::new();
+        dict.set(
+            "best_move",
+            Vector2i::new(
+                explanation.best_move.row as i32,
+                explanation.best_move.col as i32,
+            ),
+        );
+        dict.set("pv", pv_arr);
+        dict.set("score", explanation.score);
+        dict.set(
+            "primary_reason",
+            GString::from(explanation.primary_reason.as_str()),
+        );
+        dict.set("factors", factors);
+        dict
     }
 }

@@ -9,3 +9,4 @@ crate-type = ["cdylib"]
 [dependencies]
 godot = "0.4.5"
 reversi-engine = { path = "../reversi-engine" }
+reversi-ai = { path = "../reversi-ai" }
