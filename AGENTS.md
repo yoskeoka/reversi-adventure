@@ -25,6 +25,7 @@ This project follows the AI-Centered Development workflow.
    - `docs/project-plan.md` is your North Star.
    - `docs/exec-plan/todo/` is your current task list.
    - `docs/design-decisions/` is your architectural conscience.
+   - `docs/references/` is for external technical references.
 
 4. **Execution Rules**:
    - **Plan First**: Before writing code, ensure a plan exists in `docs/exec-plan/todo/`. If not, create one.
