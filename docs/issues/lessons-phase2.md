@@ -30,7 +30,14 @@
 - **Rule**: Prefer `for item in arr.iter_mut()` over indexed loops
 - **Applied**: `search/tt.rs` — Zobrist key initialization
 
-### 5. Issue Tracking Location
+### 5. Post-Task Review Belongs to the Same Branch
+
+- **Mistake**: Created a separate branch for post-task review findings, splitting them from the feature branch that produced them
+- **Pattern**: Misapplied "fresh branch per task" rule — treated the review as a separate task instead of part of the same deliverable
+- **Rule**: Post-task review artifacts (issues, lessons, skill changes) discovered during a task belong on that task's branch. The "fresh branch" rule is about not mixing *unrelated* work, not about splitting a task's own outputs.
+- **Applied**: Any post-task review after execution — commit findings on the feature/fix branch before creating the PR
+
+### 6. Issue Tracking Location
 
 - **Mistake**: Created GitHub issues via `gh issue create` without corresponding `docs/issues/` files
 - **Pattern**: The AI-Centered Development workflow uses `docs/issues/` as the AI's memory, not GitHub issues alone
