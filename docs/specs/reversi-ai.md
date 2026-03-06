@@ -64,6 +64,9 @@ Simulates a beginner player:
 - No stability calculation (weight = 0).
 - Adds slight randomness (small random perturbation to score).
 
+- `NoviceEvaluator::new()` — Constructor with default seed `12345`.
+- `NoviceEvaluator::with_seed(seed: u64)` — Constructor with explicit seed for deterministic testing.
+
 ## Configuration
 
 ### AiConfig
@@ -114,11 +117,18 @@ enum Bound {
 
 ### Zobrist Hashing
 
+```rust
+struct ZobristKeys {
+    // pre-computed random u64 values: 2 colors × 64 squares = 128 values
+}
+```
+
 Board hashing for transposition table lookup.
 
 - Pre-computed random `u64` values for each (position, color) combination: 2 colors × 64 squares = 128 values.
 - Hash computed incrementally: XOR in/out pieces as moves are made.
-- `zobrist_hash(board: &Board)` — Compute hash from scratch.
+- `ZobristKeys::new()` — Generate a new set of random Zobrist keys.
+- `ZobristKeys::hash(&self, board: &Board) -> u64` — Compute hash from scratch for the given board position.
 
 ### Move Ordering
 
@@ -129,25 +139,45 @@ Moves are ordered for maximum pruning efficiency:
 3. Moves sorted by opponent mobility (ascending — fewer opponent moves = better)
 4. Static positional value (pre-defined 8x8 weight table)
 
-- `order_moves(board: &Board, color: Color, moves_mask: u64, tt_move: Option<Position>)` — Returns `Vec<Position>` in priority order.
+- `order_moves(board: &Board, color: Color, moves_mask: u64, tt_move: Option<Position>, depth: u8)` — Returns `Vec<Position>` in priority order. When `depth < 3`, the expensive opponent-mobility calculation is skipped.
 
 ### Negascout
 
 Negascout (Principal Variation Search) with iterative deepening.
 
 ```rust
-struct SearchEngine<E: BoardEvaluator> {
-    evaluator: E,
-    tt: TranspositionTable,
+struct Negascout<'a, E: BoardEvaluator + ?Sized> {
+    evaluator: &'a E,
+    tt: &'a mut TranspositionTable,
+    zobrist: &'a ZobristKeys,
 }
 ```
 
-- `SearchEngine::search(board: &Board, color: Color, config: &AiConfig)` — Run iterative deepening search. Returns `SearchResult`.
-- Internally runs depth 1, 2, ..., up to `config.depth_for_phase(stone_count)`.
+Low-level search implementation. Typically used via `SearchEngine` rather than directly.
+
+- `Negascout::new(evaluator: &'a E, tt: &'a mut TranspositionTable, zobrist: &'a ZobristKeys)` — Constructor.
+- `Negascout::nodes_searched(&self) -> u64` — Returns total node count from the last completed search.
+- `Negascout::search(board: &Board, color: Color, max_depth: u8)` — Run iterative deepening search. Returns `(best_move, score, pv, leaf_eval)`.
+- Internally runs depth 1, 2, ..., up to `max_depth`.
 - At each depth: Negascout with alpha-beta window.
   - First move (PV node): search with full window [alpha, beta].
   - Remaining moves: null-window search [alpha, alpha+1]. If fails high, re-search with full window.
 - PV extracted by tracking best move at each depth level.
+
+### SearchEngine
+
+Wrapper around `Negascout` managing the transposition table and Zobrist keys.
+
+```rust
+struct SearchEngine {
+    tt: TranspositionTable,
+    zobrist: ZobristKeys,
+}
+```
+
+- `SearchEngine::new()` — Create with default TT capacity (~1M entries).
+- `SearchEngine::search<E: BoardEvaluator + ?Sized>(board: &Board, color: Color, evaluator: &E, config: &AiConfig)` — Run iterative deepening search. Returns `SearchResult`.
+- `SearchEngine::clear_tt()` — Clear all entries in the transposition table. Useful between games to avoid cross-game contamination.
 
 ### SearchResult
 
@@ -208,12 +238,14 @@ struct MoveExplanation {
 struct AiPlayer {
     evaluator: Box<dyn BoardEvaluator>,
     config: AiConfig,
+    engine: SearchEngine,
 }
 ```
 
 - `AiPlayer::new(evaluator: Box<dyn BoardEvaluator>, config: AiConfig)` — Constructor.
-- `AiPlayer::think(&self, board: &Board, color: Color)` — Returns `SearchResult`.
-- `AiPlayer::explain(&self, board: &Board, color: Color)` — Returns `MoveExplanation`.
+- `AiPlayer::think(&mut self, board: &Board, color: Color)` — Run search and return `SearchResult`. Requires `&mut self` due to TT mutation.
+- `AiPlayer::explain(&mut self, board: &Board, color: Color)` — Run search and return `MoveExplanation`. Requires `&mut self` due to TT mutation.
+- `AiPlayer::evaluator_name(&self) -> &str` — Returns the name of the current evaluator (e.g. `"strategic"`, `"novice"`).
 
 ## GDScript Bridge Additions
 
