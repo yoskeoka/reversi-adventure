@@ -163,8 +163,9 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             };
         }
 
-        let ordered = order_moves(board, color, legal, tt_move);
+        let ordered = order_moves(board, color, legal, tt_move, depth);
 
+        let original_alpha = alpha;
         let mut best_score = i32::MIN;
         let mut best_pv = Vec::new();
         let mut best_leaf = None;
@@ -212,7 +213,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         }
 
         // Store in TT
-        let bound = if best_score <= alpha {
+        let bound = if best_score <= original_alpha {
             Bound::UpperBound
         } else if best_score >= beta {
             Bound::LowerBound

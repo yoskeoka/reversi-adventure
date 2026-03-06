@@ -21,11 +21,15 @@ const CORNERS: [u8; 4] = [0, 7, 56, 63];
 
 /// Order moves for maximum pruning efficiency.
 /// Returns positions sorted by priority (best first).
+/// `depth` controls how expensive the ordering heuristics are:
+/// - depth >= 3: full ordering with opponent mobility calculation
+/// - depth < 3: lightweight ordering using only static weights and TT/corner bonuses
 pub fn order_moves(
     board: &Board,
     color: Color,
     moves_mask: u64,
     tt_move: Option<Position>,
+    depth: u8,
 ) -> Vec<Position> {
     let mut scored_moves: Vec<(Position, i32)> = Vec::new();
 
@@ -50,9 +54,12 @@ pub fn order_moves(
         }
 
         // Opponent mobility after this move (fewer = better)
-        let new_board = moves::make_move(board, color, pos);
-        let opp_mobility = moves::legal_moves(&new_board, color.opponent()).count_ones() as i32;
-        priority -= opp_mobility * 100;
+        // Only compute at depth >= 3 to avoid expensive make_move + legal_moves at leaf-adjacent nodes
+        if depth >= 3 {
+            let new_board = moves::make_move(board, color, pos);
+            let opp_mobility = moves::legal_moves(&new_board, color.opponent()).count_ones() as i32;
+            priority -= opp_mobility * 100;
+        }
 
         // Static positional value
         priority += POSITION_WEIGHTS[index as usize];
@@ -84,7 +91,7 @@ mod tests {
         let legal = moves::legal_moves(&board, Color::Black);
         if legal & 1 != 0 {
             // Corner is legal
-            let ordered = order_moves(&board, Color::Black, legal, None);
+            let ordered = order_moves(&board, Color::Black, legal, None, 4);
             // Corner should be first
             assert_eq!(ordered[0], Position::new(0, 0));
         }
@@ -95,7 +102,7 @@ mod tests {
         let board = Board::new();
         let legal = moves::legal_moves(&board, Color::Black);
         let tt_move = Position::new(2, 3); // D3
-        let ordered = order_moves(&board, Color::Black, legal, Some(tt_move));
+        let ordered = order_moves(&board, Color::Black, legal, Some(tt_move), 4);
         assert_eq!(ordered[0], tt_move);
     }
 
