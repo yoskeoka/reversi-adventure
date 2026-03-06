@@ -80,7 +80,8 @@ Keep the main context window clean by delegating to subagents.
 
 ## Build & Lint Commands
 
-- **Test**: `cargo test -p reversi-engine`
+- **Test (engine)**: `cargo test -p reversi-engine`
+- **Test (AI)**: `cargo test -p reversi-ai`
 - **Build (GDExtension)**: `cargo build -p reversi-godot`
 - **Lint**: `cargo clippy --workspace -- -D warnings`
 
@@ -88,5 +89,6 @@ Keep the main context window clean by delegating to subagents.
 
 - **Game engine**: Godot 4.5 (GDScript)
 - **Core engine**: Rust (reversi-engine crate, pure logic)
+- **AI engine**: Rust (reversi-ai crate, Negascout search + pluggable evaluators)
 - **GDExtension bridge**: Rust (reversi-godot crate, gdext v0.4.5)
-- **Cargo workspace**: root Cargo.toml with members `rust/reversi-engine` and `rust/reversi-godot`
+- **Cargo workspace**: root Cargo.toml with members `rust/reversi-engine`, `rust/reversi-ai`, and `rust/reversi-godot`

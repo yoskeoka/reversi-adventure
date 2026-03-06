@@ -5,6 +5,7 @@
 godot/.godot/
 godot/.nomedia
 *.translation
+*.uid
 
 # IDE
 .vscode/
