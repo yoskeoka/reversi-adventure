@@ -97,3 +97,46 @@ Chosen option: **Godot + GDScript + Rust**, because it provides the best balance
 - Use .tscn scene files where practical (they are text-based and AI-generatable)
 
 ---
+
+## [2026-03-08] Locale, Language, and Timezone Strategy
+
+**Status:** Accepted
+
+### Context and Problem Statement
+
+Reversi Adventure is a story-driven board game targeting Steam, which has a global audience. We need to decide the supported languages, locale handling, and timezone behavior for the game.
+
+### Decision Drivers
+
+- Primary target audience includes both English and Japanese speakers
+- Steam's global distribution means players from many locales
+- Story-heavy game with significant translatable text (dialogs, menus, AI explanations)
+- Community contributions for additional languages should be possible post-launch
+
+### Decision Outcome
+
+- **Supported languages (initial):** English and Japanese
+- **Default language:** English (fallback when user's locale is not supported)
+- **Language selection:** Auto-detect from user's OS/Steam locale; allow manual override in settings
+- **Timezone:** Determined by user's system locale (no hardcoded timezone)
+- **Additional languages:** Deferred until after game completion; community contributions welcome (e.g., translation files contributed by volunteers)
+
+### Consequences
+
+**Positive:**
+- Two-language support covers the primary audience without excessive i18n overhead
+- Auto-detection provides good UX out of the box
+- Using user's system timezone avoids confusion for save timestamps, play time tracking, etc.
+- Designing for i18n from the start (even with only 2 languages) makes future language additions straightforward
+
+**Negative:**
+- All in-game text must be externalized into translation files from the beginning (no hardcoded strings)
+- Two languages doubles the text content workload for story dialogs
+- LLM-generated translations may need human review for quality, especially for story/narrative text
+
+**Mitigations:**
+- Use Godot's built-in localization system (TranslationServer, .po/.csv files)
+- Keep AI explanation text templated where possible to reduce translation burden
+- Provide a clear contribution guide for community translators
+
+---
