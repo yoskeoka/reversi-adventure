@@ -70,7 +70,7 @@ pub fn order_moves(
     }
 
     // Sort descending by priority
-    scored_moves.sort_by(|a, b| b.1.cmp(&a.1));
+    scored_moves.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     scored_moves.into_iter().map(|(pos, _)| pos).collect()
 }
 
