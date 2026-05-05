@@ -19,6 +19,7 @@ This project follows the AI-Centered Development workflow.
    - Never reuse an existing feature branch; always create a fresh one.
    - Run all lint and test checks (non-AI tooling) before creating a PR. Fix failures before proceeding.
    - Create PRs via `gh pr create` and wait for review approval before merging.
+   - When editing GitHub Actions workflows or composite actions, use `pinact` to pin or update `uses:` references rather than hand-editing version tags.
 
 3. **Context Management**:
    - Your "memory" is the `docs/` directory.
