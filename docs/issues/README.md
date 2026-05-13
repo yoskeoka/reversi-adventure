@@ -1,2 +1,2 @@
-Place issue files here. Format: `issue-name.md`.
+Place issue files here. Format: `<sequence>-issue-name.md`.
 Use this for tracking bugs/refactors discovered during an exec-plan that are out of scope for the current plan.

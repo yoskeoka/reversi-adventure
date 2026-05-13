@@ -71,7 +71,7 @@ Our Phase 2 design adopts:
 - Move ordering heuristics (subset of Egaroucid's approach)
 
 Deferred for future enhancement:
-- Trained pattern evaluation (docs/issues/trained-evaluator.md)
-- Endgame solver (docs/issues/endgame-solver.md)
+- Trained pattern evaluation (docs/issues/0005-trained-evaluator.md)
+- Endgame solver (docs/issues/0004-endgame-solver.md)
 - SIMD optimization
 - Parallelization
