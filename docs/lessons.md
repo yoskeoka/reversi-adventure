@@ -46,7 +46,7 @@ Review at session start for relevant learnings.
 
 - **Mistake**: Created GitHub issues via `gh issue create` without corresponding `docs/issues/` files
 - **Pattern**: The AI-Centered Development workflow uses `docs/issues/` as the AI's memory, not GitHub issues alone
-- **Rule**: Always create `docs/issues/<name>.md` first; optionally mirror to GitHub issues
+- **Rule**: Always create `docs/issues/<sequence>-<name>.md` first; optionally mirror to GitHub issues
 - **Applied**: All post-task review findings
 
 ### 7. GitHub Issues vs docs/issues/

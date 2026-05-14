@@ -225,8 +225,8 @@ rust/reversi-ai/
 
 ## Deferred (logged as issues)
 
-- **Endgame solver**: perfect play in final N moves (docs/issues/endgame-solver.md)
-- **Trained evaluator**: ML/RL-based pattern evaluation (docs/issues/trained-evaluator.md)
+- **Endgame solver**: perfect play in final N moves (docs/issues/0004-endgame-solver.md)
+- **Trained evaluator**: ML/RL-based pattern evaluation (docs/issues/0005-trained-evaluator.md)
 
 ## References
 

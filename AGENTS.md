@@ -15,7 +15,7 @@ This project follows the AI-Centered Development workflow.
    - ALWAYS go through GitHub PR review for every change — including doc-only changes (Project Plan, Execution Plan).
 
 2. **Branch & PR Rules**:
-   - Create a fresh branch from `origin/main` for every task: `git fetch origin && git switch -c <branch-name> origin/main`
+   - Create a fresh worktree from `main` for every task: `ww create <type>/<description>` from the target repo, then `cd "$(ww cd <type>/<description>)"`
    - Never reuse an existing feature branch; always create a fresh one.
    - Run all lint and test checks (non-AI tooling) before creating a PR. Fix failures before proceeding.
    - Create PRs via `gh pr create` and wait for review approval before merging.
@@ -31,25 +31,25 @@ This project follows the AI-Centered Development workflow.
 4. **Execution Rules**:
    - **Plan First**: Before writing code, ensure a plan exists in `docs/exec-plan/todo/`. If not, create one.
    - **Spec First**: Update `docs/specs/` to reflect changes BEFORE modifying code.
-   - **Focus**: If you find unrelated issues, log them in `docs/issues/<name>.md` and ignore them for the current task (unless they are blockers).
+   - **Focus**: If you find unrelated issues, log them in `docs/issues/<sequence>-<name>.md` and ignore them for the current task (unless they are blockers).
    - **Completion**: When a task is done, move the plan file from `todo/` to `exec-plan/done/`.
 
 ## When asked to "Start a new feature":
-1. Create a branch: `git fetch origin && git switch -c plan/<NNN>-feature-name origin/main`
+1. Create a branch: `ww create plan/feature-name` then `cd "$(ww cd plan/feature-name)"`
 2. Read `docs/project-plan.md`.
-3. Create a new file in `docs/exec-plan/todo/` (e.g., `002-feature-name.md`).
+3. Create a new file in `docs/exec-plan/todo/` (e.g., `0003-feature-name.md`).
 4. Outline the changes to specs and code in that plan.
 5. Create a PR for the plan and wait for review.
-6. After plan PR is merged, create a new branch for execution: `git fetch origin && git switch -c feat/<NNN>-feature-name origin/main`
+6. After plan PR is merged, create a new branch for execution: `ww create feat/feature-name` then `cd "$(ww cd feat/feature-name)"`
 7. Execute the plan following **Spec First** rule.
 8. Run lint/tests, fix any failures, then create a PR.
 
 ## When asked to "Fix a bug":
-1. Create a branch: `git fetch origin && git switch -c plan/<NNN>-fix-bug-x origin/main`
-2. Create a plan in `docs/exec-plan/todo/` (e.g., `003-fix-bug-x.md`).
+1. Create a branch: `ww create plan/fix-bug-x` then `cd "$(ww cd plan/fix-bug-x)"`
+2. Create a plan in `docs/exec-plan/todo/` (e.g., `0003-fix-bug-x.md`).
 3. Reproduction steps go into the plan.
 4. Create a PR for the plan and wait for review.
-5. After plan PR is merged, create a new branch: `git fetch origin && git switch -c fix/<NNN>-bug-x origin/main`
+5. After plan PR is merged, create a new branch: `ww create fix/bug-x` then `cd "$(ww cd fix/bug-x)"`
 6. Execute the fix following the **Spec First** rule.
 7. Run lint/tests, fix any failures, then create a PR.
 8. Move plan to `done/`.
