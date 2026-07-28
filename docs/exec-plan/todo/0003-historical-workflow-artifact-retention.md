@@ -1,6 +1,6 @@
 # Historical workflow artifact retention
 
-> **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
+> **Execution**: Follow the Plan First and PR rules in `AGENTS.md`; this repository has no checked-in `/execute-task` or `/review-task` skill.
 
 ## Objective
 
@@ -10,8 +10,8 @@ copies.
 
 ## Change map
 
-- (MODIFY) `AGENTS.md` completion guidance, `docs/exec-plan/todo/README.md`, `docs/issues/README.md`, and current workflow docs.
-- (MODIFY) `tools/workflow-lint.sh` and focused tests to distinguish mandatory active plans from closeout deletion; parse the deleted matching plan's explicit `Addresses:` links and require deletion of resolved local issues while retaining external issue closure metadata.
+- (MODIFY) `AGENTS.md` completion guidance, `docs/exec-plan/todo/README.md`, `docs/issues/README.md`, and `docs/issues/0007-self-retrospective.md`, which currently documents the `todo/` to `done/` transition.
+- (MODIFY) `tools/workflow-lint.sh`; (NEW) `tools/test-workflow-lint.sh` as a POSIX shell fixture harness that invokes the linter against temporary Git repositories and covers mandatory active plans, compliant closeout deletion, omitted linked local issues, and external closure metadata.
 - (DELETE) `docs/exec-plan/done/**`, `docs/issues/done/**`, and their empty directories.
 
 ## Verification
