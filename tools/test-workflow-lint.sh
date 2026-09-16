@@ -106,8 +106,9 @@ assert_contains "Deleted exec-plan 'docs/exec-plan/todo/0001-external-closeout.m
 
 # Historical archives are rejected as active workflow records.
 archive_dir=$(make_fixture historical-archive '# active plan')
-mkdir -p "$archive_dir/docs/exec-plan/done"
+mkdir -p "$archive_dir/docs/exec-plan/done" "$archive_dir/docs/issues/done"
 run_linter "$archive_dir" "$tmp/archive.out" --mode=pre-push
 assert_contains "Historical workflow archive 'docs/exec-plan/done' remains" "$tmp/archive.out"
+assert_contains "Historical workflow archive 'docs/issues/done' remains" "$tmp/archive.out"
 
 echo "workflow-lint lifecycle fixtures passed"

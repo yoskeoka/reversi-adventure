@@ -102,7 +102,7 @@ matching_exec_plan_files() {
     [ -d docs/exec-plan/todo ] || return 0
 
     find docs/exec-plan/todo -maxdepth 1 -type f \
-        \( -name "*-${plan_name}.md" -o -name "${plan_name}.md" \) \
+        -name "*-${plan_name}.md" \
         | sort
 }
 
@@ -111,7 +111,7 @@ deleted_matching_exec_plan_files() {
 
     printf '%s\n' "$DELETED_FILES" | awk -v plan_name="$plan_name" '
         $0 ~ "^docs/exec-plan/todo/" &&
-            ($0 ~ ("-" plan_name "\\.md$") || $0 ~ ("/" plan_name "\\.md$")) {
+            $0 ~ ("-" plan_name "\\.md$") {
             print
         }
     ' | sort
