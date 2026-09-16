@@ -17,7 +17,7 @@ pub fn legal_moves(board: &Board, color: Color) -> u64 {
     // Check each empty cell
     let mut candidates = empty;
     while candidates != 0 {
-        let bit = candidates & candidates.wrapping_neg(); // isolate lowest set bit
+        let bit = candidates.isolate_lowest_one();
         let index = bit.trailing_zeros() as u8;
         let pos = Position::from_bit_index(index);
         if flipped_pieces(board, color, pos) != 0 {
