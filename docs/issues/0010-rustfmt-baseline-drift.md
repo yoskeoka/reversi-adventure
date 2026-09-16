@@ -1,29 +1,24 @@
-# Existing Rust source is not rustfmt-clean under stable 1.98
+# Rust fmt drift
 
-## Summary
+## What happened
 
-The execution-plan formatting check fails on Rust source that is already on
-`main`. The failure is unrelated to the Rust CI Clippy fix in
-`rust/reversi-engine/src/moves.rs`.
+The Rust fmt check fails on code already in `main`.
+This is not part of the CI fix.
 
-## Evidence
+## Test
 
-- Toolchain: Rust 1.98.1 (`rustc 1.98.1`)
-- Command: `cargo fmt --all -- --check`
-- Representative existing differences: `rust/reversi-ai/src/config.rs`,
-  `rust/reversi-ai/src/eval/novice.rs`, `rust/reversi-engine/src/moves.rs`,
-  and `rust/reversi-godot/src/bridge.rs`
-- The check reports formatting diffs but does not modify files.
+- Rust 1.98.1
+- `cargo fmt --all -- --check`
 
-## Impact
+The check lists old code in `rust/reversi-ai`, `rust/reversi-engine`, and
+`rust/reversi-godot`. It does not change files.
 
-The repository-wide formatting gate cannot pass without a separate formatting
-cleanup. The configured `CI / test` workflow does not run `cargo fmt`; its
-Clippy, package-test, GDExtension build, and shared-library checks are
-unaffected.
+## Effect
 
-## Follow-up
+The fmt check stays red until a full fmt pass.
+The `CI / test` job does not run fmt. Its Clippy, tests, build, and file check
+pass.
 
-Handle the repository-wide rustfmt baseline in a separate scoped change after
-deciding whether the current stable formatter output should become the project
-formatting standard.
+## Next
+
+Use a new task to set one fmt style for the whole repo.
