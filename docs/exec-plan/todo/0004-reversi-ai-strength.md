@@ -69,10 +69,11 @@ project's own process timeout.
   fixed-depth-only strength assumptions with the measurement, oracle,
   self-play, and trained-evaluator architecture.
 - (MODIFY) `rust/reversi-ai/src/search/tt.rs`, `search/negascout.rs`,
-  `search/mod.rs`, and `config.rs` -- make TT keys side-aware; preserve the
-  last fully completed iterative-deepening result under node/deadline budgets;
-  expose search metrics; and route supported low-empty positions to exact
-  solving.
+  `search/mod.rs`, and `config.rs` -- make TT entries side-aware and scoped to
+  an evaluator/parameter/search-semantics fingerprint (or clear the TT before
+  that context changes); preserve the last fully completed iterative-deepening
+  result under node/deadline budgets; expose search metrics; and route
+  supported low-empty positions to exact solving.
 - (NEW) `rust/reversi-ai/src/search/endgame.rs` and focused fixtures -- exact
   negamax/PVS endgame search, pass handling, empty-region parity ordering, and
   specialized 1--4-empty handling. Begin at 16 empty squares only after corpus
@@ -111,8 +112,14 @@ project's own process timeout.
 - Extend `ZobristKeys` with a side-to-move key and make all probe/store calls
   hash `(board, color-to-move)`. A score and `best_move` can then only be used
   for the same position and side to move.
+- Namespace every TT entry by a stable evaluator/parameter/search-semantics
+  fingerprint, or clear the TT before that context changes. `SearchEngine`
+  persists across calls while evaluator weights and exact-search behavior may
+  vary, so side-aware board identity alone must not reuse a result calculated
+  by another candidate.
 - Add a pass-position fixture proving that identical discs with opposite sides
-  to move do not hit the same entry or return the other side's action/score.
+  to move do not hit the same entry or return the other side's action/score,
+  plus a fixture proving distinct evaluator fingerprints cannot share an entry.
 - Keep color-inversion/canonical-position reuse out of this change. It is a
   separate optimization requiring an explicit transformation of board,
   perspective, score, and best move; omitting the side key is not such a
@@ -196,10 +203,10 @@ project's own process timeout.
 
 - Run `cargo test -p reversi-engine`, `cargo test -p reversi-ai`,
   `cargo build -p reversi-godot`, and `cargo clippy --workspace -- -D warnings`.
-- Add unit and integration coverage for side-aware TT keys, pass positions,
-  fixed node budgets, deadline cancellation, incomplete iteration fallback,
-  final-disc scoring, 1--4-empty cases, and the supported exact-solve
-  threshold.
+- Add unit and integration coverage for side-aware and evaluator-namespaced TT
+  keys, pass positions, fixed node budgets, deadline cancellation, incomplete
+  iteration fallback, final-disc scoring, 1--4-empty cases, and the supported
+  exact-solve threshold.
 - Re-run the same corpus with identical oracle version/SHA, fixture version,
   parameter vector, seed, and node budget; verify byte-for-byte stable
   normalized results where deadlines are not used.
