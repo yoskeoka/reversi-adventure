@@ -24,10 +24,10 @@ product, GDExtension, and release artifacts.
 - (NEW) `tools/reversi-ai-oracle/` -- pinned Egaroucid acquisition, SHA-256
   verification, CLI adapter, process timeout, and strict output parser.
 - (NEW) versioned corpus and golden normalized reports -- include board,
-  side-to-move, legal moves, provenance, and opening/midgame/endgame/pass
-  classification.
+  side-to-move, legal moves, provenance, opening/midgame/endgame/pass
+  classification, and an explicit `MoveSet`, `Pass`, or `GameOver` outcome.
 - (NEW) scoped CI job and local runner documentation -- use Linux/WSL2 only;
-  do not check in external binaries or caches.
+  store external binaries and mutable caches outside the checkout.
 - (DELETE) this plan after implementation verification and PR preparation.
 
 ## Execution steps
@@ -36,10 +36,15 @@ product, GDExtension, and release artifacts.
    unavailable, mismatched, or unparsable executable. Do not use its ignored
    time-limit option; enforce a wrapper process timeout.
 2. Assemble legal positions across all stone-count phases, forced passes, and
-   solved endgames. Preserve source/provenance and side to move.
-3. Normalize oracle best move, value, depth, nodes, and exact-search status.
-4. Report candidate best-move agreement and selected-move regret per phase at
-   a declared budget. This is a measurement gate, not a runtime dependency.
+   solved endgames. Preserve source/provenance, side to move, and a canonical
+   `MoveSet`, `Pass`, or `GameOver` outcome.
+3. Normalize the oracle value for every legal root move, then derive the full
+   equal-value optimal-move set, best value, depth, nodes, and exact status.
+4. Define regret as oracle best value minus the oracle value of the candidate
+   move from the root side's perspective. Treat every member of the optimal set
+   as agreement. Report both values per phase at a declared budget.
+5. Keep the pinned executable and its mutable cache outside the Git checkout;
+   CI uses its job cache and local runs use a documented OS cache path.
 
 ## Verification
 

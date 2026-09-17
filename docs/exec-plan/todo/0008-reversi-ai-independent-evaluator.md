@@ -7,8 +7,8 @@
 Guide the incremental improvement of the project-owned, explainable evaluator.
 It will remain distinct from the strongest pattern-learning engine and will be
 assessed through the common TT, oracle, time-budget, and endgame foundations.
-This parent is complete only when its child-plan sequence has been selected;
-implementation detail is intentionally deferred.
+It remains active until its approved child plans have completed; implementation
+detail is intentionally deferred.
 
 ## Existing references
 
@@ -26,7 +26,7 @@ implementation detail is intentionally deferred.
   balanced self-play/GA optimization.
 - (MODIFY) future evaluator, training/tournament tools, and fixtures -- exact
   paths are N/A - detail required before execution.
-- (DELETE) this parent only when its approved children have completed.
+- (DELETE) this parent only after its approved child plans have completed.
 
 ## Intended child work
 

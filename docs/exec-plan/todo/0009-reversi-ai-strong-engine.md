@@ -7,9 +7,10 @@
 Plan a project-owned conventional engine whose configurable reading time can
 reach a level at which human players should not be expected to win routinely.
 It draws on public Egaroucid/Edax-class ideas without importing their code,
-weights, binaries, or runtime dependencies. Its detailed architecture and
-acceptance thresholds will be decided through later child plans and measured by
-the shared oracle and endgame foundations.
+weights, binaries, or runtime dependencies into the product or release
+artifacts. The pinned Egaroucid development/CI oracle remains permitted. Its
+detailed architecture and acceptance thresholds will be decided through later
+child plans and measured by the shared oracle and endgame foundations.
 
 ## Existing references
 
@@ -27,6 +28,9 @@ the shared oracle and endgame foundations.
   measurable strength target.
 - (NEW) detailed child plans for pattern evaluation/training, search
   acceleration, optional book policy, artifact provenance, and benchmarks.
+- (MODIFY) `docs/design-decisions/2026-03-02-reversi-ai-design.md` and
+  `docs/references/egaroucid-technology-llms.txt` -- replace links to the
+  trained-evaluator issue when it is removed.
 - (MODIFY) future Rust engine/evaluator/tooling paths -- N/A - detail required
   before execution.
 - (DELETE) `docs/issues/0005-trained-evaluator.md` and this parent only after

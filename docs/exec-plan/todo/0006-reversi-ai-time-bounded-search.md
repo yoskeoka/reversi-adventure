@@ -5,10 +5,10 @@
 ## Objective and completion boundary
 
 Provide the shared search contract needed by the Godot game and a future
-ai-arena adapter: callers give a turn-time budget or deadline, and search can
-always return a legal fallback immediately plus the best result from the last
-fully completed iterative-deepening iteration when interrupted. Node caps are
-secondary deterministic limits for tests, CI, and tuning runs.
+ai-arena adapter. Callers give a turn-time deadline and optional cancellation
+token. With a legal move, search returns a legal fallback immediately and then
+the best result from the last fully completed iterative-deepening iteration.
+Node caps are secondary deterministic limits for tests, CI, and tuning runs.
 
 ## Existing references
 
@@ -21,8 +21,9 @@ secondary deterministic limits for tests, CI, and tuning runs.
 
 ## Change map
 
-- (MODIFY) `docs/specs/reversi-ai.md` -- define time/deadline and optional node
-  budgets, legal fallback, completed-depth/nodes/elapsed metadata, and
+- (MODIFY) `docs/specs/reversi-ai.md` -- define deadline, optional node budget,
+  caller-owned thread-safe cancellation token, `Move`/`Pass`/`GameOver`
+  outcome, legal fallback, completed-depth/nodes/elapsed metadata, and
   interruption semantics.
 - (MODIFY) `config.rs`, `search/mod.rs`, `search/negascout.rs`, `player.rs`,
   and GDExtension bridge -- accept budgets, poll cancellation, retain only
@@ -32,18 +33,26 @@ secondary deterministic limits for tests, CI, and tuning runs.
 
 ## Execution steps
 
-1. Create a monotonic-deadline primary budget with an optional node ceiling.
-2. Select a legal root fallback before deeper work. After every completed
-   depth, atomically replace the stable result with its move, PV, and score.
-3. Poll deadline/cancellation cooperatively during expansion; never publish a
-   partial iteration as the completed PV.
-4. Preserve node-budget determinism for corpus/GA runs while game integrations
-   use a turn-time budget. UI scheduling and ai-arena porting remain separate.
+1. Create a monotonic-deadline primary budget with an optional node ceiling and
+   a cloneable caller-owned `Arc<AtomicBool>` cancellation token. The caller may
+   set it from another thread; search reads it only and owns no callback.
+2. Return `Pass` or `GameOver` before choosing a `Position` when no legal move
+   exists. Otherwise select a legal root fallback before deeper work.
+3. After every completed depth, atomically replace the stable result with its
+   move, PV, and score. If interrupted before depth 1 completes, return the
+   legal fallback, an empty PV, no evaluated score, `completed_depth = 0`, and
+   `exact = false`.
+4. Poll deadline, node ceiling, and token during expansion. A partial iteration
+   never becomes the completed PV.
+5. Preserve node-budget determinism for corpus/GA runs while game integrations
+   use a turn-time deadline. UI scheduling and ai-arena porting remain separate.
 
 ## Verification
 
 - `cargo test -p reversi-ai` and `cargo build -p reversi-godot`
-- Deadline/node interruption returns a legal move and last completed result.
+- Deadline, node, and token interruption each return the documented result.
+- Pass, game-over, and pre-depth-one interruption never expose a fake move or
+  sentinel score.
 - Fixed-node runs reproduce depth, PV, and result metadata.
 
 ## Addresses
