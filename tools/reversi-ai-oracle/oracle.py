@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 from typing import NoReturn
@@ -505,7 +506,9 @@ def parse_depth(value: str) -> int:
     return int(match.group(1))
 
 
-def parse_solve_output(output: str, required_plies: list[int]) -> list[dict[str, object]]:
+def parse_solve_output(
+    output: str, required_plies: list[int], expected_level: int
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for line in output.splitlines():
         stripped = line.strip()
@@ -527,6 +530,8 @@ def parse_solve_output(output: str, required_plies: list[int]) -> list[dict[str,
             die(f"unexpected Egaroucid score: {score!r}")
         if not re.fullmatch(r"\d+", level):
             die(f"unexpected Egaroucid level: {level!r}")
+        if int(level) != expected_level:
+            die(f"Egaroucid returned level {level}, expected {expected_level}")
         if not re.fullmatch(r"\d+", nodes) or not re.fullmatch(r"\d+", nps):
             die(f"unexpected Egaroucid node count: {nodes!r}, {nps!r}")
         rows.append(
@@ -586,7 +591,7 @@ def run_solve(
             timeout=timeout,
         )
         required_plies = [64 - sum(cell != "." for cell in board) for board, _ in queries]
-        return parse_solve_output(result.stdout, required_plies)
+        return parse_solve_output(result.stdout, required_plies, level)
     finally:
         problem_path.unlink(missing_ok=True)
 
@@ -601,6 +606,35 @@ def candidate_move_from_line(line: str, expected_id: str) -> str:
     return move
 
 
+class TimedLineReader:
+    def __init__(self, stream: object) -> None:
+        self.stream = stream
+        self.buffer = bytearray()
+        self.fd = stream.fileno()
+
+    def read_line(self, timeout: float, timeout_message: str, eof_message: str) -> str:
+        deadline = time.monotonic() + timeout
+        while b"\n" not in self.buffer:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                die(timeout_message)
+            ready, _, _ = select.select([self.fd], [], [], remaining)
+            if not ready:
+                die(timeout_message)
+            chunk = os.read(self.fd, 4096)
+            if not chunk:
+                die(eof_message)
+            self.buffer.extend(chunk)
+
+        newline = self.buffer.index(b"\n")
+        raw_line = bytes(self.buffer[:newline])
+        del self.buffer[: newline + 1]
+        try:
+            return raw_line.rstrip(b"\r").decode("ascii")
+        except UnicodeDecodeError:
+            die("protocol response is not ASCII")
+
+
 class CandidateSession:
     def __init__(self, command: str, cwd: Path, timeout: float) -> None:
         argv = shlex.split(command)
@@ -613,24 +647,24 @@ class CandidateSession:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=None,
-                text=True,
-                bufsize=1,
+                text=False,
+                bufsize=0,
             )
         except OSError as exc:
             die(f"unable to start candidate command: {exc}")
         self.timeout = timeout
+        assert self.process.stdout is not None
+        self.reader = TimedLineReader(self.process.stdout)
 
     def move(self, position_id: str, board: str, side: str) -> str:
         assert self.process.stdin is not None
-        assert self.process.stdout is not None
-        self.process.stdin.write(f"{position_id}\t{board}\t{side}\n")
+        self.process.stdin.write(f"{position_id}\t{board}\t{side}\n".encode("ascii"))
         self.process.stdin.flush()
-        ready, _, _ = select.select([self.process.stdout], [], [], self.timeout)
-        if not ready:
-            die(f"candidate command timed out after {self.timeout:g}s")
-        line = self.process.stdout.readline()
-        if not line:
-            die(f"candidate command exited before answering {position_id!r}")
+        line = self.reader.read_line(
+            self.timeout,
+            f"candidate command timed out after {self.timeout:g}s",
+            f"candidate command exited before answering {position_id!r}",
+        )
         return candidate_move_from_line(line, position_id)
 
     def close(self) -> None:
@@ -818,16 +852,6 @@ def golden_projection(reports: list[dict[str, object]]) -> list[dict[str, object
     return projected
 
 
-def read_line_with_timeout(stream: object, timeout: float) -> str:
-    ready, _, _ = select.select([stream], [], [], timeout)
-    if not ready:
-        die(f"oracle GTP command timed out after {timeout:g}s")
-    line = stream.readline()
-    if not line:
-        die("oracle GTP process exited unexpectedly")
-    return line.rstrip("\r\n")
-
-
 class GtpSession:
     def __init__(self, binary: Path, cwd: Path, level: int, timeout: float) -> None:
         try:
@@ -846,24 +870,33 @@ class GtpSession:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=None,
-                text=True,
-                bufsize=1,
+                text=False,
+                bufsize=0,
             )
         except OSError as exc:
             die(f"unable to start oracle GTP process: {exc}")
         self.timeout = timeout
+        assert self.process.stdout is not None
+        self.reader = TimedLineReader(self.process.stdout)
 
     def command(self, command: str) -> list[str]:
         assert self.process.stdin is not None
-        assert self.process.stdout is not None
-        self.process.stdin.write(command + "\n")
+        self.process.stdin.write((command + "\n").encode("ascii"))
         self.process.stdin.flush()
-        response = [read_line_with_timeout(self.process.stdout, self.timeout)]
+        response = [
+            self.reader.read_line(
+                self.timeout,
+                f"oracle GTP command timed out after {self.timeout:g}s",
+                "oracle GTP process exited unexpectedly",
+            )
+        ]
         while True:
             # The GTP protocol terminates every response with a blank line.
-            # Consume it directly after the timed first read so TextIOWrapper
-            # read-ahead does not make select() miss buffered data.
-            line = self.process.stdout.readline().rstrip("\r\n")
+            line = self.reader.read_line(
+                self.timeout,
+                f"oracle GTP command timed out after {self.timeout:g}s",
+                "oracle GTP process exited before completing its response",
+            )
             if not line:
                 break
             response.append(line)
@@ -921,10 +954,18 @@ def run_match(
                     if not moves:
                         if not legal_moves(board, other(side)):
                             break
-                        move = "pass"
                         passes += 1
                         if passes == 2:
                             die("match reached two consecutive passes")
+                        if side == candidate_side:
+                            move = "pass"
+                        else:
+                            response = oracle.command(
+                                f"genmove {'black' if side == 'B' else 'white'}"
+                            )
+                            move = response[0].split(maxsplit=1)[1].lower()
+                            if move != "pass":
+                                die("oracle returned a move despite having no legal move")
                     else:
                         passes = 0
                         if side == candidate_side:
@@ -946,11 +987,6 @@ def run_match(
                             oracle.command(f"play {'black' if side == 'B' else 'white'} PASS")
                         else:
                             oracle.command(f"play {'black' if side == 'B' else 'white'} {move}")
-                    elif move == "pass":
-                        # genmove already returned PASS in this branch only when no
-                        # legal move existed; synchronize the candidate through state.
-                        oracle.command(f"play {'black' if side == 'B' else 'white'} PASS")
-
                     if move != "pass":
                         board = apply_move(board, side, move)
                         moves_played += 1

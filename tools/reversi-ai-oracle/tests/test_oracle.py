@@ -30,7 +30,7 @@ class OracleHarnessTests(unittest.TestCase):
             ]
         )
 
-        result = oracle.parse_solve_output(output, [8])
+        result = oracle.parse_solve_output(output, [8], expected_level=8)
 
         self.assertEqual(
             result,
@@ -56,7 +56,18 @@ class OracleHarnessTests(unittest.TestCase):
         )
 
         with self.assertRaises(oracle.OracleError):
-            oracle.parse_solve_output(output, [1])
+            oracle.parse_solve_output(output, [1], expected_level=8)
+
+    def test_solve_level_mismatch_fails_closed(self):
+        output = "\n".join(
+            [
+                "| Level | Depth | Move | Score | Time | Nodes | NPS |",
+                "| 7 | 8@100% | d3 | +4 | 000:00:01.234 | 42 | 34 |",
+            ]
+        )
+
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(output, [8], expected_level=8)
 
     def test_golden_projection_removes_only_machine_dependent_elapsed_time(self):
         reports = [
@@ -109,6 +120,16 @@ class OracleHarnessTests(unittest.TestCase):
         self.assertEqual(analysis["selected_move"], "d3")
         self.assertEqual(analysis["selected_value"], -1)
         self.assertEqual(analysis["regret"], 0)
+
+    def test_candidate_partial_response_obeys_timeout(self):
+        fixture = Path(__file__).resolve().parent / "fake_external.py"
+        command = f"{__import__('sys').executable} {fixture} --partial-candidate"
+        session = oracle.CandidateSession(command, fixture.parent, timeout=0.1)
+        try:
+            with self.assertRaises(oracle.OracleError):
+                session.move("partial", "." * 64, "B")
+        finally:
+            session.close()
 
     def test_rust_sources_do_not_reference_the_external_oracle(self):
         repository_root = Path(__file__).resolve().parents[3]

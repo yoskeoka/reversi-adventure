@@ -9,6 +9,13 @@ def main() -> int:
             print(f"{position_id}\td3", flush=True)
         return 0
 
+    if "--partial-candidate" in sys.argv:
+        sys.stdin.readline()
+        sys.stdout.write("partial")
+        sys.stdout.flush()
+        sys.stdin.readline()
+        return 0
+
     problem = sys.argv[sys.argv.index("-solve") + 1]
     print("| Level | Depth | Move | Score | Time | Nodes | NPS |")
     with open(problem, encoding="ascii") as stream:
