@@ -92,6 +92,10 @@ impl Default for SearchEngine {
 mod tests {
     use super::*;
     use crate::eval::{strategic::StrategicEvaluator, EvalFactors};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     struct ContextEvaluator {
         score: i32,
@@ -112,6 +116,28 @@ mod tests {
 
         fn context_fingerprint(&self) -> u64 {
             self.context_fingerprint
+        }
+    }
+
+    struct CountingEvaluator {
+        evaluations: Arc<AtomicUsize>,
+    }
+
+    impl BoardEvaluator for CountingEvaluator {
+        fn evaluate(&self, _board: &Board, _color: Color) -> EvalResult {
+            self.evaluations.fetch_add(1, Ordering::Relaxed);
+            EvalResult {
+                score: 10,
+                factors: EvalFactors::default(),
+            }
+        }
+
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        fn context_fingerprint(&self) -> u64 {
+            3
         }
     }
 
@@ -189,6 +215,58 @@ mod tests {
 
         assert_ne!(first.score, second.score);
         assert_eq!(second.score, fresh.score);
+    }
+
+    #[test]
+    fn test_search_clears_tt_when_search_config_changes() {
+        let board = Board::new();
+        let first_config = AiConfig::new(1, 1, 1);
+        let second_config = AiConfig::new(1, 2, 1);
+        let evaluations = Arc::new(AtomicUsize::new(0));
+        let mut engine = SearchEngine::new();
+
+        engine.search(
+            &board,
+            Color::Black,
+            &CountingEvaluator {
+                evaluations: Arc::clone(&evaluations),
+            },
+            &first_config,
+        );
+        evaluations.store(0, Ordering::Relaxed);
+        let second = engine.search(
+            &board,
+            Color::Black,
+            &CountingEvaluator {
+                evaluations: Arc::clone(&evaluations),
+            },
+            &second_config,
+        );
+        let second_evaluations = evaluations.load(Ordering::Relaxed);
+
+        let fresh_evaluations = Arc::new(AtomicUsize::new(0));
+        let mut fresh_engine = SearchEngine::new();
+        let fresh = fresh_engine.search(
+            &board,
+            Color::Black,
+            &CountingEvaluator {
+                evaluations: Arc::clone(&fresh_evaluations),
+            },
+            &second_config,
+        );
+
+        assert_eq!(second.score, fresh.score);
+        assert_eq!(second_evaluations, fresh_evaluations.load(Ordering::Relaxed));
+        assert!(second_evaluations > 1);
+    }
+
+    #[test]
+    fn test_search_context_includes_each_phase_depth() {
+        let base = AiConfig::new(1, 2, 3).context_fingerprint();
+
+        assert_ne!(base, AiConfig::new(2, 2, 3).context_fingerprint());
+        assert_ne!(base, AiConfig::new(1, 3, 3).context_fingerprint());
+        assert_ne!(base, AiConfig::new(1, 2, 4).context_fingerprint());
     }
 
     #[test]
