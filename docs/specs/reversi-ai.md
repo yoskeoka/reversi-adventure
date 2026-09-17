@@ -295,6 +295,9 @@ The versioned corpus and normalized report use the following wire contract:
   has no move but the opponent does, or `GameOver` when neither side can move.
 - `provenance` identifies how the position was produced and is retained in
   every normalized report.
+- Before `-solve`, the adapter converts each query to Egaroucid's
+  current-player-relative `X`/`O`/`-` alphabet and appends `X` for the side to
+  move, while preserving the canonical `a1` through `h8` cell order.
 
 An oracle analysis reports one record for each legal root move and derives the
 full equal-value `optimal_moves` set. Scores are disc-difference values from

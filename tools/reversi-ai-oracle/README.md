@@ -51,6 +51,8 @@ position_id<TAB>move|pass
 ```
 
 The board uses row-major `a1` through `h8` cells with `B`, `W`, and `.`.
+For Egaroucid `-solve`, the adapter translates this to its current-player-relative
+`X`/`O`/`-` problem format and appends `X` for the side to move.
 
 To regenerate the deterministic corpus after changing its generator:
 

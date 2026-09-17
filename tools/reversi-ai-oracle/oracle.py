@@ -559,6 +559,14 @@ def effective_query(board: str, side: str) -> tuple[str, int]:
     die("terminal positions must not be sent to Egaroucid")
 
 
+def to_egaroucid_problem(board: str, side: str) -> str:
+    if not BOARD_RE.fullmatch(board):
+        die("board must contain exactly 64 characters from B, W, and .")
+    opponent = other(side)
+    cells = "".join("X" if cell == side else "O" if cell == opponent else "-" for cell in board)
+    return cells + "X"
+
+
 def run_solve(
     queries: list[tuple[str, str]],
     binary: Path,
@@ -574,7 +582,9 @@ def run_solve(
     ) as problem:
         problem_path = Path(problem.name)
         for board, side in queries:
-            problem.write(board + side + "\n")
+            # -solve consumes the same a1-through-h8 order as the public GTP
+            # display; only the alphabet and side perspective need conversion.
+            problem.write(to_egaroucid_problem(board, side) + "\n")
     try:
         result = run_external(
             [
@@ -961,20 +971,15 @@ def run_match(
                 history: list[str] = []
                 while True:
                     moves = legal_moves(board, side)
+                    oracle_pass = False
                     if not moves:
                         if not legal_moves(board, other(side)):
                             break
                         passes += 1
                         if passes == 2:
                             die("match reached two consecutive passes")
-                        if side == candidate_side:
-                            move = "pass"
-                        else:
-                            command = f"genmove {'black' if side == 'B' else 'white'}"
-                            response = oracle.command(command)
-                            move = gtp_move_from_response(response, command)
-                            if move != "pass":
-                                die("oracle returned a move despite having no legal move")
+                        move = "pass"
+                        oracle_pass = side != candidate_side
                     else:
                         passes = 0
                         if side == candidate_side:
@@ -997,6 +1002,10 @@ def run_match(
                             oracle.command(f"play {'black' if side == 'B' else 'white'} PASS")
                         else:
                             oracle.command(f"play {'black' if side == 'B' else 'white'} {move}")
+                    elif oracle_pass:
+                        # Egaroucid v7.8.1 does not advance its GTP state for a
+                        # pass, so apply the oracle pass once.
+                        oracle.command(f"play {'black' if side == 'B' else 'white'} PASS")
                     if move != "pass":
                         board = apply_move(board, side, move)
                         moves_played += 1

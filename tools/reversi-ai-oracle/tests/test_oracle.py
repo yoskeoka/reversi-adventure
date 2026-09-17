@@ -101,6 +101,14 @@ class OracleHarnessTests(unittest.TestCase):
         self.assertEqual(side, "W")
         self.assertEqual(sign, -1)
 
+    def test_egaroucid_problem_uses_current_player_alphabet(self):
+        record = oracle.generate_corpus()[0]
+
+        self.assertEqual(
+            oracle.to_egaroucid_problem(record["board"], record["side_to_move"]),
+            "---------------------------OX------XO---------------------------X",
+        )
+
     def test_analysis_maps_each_root_move_and_candidate_regret(self):
         record = oracle.generate_corpus()[0]
         fixture = Path(__file__).resolve().parent / "fake_external.py"
