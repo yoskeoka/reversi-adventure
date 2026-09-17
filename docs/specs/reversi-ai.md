@@ -311,10 +311,11 @@ is an agreement even if it is not the oracle's displayed first move. The
 versioned golden projection may omit `elapsed_ms` (and other runtime-only
 fields) but retains all score, move, depth, node-count, and exactness data.
 
-The adapter must fail closed on a missing or hash-mismatched oracle, a process
-timeout, unexpected output, malformed board/corpus data, or an incomplete
-root-move set. The adapter must not pass the oracle's ignored time-limit option;
-the wrapper process timeout is the only wall-clock safety limit.
+The adapter must fail closed on a missing or hash-mismatched oracle, a modified
+cached source or binary, a process timeout, unexpected output, malformed
+board/corpus data, or an incomplete root-move set. The adapter must not pass the
+oracle's ignored time-limit option; the wrapper process timeout is the only
+wall-clock safety limit.
 
 ## GDScript Bridge Additions
 

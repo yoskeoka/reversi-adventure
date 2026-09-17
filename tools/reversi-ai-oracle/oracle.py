@@ -362,6 +362,25 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_tree(root: Path) -> str:
+    digest = hashlib.sha256()
+    paths = sorted(root.rglob("*"), key=lambda path: path.relative_to(root).as_posix())
+    for path in paths:
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        if path.is_symlink():
+            die(f"oracle source contains an unexpected symlink: {path}")
+        if path.is_dir():
+            digest.update(b"d\0" + relative + b"\0")
+        elif path.is_file():
+            digest.update(b"f\0" + relative + b"\0")
+            with path.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+        else:
+            die(f"oracle source contains an unexpected special file: {path}")
+    return digest.hexdigest()
+
+
 def safe_extract(archive: Path, destination: Path) -> None:
     destination = destination.resolve()
     with tarfile.open(archive, "r:gz") as tar:
@@ -423,6 +442,43 @@ def find_oracle_binary(root: Path) -> Path:
     die("built Egaroucid Console executable was not found in the pinned cache")
 
 
+def write_cache_integrity(path: Path, source: Path, binary: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "archive_sha256": SOURCE_SHA256,
+                "binary_sha256": sha256_file(binary),
+                "source_sha256": sha256_tree(source),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="ascii",
+    )
+
+
+def validate_cache_integrity(
+    path: Path, source: Path, binary: Path
+) -> None:
+    if not path.is_file():
+        die(f"oracle cache integrity manifest is missing: {path}")
+    try:
+        manifest = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        die(f"oracle cache integrity manifest is invalid: {path}: {exc}")
+    if not isinstance(manifest, dict) or not all(
+        isinstance(manifest.get(key), str)
+        for key in ("archive_sha256", "binary_sha256", "source_sha256")
+    ):
+        die(f"oracle cache integrity manifest has an invalid schema: {path}")
+    if manifest["archive_sha256"] != SOURCE_SHA256:
+        die(f"oracle cache integrity manifest targets a different archive: {path}")
+    if manifest["source_sha256"] != sha256_tree(source):
+        die(f"pinned Egaroucid source integrity mismatch: {source}")
+    if manifest["binary_sha256"] != sha256_file(binary):
+        die(f"pinned Egaroucid binary integrity mismatch: {binary}")
+
+
 def ensure_oracle(timeout: float) -> tuple[Path, Path]:
     if timeout <= 0:
         die(f"oracle timeout must be positive: {timeout}")
@@ -436,6 +492,7 @@ def ensure_oracle(timeout: float) -> tuple[Path, Path]:
     archive = root / f"egaroucid-v{ORACLE_VERSION}.tar.gz"
     source = root / "source"
     binary_marker = root / ".built"
+    integrity_manifest = root / ".integrity.json"
 
     if not archive.is_file():
         temporary = root / f"{archive.name}.download"
@@ -482,11 +539,13 @@ def ensure_oracle(timeout: float) -> tuple[Path, Path]:
         )
         run_external(["cmake", "--build", str(build_dir), "--parallel", "2"], timeout=timeout)
         binary = find_oracle_binary(root)
+        write_cache_integrity(integrity_manifest, source, binary)
         binary_marker.write_text("built\n", encoding="utf-8")
 
     if not source.is_dir():
         die(f"pinned oracle source directory is missing: {source}")
     binary = find_oracle_binary(root)
+    validate_cache_integrity(integrity_manifest, source, binary)
     version = run_external([str(binary), "-version"], cwd=source, timeout=min(timeout, 30))
     if ORACLE_VERSION not in version.stdout and ORACLE_VERSION not in version.stderr:
         die("built Egaroucid executable did not report the pinned version")

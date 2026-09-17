@@ -1,4 +1,5 @@
 import importlib.util
+from tempfile import TemporaryDirectory
 import unittest
 from pathlib import Path
 
@@ -169,6 +170,22 @@ class OracleHarnessTests(unittest.TestCase):
     def test_malformed_candidate_command_fails_closed(self):
         with self.assertRaises(oracle.OracleError):
             oracle.CandidateSession("'", Path.cwd(), timeout=1)
+
+    def test_cache_integrity_detects_modified_binary(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            binary = source / "Egaroucid_for_Console.out"
+            binary.write_bytes(b"verified")
+            manifest = root / ".integrity.json"
+            oracle.write_cache_integrity(manifest, source, binary)
+
+            oracle.validate_cache_integrity(manifest, source, binary)
+            binary.write_bytes(b"modified")
+
+            with self.assertRaises(oracle.OracleError):
+                oracle.validate_cache_integrity(manifest, source, binary)
 
     def test_rust_sources_do_not_reference_the_external_oracle(self):
         repository_root = Path(__file__).resolve().parents[3]
