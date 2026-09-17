@@ -1,6 +1,10 @@
 # Rust
 /target/
 
+# Python tooling
+__pycache__/
+*.py[cod]
+
 # Godot
 godot/.godot/
 godot/.nomedia

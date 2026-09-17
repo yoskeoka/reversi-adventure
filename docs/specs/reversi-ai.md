@@ -269,6 +269,50 @@ struct AiPlayer {
 - `AiPlayer::explain(&mut self, board: &Board, color: Color)` — Run search and return `MoveExplanation`. Requires `&mut self` due to TT mutation.
 - `AiPlayer::evaluator_name(&self) -> &str` — Returns the name of the current evaluator (e.g. `"strategic"`, `"novice"`).
 
+## External Oracle Analysis
+
+The project uses a pinned Egaroucid Console build as a development and
+evaluation oracle. It is an external tool, not an AI engine dependency:
+
+- No Rust source file may link to, invoke, or embed Egaroucid.
+- `reversi-ai`, `reversi-engine`, and `reversi-godot` remain buildable without
+  downloading or installing the oracle.
+- The oracle executable and its mutable resources/cache are kept outside the
+  checkout and are absent from product, GDExtension, and release artifacts.
+- Make targets, scripts, and CI may use the oracle to play matches against a
+  project AI, to provide an evaluation opponent, and to score a project AI's
+  selected move.
+
+The versioned corpus and normalized report use the following wire contract:
+
+- A board is a 64-character row-major string from `a1` through `h8` using `B`,
+  `W`, and `.`. `side_to_move` is `B` or `W`.
+- `legal_moves` is the complete legal move set in canonical coordinate order
+  (ASCII ascending, e.g. `a1`, `b1`, ..., `h8`).
+- `phase` is `opening` for 4–20 stones, `midgame` for 21–44 stones, and
+  `endgame` for 45–64 stones.
+- `outcome` is `MoveSet` with the legal moves, `Pass` when the side to move
+  has no move but the opponent does, or `GameOver` when neither side can move.
+- `provenance` identifies how the position was produced and is retained in
+  every normalized report.
+
+An oracle analysis reports one record for each legal root move and derives the
+full equal-value `optimal_moves` set. Scores are disc-difference values from
+the root side's perspective. A project AI's selected move may be included as
+`selected_move`; its `selected_value` is the corresponding oracle value and
+`regret` is `best_value - selected_value`. Each selected/root evaluation
+contains `completed_depth`, `nodes`, `elapsed_ms`, and `exact`. `exact` is true
+only when the oracle completed the game result rather than returning a
+heuristic or interrupted result. A move in `optimal_moves` has zero regret and
+is an agreement even if it is not the oracle's displayed first move. The
+versioned golden projection may omit `elapsed_ms` (and other runtime-only
+fields) but retains all score, move, depth, node-count, and exactness data.
+
+The adapter must fail closed on a missing or hash-mismatched oracle, a process
+timeout, unexpected output, malformed board/corpus data, or an incomplete
+root-move set. The adapter must not pass the oracle's ignored time-limit option;
+the wrapper process timeout is the only wall-clock safety limit.
+
 ## GDScript Bridge Additions
 
 Added to the existing `ReversiGame` GDScript class:

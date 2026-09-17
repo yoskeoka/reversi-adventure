@@ -32,3 +32,20 @@ jobs:
 
       - name: Verify shared library exists
         run: ls target/debug/libreversi_godot.so
+
+  oracle:
+    name: Verify external AI oracle harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/reversi-adventure/egaroucid/7.8.1
+          key: reversi-adventure-egaroucid-${{ runner.os }}-${{ runner.arch }}-7.8.1-${{ hashFiles('tools/reversi-ai-oracle/oracle.py') }}
+
+      - name: Verify oracle harness and normalized corpus
+        run: make oracle-verify ORACLE_LEVEL=8 ORACLE_TIMEOUT=300
+
+      - name: Compare project AI against oracle
+        run: make oracle-match ORACLE_MATCH_LEVEL=2 ORACLE_MATCH_TIMEOUT=60
