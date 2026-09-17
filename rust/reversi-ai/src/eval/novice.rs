@@ -1,7 +1,7 @@
 use reversi_engine::board::Board;
 use reversi_engine::types::Color;
 
-use super::{BoardEvaluator, EvalFactors, EvalResult};
+use super::{stable_context_fingerprint, BoardEvaluator, EvalFactors, EvalResult};
 
 /// Evaluator simulating a beginner player who doesn't know Othello strategy.
 pub struct NoviceEvaluator {
@@ -75,6 +75,14 @@ impl BoardEvaluator for NoviceEvaluator {
     fn name(&self) -> &str {
         "novice"
     }
+
+    fn context_fingerprint(&self) -> u64 {
+        stable_context_fingerprint(&[
+            0x4e4f_5649_4345_4556, // "NOVICEEV"
+            1,                     // evaluator context version
+            self.seed,
+        ])
+    }
 }
 
 #[cfg(test)]
@@ -111,5 +119,17 @@ mod tests {
         let board = Board::new();
         let result = eval.evaluate(&board, Color::Black);
         assert_eq!(result.factors.stability, 0);
+    }
+
+    #[test]
+    fn test_novice_context_fingerprint_includes_seed() {
+        let first = NoviceEvaluator::with_seed(1);
+        let second = NoviceEvaluator::with_seed(2);
+
+        assert_ne!(first.context_fingerprint(), second.context_fingerprint());
+        assert_eq!(
+            first.context_fingerprint(),
+            NoviceEvaluator::with_seed(1).context_fingerprint()
+        );
     }
 }

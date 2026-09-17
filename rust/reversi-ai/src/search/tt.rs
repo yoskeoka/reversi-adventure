@@ -22,6 +22,7 @@ pub struct TtEntry {
 /// Zobrist hash keys for board positions.
 pub struct ZobristKeys {
     keys: [[u64; 64]; 2], // [color][square]
+    side_to_move: [u64; 2], // [side to move]
 }
 
 impl ZobristKeys {
@@ -35,11 +36,16 @@ impl ZobristKeys {
                 *square = state;
             }
         }
-        Self { keys }
+        let mut side_to_move = [0u64; 2];
+        for key in &mut side_to_move {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *key = state;
+        }
+        Self { keys, side_to_move }
     }
 
-    /// Compute Zobrist hash for a board position.
-    pub fn hash(&self, board: &Board) -> u64 {
+    /// Compute Zobrist hash for a board position and side to move.
+    pub fn hash(&self, board: &Board, color: Color) -> u64 {
         let mut h = 0u64;
         let black = board.pieces(Color::Black);
         let white = board.pieces(Color::White);
@@ -58,7 +64,10 @@ impl ZobristKeys {
             bits &= bits - 1;
         }
 
-        h
+        h ^ self.side_to_move[match color {
+            Color::Black => 0,
+            Color::White => 1,
+        }]
     }
 }
 
@@ -116,8 +125,8 @@ mod tests {
     fn test_zobrist_deterministic() {
         let keys = ZobristKeys::new();
         let board = Board::new();
-        let h1 = keys.hash(&board);
-        let h2 = keys.hash(&board);
+        let h1 = keys.hash(&board, Color::Black);
+        let h2 = keys.hash(&board, Color::Black);
         assert_eq!(h1, h2);
     }
 
@@ -127,7 +136,34 @@ mod tests {
         let board1 = Board::new();
         let mut board2 = Board::new();
         board2.set(Position::new(0, 0), Color::Black);
-        assert_ne!(keys.hash(&board1), keys.hash(&board2));
+        assert_ne!(keys.hash(&board1, Color::Black), keys.hash(&board2, Color::Black));
+    }
+
+    #[test]
+    fn test_zobrist_distinguishes_side_to_move_in_pass_position() {
+        let keys = ZobristKeys::new();
+        let mut board = Board::empty();
+        board.set(Position::new(0, 0), Color::Black);
+        board.set(Position::new(0, 1), Color::White);
+
+        assert_eq!(reversi_engine::moves::legal_moves(&board, Color::White), 0);
+        assert_ne!(reversi_engine::moves::legal_moves(&board, Color::Black), 0);
+        assert_ne!(keys.hash(&board, Color::Black), keys.hash(&board, Color::White));
+
+        let mut tt = TranspositionTable::new(1024);
+        let black_hash = keys.hash(&board, Color::Black);
+        let white_hash = keys.hash(&board, Color::White);
+        tt.store(
+            black_hash,
+            TtEntry {
+                hash: black_hash,
+                depth: 1,
+                score: 100,
+                bound: Bound::Exact,
+                best_move: None,
+            },
+        );
+        assert!(tt.probe(white_hash).is_none());
     }
 
     #[test]

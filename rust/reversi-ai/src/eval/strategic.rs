@@ -2,7 +2,7 @@ use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::Color;
 
-use super::{BoardEvaluator, EvalFactors, EvalResult};
+use super::{stable_context_fingerprint, BoardEvaluator, EvalFactors, EvalResult};
 
 /// Hand-tuned evaluator based on known Othello strategy.
 pub struct StrategicEvaluator {
@@ -235,6 +235,19 @@ impl BoardEvaluator for StrategicEvaluator {
 
     fn name(&self) -> &str {
         "strategic"
+    }
+
+    fn context_fingerprint(&self) -> u64 {
+        stable_context_fingerprint(&[
+            0x5354_5241_5445_4749, // "STRATEGI"
+            1,                     // evaluator context version
+            self.corner_weight as i64 as u64,
+            self.stability_weight as i64 as u64,
+            self.mobility_weight as i64 as u64,
+            self.edge_weight as i64 as u64,
+            self.parity_weight as i64 as u64,
+            self.piece_count_weight as i64 as u64,
+        ])
     }
 }
 

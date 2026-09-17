@@ -26,6 +26,17 @@ impl AiConfig {
             self.endgame_depth
         }
     }
+
+    /// Returns a stable identity for score-affecting search configuration.
+    pub(crate) fn context_fingerprint(&self) -> u64 {
+        crate::eval::stable_context_fingerprint(&[
+            0x5345_4152_4348_4346, // "SEARCHCF"
+            1,                     // search configuration version
+            u64::from(self.opening_depth),
+            u64::from(self.midgame_depth),
+            u64::from(self.endgame_depth),
+        ])
+    }
 }
 
 #[cfg(test)]

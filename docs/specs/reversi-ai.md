@@ -38,10 +38,20 @@ struct EvalResult {
 trait BoardEvaluator {
     fn evaluate(&self, board: &Board, color: Color) -> EvalResult;
     fn name(&self) -> &str;
+    fn context_fingerprint(&self) -> u64;
 }
 ```
 
 Implementations must return evaluation from the perspective of `color` (positive = good for `color`).
+
+`context_fingerprint()` returns a stable identifier for every input that can
+change the meaning of an evaluation score. It must include the evaluator
+implementation/version and all score-affecting parameters (for example, the
+`NoviceEvaluator` seed). It must not identify an evaluator by object address or
+other process-local state.
+
+`StrategicEvaluator` includes its evaluator version and all evaluation weights;
+`NoviceEvaluator` includes its evaluator version and seed.
 
 ### StrategicEvaluator
 
@@ -115,20 +125,26 @@ enum Bound {
 - `TranspositionTable::store(hash: u64, entry: TtEntry)` — Store entry. Replaces if new depth >= existing depth.
 - `TranspositionTable::clear()` — Clear all entries.
 
+An entry is valid only for the board, the side to move, and the evaluator/search
+context that produced it. `SearchEngine` combines the evaluator's
+`context_fingerprint()` with the active `AiConfig` and search-semantics version;
+it clears the TT before a search whenever that combined context changes. Scores,
+bounds, and best moves must never be reused across different contexts.
+
 ### Zobrist Hashing
 
 ```rust
 struct ZobristKeys {
-    // pre-computed random u64 values: 2 colors × 64 squares = 128 values
+    // pre-computed random u64 values: 2 colors × 64 squares + 2 side keys
 }
 ```
 
-Board hashing for transposition table lookup.
+Board and side-to-move hashing for transposition table lookup.
 
-- Pre-computed random `u64` values for each (position, color) combination: 2 colors × 64 squares = 128 values.
+- Pre-computed random `u64` values for each (position, color) combination plus one value for each side to move: 128 board values + 2 side keys.
 - Hash computed incrementally: XOR in/out pieces as moves are made.
 - `ZobristKeys::new()` — Generate a new set of random Zobrist keys.
-- `ZobristKeys::hash(&self, board: &Board) -> u64` — Compute hash from scratch for the given board position.
+- `ZobristKeys::hash(&self, board: &Board, color: Color) -> u64` — Compute hash from scratch for the given board position and side to move. The same discs with different sides to move produce different keys.
 
 ### Move Ordering
 
@@ -158,6 +174,7 @@ Low-level search implementation. Typically used via `SearchEngine` rather than d
 - `Negascout::new(evaluator: &'a E, tt: &'a mut TranspositionTable, zobrist: &'a ZobristKeys)` — Constructor.
 - `Negascout::nodes_searched(&self) -> u64` — Returns total node count from the last completed search.
 - `Negascout::search(board: &Board, color: Color, max_depth: u8)` — Run iterative deepening search. Returns `(best_move, score, pv, leaf_eval)`.
+- TT probes and stores use a Zobrist key that includes the current `color`, including when a pass keeps the board unchanged.
 - Internally runs depth 1, 2, ..., up to `max_depth`.
 - At each depth: Negascout with alpha-beta window.
   - First move (PV node): search with full window [alpha, beta].
@@ -172,6 +189,7 @@ Wrapper around `Negascout` managing the transposition table and Zobrist keys.
 struct SearchEngine {
     tt: TranspositionTable,
     zobrist: ZobristKeys,
+    context_fingerprint: Option<u64>,
 }
 ```
 
