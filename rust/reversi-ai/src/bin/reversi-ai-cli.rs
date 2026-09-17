@@ -79,22 +79,22 @@ fn move_name(position: Position) -> String {
     format!("{}{}", (b'a' + position.col) as char, position.row + 1)
 }
 
-fn choose_move(evaluator_name: &str, config: AiConfig, board: &Board, color: Color) -> String {
+fn choose_move(player: &mut AiPlayer, board: &Board, color: Color) -> String {
     if !moves::has_legal_move(board, color) {
         return "pass".to_string();
     }
 
-    let evaluator: Box<dyn BoardEvaluator> = match evaluator_name {
-        "strategic" => Box::new(StrategicEvaluator::new()),
-        "novice" => Box::new(NoviceEvaluator::new()),
-        _ => unreachable!("evaluator was checked while parsing arguments"),
-    };
-    let mut player = AiPlayer::new(evaluator, config);
     move_name(player.think(board, color).best_move)
 }
 
 fn main() -> Result<(), String> {
     let (evaluator_name, config) = parse_args()?;
+    let evaluator: Box<dyn BoardEvaluator> = match evaluator_name.as_str() {
+        "strategic" => Box::new(StrategicEvaluator::new()),
+        "novice" => Box::new(NoviceEvaluator::new()),
+        _ => unreachable!("evaluator was checked while parsing arguments"),
+    };
+    let mut player = AiPlayer::new(evaluator, config);
     let stdin = io::stdin();
     let mut stdout = io::BufWriter::new(io::stdout().lock());
 
@@ -116,7 +116,7 @@ fn main() -> Result<(), String> {
         }
         let board = board_from_flat_string(fields[1])?;
         let color = parse_color(fields[2])?;
-        let move_name = choose_move(&evaluator_name, config, &board, color);
+        let move_name = choose_move(&mut player, &board, color);
         writeln!(stdout, "{}\t{}", fields[0], move_name)
             .map_err(|error| format!("stdout: {error}"))?;
         stdout.flush().map_err(|error| format!("stdout: {error}"))?;

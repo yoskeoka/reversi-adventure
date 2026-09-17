@@ -69,6 +69,29 @@ class OracleHarnessTests(unittest.TestCase):
         with self.assertRaises(oracle.OracleError):
             oracle.parse_solve_output(output, [8], expected_level=8)
 
+    def test_partial_depth_is_not_exact(self):
+        output = "\n".join(
+            [
+                "| Level | Depth | Move | Score | Time | Nodes | NPS |",
+                "| 8 | 8@50% | d3 | +4 | 000:00:01.234 | 42 | 34 |",
+            ]
+        )
+
+        result = oracle.parse_solve_output(output, [8], expected_level=8)
+
+        self.assertFalse(result[0]["exact"])
+
+    def test_invalid_elapsed_time_fails_closed(self):
+        output = "\n".join(
+            [
+                "| Level | Depth | Move | Score | Time | Nodes | NPS |",
+                "| 8 | 8@100% | d3 | +4 | 000:99:99.234 | 42 | 34 |",
+            ]
+        )
+
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(output, [8], expected_level=8)
+
     def test_golden_projection_removes_only_machine_dependent_elapsed_time(self):
         reports = [
             {
@@ -142,6 +165,10 @@ class OracleHarnessTests(unittest.TestCase):
     def test_malformed_gtp_move_response_fails_closed(self):
         with self.assertRaises(oracle.OracleError):
             oracle.gtp_move_from_response(["="], "genmove black")
+
+    def test_malformed_candidate_command_fails_closed(self):
+        with self.assertRaises(oracle.OracleError):
+            oracle.CandidateSession("'", Path.cwd(), timeout=1)
 
     def test_rust_sources_do_not_reference_the_external_oracle(self):
         repository_root = Path(__file__).resolve().parents[3]

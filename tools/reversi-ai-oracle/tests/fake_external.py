@@ -4,9 +4,10 @@ import sys
 
 def main() -> int:
     if "--candidate" in sys.argv:
-        for line in sys.stdin:
+        candidate_moves = ["d3"]
+        for index, line in enumerate(sys.stdin):
             position_id, _, _ = line.rstrip("\n").split("\t")
-            print(f"{position_id}\td3", flush=True)
+            print(f"{position_id}\t{candidate_moves[index]}", flush=True)
         return 0
 
     if "--partial-candidate" in sys.argv:
@@ -18,9 +19,13 @@ def main() -> int:
 
     problem = sys.argv[sys.argv.index("-solve") + 1]
     print("| Level | Depth | Move | Score | Time | Nodes | NPS |")
+    solve_moves = ["c3", "c3", "d6", "d6"]
     with open(problem, encoding="ascii") as stream:
-        for _ in stream:
-            print("| 8 | 8@100% | a1 | +1 | 000:00:00.001 | 10 | 10000 |")
+        for index, _ in enumerate(stream):
+            print(
+                f"| 8 | 8@100% | {solve_moves[index]} | +1 | "
+                "000:00:00.001 | 10 | 10000 |"
+            )
     print("total 10 nodes in 0.001s NPS 10000")
     return 0
 

@@ -142,6 +142,8 @@ def apply_move(board: str, side: str, move: str) -> str:
 
 def phase_for(board: str) -> str:
     stones = sum(cell != "." for cell in board)
+    if stones < 4:
+        die(f"phase requires at least four stones, got {stones}")
     if stones <= 20:
         return "opening"
     if stones <= 44:
@@ -395,6 +397,8 @@ def run_external(
         die(f"required external command is unavailable: {command[0]}: {exc}")
     except subprocess.TimeoutExpired as exc:
         die(f"oracle process timed out after {timeout:g}s: {' '.join(command)}")
+    except OSError as exc:
+        die(f"unable to execute external command {command[0]}: {exc}")
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         die(f"oracle process failed with exit {result.returncode}: {detail}")
@@ -490,20 +494,23 @@ def ensure_oracle(timeout: float) -> tuple[Path, Path]:
 
 
 def parse_elapsed(value: str) -> int:
-    match = re.fullmatch(r"(\d+):(\d{2}):(\d{2})\.(\d{3})", value)
+    match = re.fullmatch(r"(\d+):([0-5]\d):([0-5]\d)\.(\d{3})", value)
     if not match:
         die(f"unexpected Egaroucid elapsed time: {value!r}")
     hours, minutes, seconds, millis = (int(part) for part in match.groups())
     return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
 
 
-def parse_depth(value: str) -> int:
+def parse_depth(value: str) -> tuple[int, float]:
     if value == "-":
-        return 0
-    match = re.fullmatch(r"(\d+)@(?:\d+(?:\.\d+)?)%", value)
+        return 0, 0.0
+    match = re.fullmatch(r"(\d+)@(\d+(?:\.\d+)?)%", value)
     if not match:
         die(f"unexpected Egaroucid depth: {value!r}")
-    return int(match.group(1))
+    percentage = float(match.group(2))
+    if percentage > 100:
+        die(f"unexpected Egaroucid completion percentage: {value!r}")
+    return int(match.group(1)), percentage
 
 
 def parse_solve_output(
@@ -532,22 +539,24 @@ def parse_solve_output(
             die(f"unexpected Egaroucid level: {level!r}")
         if int(level) != expected_level:
             die(f"Egaroucid returned level {level}, expected {expected_level}")
+        completed_depth, completion_percent = parse_depth(depth)
         if not re.fullmatch(r"\d+", nodes) or not re.fullmatch(r"\d+", nps):
             die(f"unexpected Egaroucid node count: {nodes!r}, {nps!r}")
         rows.append(
             {
                 "move": move.lower(),
                 "value": int(score),
-                "completed_depth": parse_depth(depth),
+                "completed_depth": completed_depth,
                 "nodes": int(nodes),
                 "elapsed_ms": parse_elapsed(elapsed),
                 "nps": int(nps),
+                "exact": completion_percent == 100.0,
             }
         )
     if len(rows) != len(required_plies):
         die(f"Egaroucid returned {len(rows)} rows for {len(required_plies)} queries")
     for row, plies in zip(rows, required_plies):
-        row["exact"] = bool(row["completed_depth"] >= plies)
+        row["exact"] = bool(row["exact"] and row["completed_depth"] >= plies)
     return rows
 
 
@@ -601,7 +610,11 @@ def run_solve(
             timeout=timeout,
         )
         required_plies = [64 - sum(cell != "." for cell in board) for board, _ in queries]
-        return parse_solve_output(result.stdout, required_plies, level)
+        rows = parse_solve_output(result.stdout, required_plies, level)
+        for (board, side), row in zip(queries, rows):
+            if str(row["move"]) not in legal_moves(board, side):
+                die(f"Egaroucid returned an illegal continuation move for {side}: {row['move']!r}")
+        return rows
     finally:
         problem_path.unlink(missing_ok=True)
 
@@ -657,7 +670,10 @@ def gtp_move_from_response(response: list[str], command: str) -> str:
 
 class CandidateSession:
     def __init__(self, command: str, cwd: Path, timeout: float) -> None:
-        argv = shlex.split(command)
+        try:
+            argv = shlex.split(command)
+        except ValueError as exc:
+            die(f"invalid candidate command: {exc}")
         if not argv:
             die("candidate command is empty")
         try:
