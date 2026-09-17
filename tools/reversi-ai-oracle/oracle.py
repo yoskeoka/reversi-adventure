@@ -703,7 +703,10 @@ class TimedLineReader:
             ready, _, _ = select.select([self.fd], [], [], remaining)
             if not ready:
                 die(timeout_message)
-            chunk = os.read(self.fd, 4096)
+            try:
+                chunk = os.read(self.fd, 4096)
+            except OSError as exc:
+                die(f"protocol pipe read failed: {exc}")
             if not chunk:
                 die(eof_message)
             self.buffer.extend(chunk)
@@ -753,8 +756,11 @@ class CandidateSession:
 
     def move(self, position_id: str, board: str, side: str) -> str:
         assert self.process.stdin is not None
-        self.process.stdin.write(f"{position_id}\t{board}\t{side}\n".encode("ascii"))
-        self.process.stdin.flush()
+        try:
+            self.process.stdin.write(f"{position_id}\t{board}\t{side}\n".encode("ascii"))
+            self.process.stdin.flush()
+        except (OSError, ValueError) as exc:
+            die(f"candidate command pipe failed for {position_id!r}: {exc}")
         line = self.reader.read_line(
             self.timeout,
             f"candidate command timed out after {self.timeout:g}s",
@@ -971,51 +977,65 @@ class GtpSession:
         except OSError as exc:
             die(f"unable to start oracle GTP process: {exc}")
         self.timeout = timeout
+        self.failed = False
         assert self.process.stdout is not None
         self.reader = TimedLineReader(self.process.stdout)
 
     def command(self, command: str) -> list[str]:
         assert self.process.stdin is not None
-        self.process.stdin.write((command + "\n").encode("ascii"))
-        self.process.stdin.flush()
-        response = [
-            self.reader.read_line(
-                self.timeout,
-                f"oracle GTP command timed out after {self.timeout:g}s",
-                "oracle GTP process exited unexpectedly",
-            )
-        ]
-        while True:
-            # The GTP protocol terminates every response with a blank line.
-            line = self.reader.read_line(
-                self.timeout,
-                f"oracle GTP command timed out after {self.timeout:g}s",
-                "oracle GTP process exited before completing its response",
-            )
-            if not line:
-                break
-            response.append(line)
-        if not response or not response[0].startswith(("=", "?")):
-            die(f"invalid oracle GTP response to {command!r}: {response!r}")
-        if response[0].startswith("?"):
-            die(f"oracle GTP command failed: {command!r}: {' '.join(response)}")
-        return response
+        try:
+            self.process.stdin.write((command + "\n").encode("ascii"))
+            self.process.stdin.flush()
+            response = [
+                self.reader.read_line(
+                    self.timeout,
+                    f"oracle GTP command timed out after {self.timeout:g}s",
+                    "oracle GTP process exited unexpectedly",
+                )
+            ]
+            while True:
+                # The GTP protocol terminates every response with a blank line.
+                line = self.reader.read_line(
+                    self.timeout,
+                    f"oracle GTP command timed out after {self.timeout:g}s",
+                    "oracle GTP process exited before completing its response",
+                )
+                if not line:
+                    break
+                response.append(line)
+            if not response or not response[0].startswith(("=", "?")):
+                die(f"invalid oracle GTP response to {command!r}: {response!r}")
+            if response[0].startswith("?"):
+                die(f"oracle GTP command failed: {command!r}: {' '.join(response)}")
+            return response
+        except OracleError:
+            self.failed = True
+            raise
+        except (OSError, ValueError) as exc:
+            self.failed = True
+            die(f"oracle GTP pipe failed for {command!r}: {exc}")
 
     def close(self) -> None:
+        if not self.failed and self.process.poll() is None:
+            try:
+                self.command("quit")
+            except OracleError:
+                pass
         try:
-            self.command("quit")
-        except OracleError:
+            self.process.terminate()
+        except (OSError, ValueError):
             pass
-        self.process.terminate()
         try:
             self.process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait()
-        if self.process.stdin:
-            self.process.stdin.close()
-        if self.process.stdout:
-            self.process.stdout.close()
+        for stream in (self.process.stdin, self.process.stdout):
+            if stream:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
 
 
 def run_match(
