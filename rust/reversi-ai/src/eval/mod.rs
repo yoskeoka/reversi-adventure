@@ -27,6 +27,20 @@ impl EvalFactors {
     }
 }
 
+/// Compute a deterministic fingerprint from context components.
+pub(crate) fn stable_context_fingerprint(parts: &[u64]) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    parts.iter().fold(FNV_OFFSET_BASIS, |mut fingerprint, part| {
+        for byte in part.to_le_bytes() {
+            fingerprint ^= u64::from(byte);
+            fingerprint = fingerprint.wrapping_mul(FNV_PRIME);
+        }
+        fingerprint
+    })
+}
+
 impl std::ops::Sub for EvalFactors {
     type Output = EvalFactors;
 
@@ -57,4 +71,7 @@ pub trait BoardEvaluator: Send + Sync {
 
     /// Returns the name of this evaluator.
     fn name(&self) -> &str;
+
+    /// Returns a stable identity for score-affecting evaluator context.
+    fn context_fingerprint(&self) -> u64;
 }

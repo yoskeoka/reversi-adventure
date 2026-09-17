@@ -6,7 +6,7 @@ use reversi_engine::board::Board;
 use reversi_engine::types::{Color, Position};
 
 use crate::config::AiConfig;
-use crate::eval::{BoardEvaluator, EvalResult};
+use crate::eval::{stable_context_fingerprint, BoardEvaluator, EvalResult};
 use self::negascout::Negascout;
 use self::tt::{TranspositionTable, ZobristKeys};
 
@@ -23,6 +23,20 @@ pub struct SearchResult {
 pub struct SearchEngine {
     tt: TranspositionTable,
     zobrist: ZobristKeys,
+    context_fingerprint: Option<u64>,
+}
+
+const SEARCH_SEMANTICS_VERSION: u64 = 1;
+
+fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(
+    evaluator: &E,
+    config: &AiConfig,
+) -> u64 {
+    stable_context_fingerprint(&[
+        SEARCH_SEMANTICS_VERSION,
+        evaluator.context_fingerprint(),
+        config.context_fingerprint(),
+    ])
 }
 
 impl SearchEngine {
@@ -30,6 +44,7 @@ impl SearchEngine {
         Self {
             tt: TranspositionTable::new(1 << 20), // ~1M entries
             zobrist: ZobristKeys::new(),
+            context_fingerprint: None,
         }
     }
 
@@ -41,6 +56,12 @@ impl SearchEngine {
         evaluator: &E,
         config: &AiConfig,
     ) -> SearchResult {
+        let context_fingerprint = search_context_fingerprint(evaluator, config);
+        if self.context_fingerprint != Some(context_fingerprint) {
+            self.tt.clear();
+            self.context_fingerprint = Some(context_fingerprint);
+        }
+
         let stone_count = board.count(Color::Black) + board.count(Color::White);
         let max_depth = config.depth_for_phase(stone_count);
 
@@ -70,7 +91,55 @@ impl Default for SearchEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::strategic::StrategicEvaluator;
+    use crate::eval::{strategic::StrategicEvaluator, EvalFactors};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct ContextEvaluator {
+        score: i32,
+        context_fingerprint: u64,
+    }
+
+    impl BoardEvaluator for ContextEvaluator {
+        fn evaluate(&self, _board: &Board, _color: Color) -> EvalResult {
+            EvalResult {
+                score: self.score,
+                factors: EvalFactors::default(),
+            }
+        }
+
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        fn context_fingerprint(&self) -> u64 {
+            self.context_fingerprint
+        }
+    }
+
+    struct CountingEvaluator {
+        evaluations: Arc<AtomicUsize>,
+    }
+
+    impl BoardEvaluator for CountingEvaluator {
+        fn evaluate(&self, _board: &Board, _color: Color) -> EvalResult {
+            self.evaluations.fetch_add(1, Ordering::Relaxed);
+            EvalResult {
+                score: 10,
+                factors: EvalFactors::default(),
+            }
+        }
+
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        fn context_fingerprint(&self) -> u64 {
+            3
+        }
+    }
 
     #[test]
     fn test_search_returns_legal_move() {
@@ -107,6 +176,97 @@ mod tests {
         let result = engine.search(&board, Color::Black, &evaluator, &config);
         let legal = reversi_engine::moves::legal_moves(&board, Color::Black);
         assert!(legal & result.best_move.bit_mask() != 0);
+    }
+
+    #[test]
+    fn test_search_clears_tt_when_evaluator_context_changes() {
+        let mut engine = SearchEngine::new();
+        let board = Board::new();
+        let config = AiConfig::new(1, 1, 1);
+
+        let first = engine.search(
+            &board,
+            Color::Black,
+            &ContextEvaluator {
+                score: 10,
+                context_fingerprint: 1,
+            },
+            &config,
+        );
+        let second = engine.search(
+            &board,
+            Color::Black,
+            &ContextEvaluator {
+                score: 20,
+                context_fingerprint: 2,
+            },
+            &config,
+        );
+        let mut fresh_engine = SearchEngine::new();
+        let fresh = fresh_engine.search(
+            &board,
+            Color::Black,
+            &ContextEvaluator {
+                score: 20,
+                context_fingerprint: 2,
+            },
+            &config,
+        );
+
+        assert_ne!(first.score, second.score);
+        assert_eq!(second.score, fresh.score);
+    }
+
+    #[test]
+    fn test_search_clears_tt_when_search_config_changes() {
+        let board = Board::new();
+        let first_config = AiConfig::new(1, 1, 1);
+        let second_config = AiConfig::new(1, 2, 1);
+        let evaluations = Arc::new(AtomicUsize::new(0));
+        let mut engine = SearchEngine::new();
+
+        engine.search(
+            &board,
+            Color::Black,
+            &CountingEvaluator {
+                evaluations: Arc::clone(&evaluations),
+            },
+            &first_config,
+        );
+        evaluations.store(0, Ordering::Relaxed);
+        let second = engine.search(
+            &board,
+            Color::Black,
+            &CountingEvaluator {
+                evaluations: Arc::clone(&evaluations),
+            },
+            &second_config,
+        );
+        let second_evaluations = evaluations.load(Ordering::Relaxed);
+
+        let fresh_evaluations = Arc::new(AtomicUsize::new(0));
+        let mut fresh_engine = SearchEngine::new();
+        let fresh = fresh_engine.search(
+            &board,
+            Color::Black,
+            &CountingEvaluator {
+                evaluations: Arc::clone(&fresh_evaluations),
+            },
+            &second_config,
+        );
+
+        assert_eq!(second.score, fresh.score);
+        assert_eq!(second_evaluations, fresh_evaluations.load(Ordering::Relaxed));
+        assert!(second_evaluations > 1);
+    }
+
+    #[test]
+    fn test_search_context_includes_each_phase_depth() {
+        let base = AiConfig::new(1, 2, 3).context_fingerprint();
+
+        assert_ne!(base, AiConfig::new(2, 2, 3).context_fingerprint());
+        assert_ne!(base, AiConfig::new(1, 3, 3).context_fingerprint());
+        assert_ne!(base, AiConfig::new(1, 2, 4).context_fingerprint());
     }
 
     #[test]

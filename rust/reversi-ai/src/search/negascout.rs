@@ -100,7 +100,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             };
         }
 
-        let hash = self.zobrist.hash(board);
+        let hash = self.zobrist.hash(board, color);
 
         // TT probe
         let tt_move = if let Some(entry) = self.tt.probe(hash) {
