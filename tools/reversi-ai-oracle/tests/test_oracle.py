@@ -131,6 +131,10 @@ class OracleHarnessTests(unittest.TestCase):
         finally:
             session.close()
 
+    def test_malformed_gtp_move_response_fails_closed(self):
+        with self.assertRaises(oracle.OracleError):
+            oracle.gtp_move_from_response(["="], "genmove black")
+
     def test_rust_sources_do_not_reference_the_external_oracle(self):
         repository_root = Path(__file__).resolve().parents[3]
         references = []

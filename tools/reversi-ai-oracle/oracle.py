@@ -635,6 +635,16 @@ class TimedLineReader:
             die("protocol response is not ASCII")
 
 
+def gtp_move_from_response(response: list[str], command: str) -> str:
+    fields = response[0].split()
+    if len(fields) != 2:
+        die(f"oracle GTP response has no move token for {command!r}: {response!r}")
+    move = fields[1].lower()
+    if move != "pass" and not COORDINATE_RE.fullmatch(move):
+        die(f"oracle GTP response has an invalid move for {command!r}: {response!r}")
+    return move
+
+
 class CandidateSession:
     def __init__(self, command: str, cwd: Path, timeout: float) -> None:
         argv = shlex.split(command)
@@ -960,10 +970,9 @@ def run_match(
                         if side == candidate_side:
                             move = "pass"
                         else:
-                            response = oracle.command(
-                                f"genmove {'black' if side == 'B' else 'white'}"
-                            )
-                            move = response[0].split(maxsplit=1)[1].lower()
+                            command = f"genmove {'black' if side == 'B' else 'white'}"
+                            response = oracle.command(command)
+                            move = gtp_move_from_response(response, command)
                             if move != "pass":
                                 die("oracle returned a move despite having no legal move")
                     else:
@@ -975,8 +984,9 @@ def run_match(
                             if move not in moves:
                                 die(f"candidate selected illegal move {move!r} in match")
                         else:
-                            response = oracle.command(f"genmove {'black' if side == 'B' else 'white'}")
-                            move = response[0].split(maxsplit=1)[1].lower()
+                            command = f"genmove {'black' if side == 'B' else 'white'}"
+                            response = oracle.command(command)
+                            move = gtp_move_from_response(response, command)
                             if move == "pass":
                                 die("oracle passed despite having a legal move")
                             if move not in moves:
