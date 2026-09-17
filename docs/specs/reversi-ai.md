@@ -44,14 +44,14 @@ trait BoardEvaluator {
 
 Implementations must return evaluation from the perspective of `color` (positive = good for `color`).
 
-`context_fingerprint()` returns a stable identifier for every input that can
-change the meaning of an evaluation score. It must include the evaluator
-implementation/version and all score-affecting parameters (for example, the
-`NoviceEvaluator` seed). It must not identify an evaluator by object address or
-other process-local state.
+`context_fingerprint()` must:
 
-`StrategicEvaluator` includes its evaluator version and all evaluation weights;
-`NoviceEvaluator` includes its evaluator version and seed.
+- stay stable for the same score context;
+- include the evaluator version and all score-affecting parameters;
+- exclude object addresses and other process-local state.
+
+`StrategicEvaluator` includes its version and evaluation weights.
+`NoviceEvaluator` includes its version and seed.
 
 ### StrategicEvaluator
 
@@ -125,11 +125,15 @@ enum Bound {
 - `TranspositionTable::store(hash: u64, entry: TtEntry)` — Store entry. Replaces if new depth >= existing depth.
 - `TranspositionTable::clear()` — Clear all entries.
 
-An entry is valid only for the board, the side to move, and the evaluator/search
-context that produced it. `SearchEngine` combines the evaluator's
-`context_fingerprint()` with the active `AiConfig` and search-semantics version;
-it clears the TT before a search whenever that combined context changes. Scores,
-bounds, and best moves must never be reused across different contexts.
+Each TT entry is scoped to:
+
+- the board;
+- the side to move;
+- the evaluator and search context that produced it.
+
+`SearchEngine` combines the evaluator's `context_fingerprint()` with the active
+`AiConfig` and search-semantics version. It clears the TT when that context
+changes. Scores, bounds, and best moves must not cross context boundaries.
 
 ### Zobrist Hashing
 
