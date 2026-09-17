@@ -654,7 +654,9 @@ def analyze_records(
     timeout: float,
     candidate_command: str | None,
 ) -> list[dict[str, object]]:
-    candidate = CandidateSession(candidate_command, cwd, timeout) if candidate_command else None
+    candidate = (
+        CandidateSession(candidate_command, repo_root(), timeout) if candidate_command else None
+    )
     try:
         selected: dict[str, str] = {}
         if candidate:
@@ -899,7 +901,7 @@ def run_match(
     validate_budget(level, timeout)
     if games < 1:
         die("match requires at least one game")
-    candidate = CandidateSession(candidate_command, cwd, timeout)
+    candidate = CandidateSession(candidate_command, repo_root(), timeout)
     game_reports: list[dict[str, object]] = []
     try:
         for game_index in range(games):
@@ -1001,6 +1003,10 @@ def run_match(
         "summary": counts,
         "results": game_reports,
     }
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
 def default_paths() -> tuple[Path, Path]:
