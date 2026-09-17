@@ -32,7 +32,7 @@ This project follows the AI-Centered Development workflow.
    - **Plan First**: Before writing code, ensure a plan exists in `docs/exec-plan/todo/`. If not, create one.
    - **Spec First**: Update `docs/specs/` to reflect changes BEFORE modifying code.
    - **Focus**: If you find unrelated issues, log them in `docs/issues/<sequence>-<name>.md` and ignore them for the current task (unless they are blockers).
-   - **Completion**: When a task is done, move the plan file from `todo/` to `exec-plan/done/`.
+   - **Completion**: When a task is done, delete the plan file from `todo/` after verification and PR preparation. Retrieve completed plans from the implementation PR or Git history.
 
 ## When asked to "Start a new feature":
 1. Create a branch: `ww create plan/feature-name` then `cd "$(ww cd plan/feature-name)"`
@@ -52,7 +52,7 @@ This project follows the AI-Centered Development workflow.
 5. After plan PR is merged, create a new branch: `ww create fix/bug-x` then `cd "$(ww cd fix/bug-x)"`
 6. Execute the fix following the **Spec First** rule.
 7. Run lint/tests, fix any failures, then create a PR.
-8. Move plan to `done/`.
+8. Delete the completed plan after verification and PR preparation; retrieve it from the implementation PR or Git history.
 
 ## Subagent Strategy
 

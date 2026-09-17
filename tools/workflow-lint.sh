@@ -102,7 +102,7 @@ matching_exec_plan_files() {
     [ -d docs/exec-plan/todo ] || return 0
 
     find docs/exec-plan/todo -maxdepth 1 -type f \
-        \( -name "*-${plan_name}.md" -o -name "${plan_name}.md" \) \
+        -name "*-${plan_name}.md" \
         | sort
 }
 
@@ -111,7 +111,7 @@ deleted_matching_exec_plan_files() {
 
     printf '%s\n' "$DELETED_FILES" | awk -v plan_name="$plan_name" '
         $0 ~ "^docs/exec-plan/todo/" &&
-            ($0 ~ ("-" plan_name "\\.md$") || $0 ~ ("/" plan_name "\\.md$")) {
+            $0 ~ ("-" plan_name "\\.md$") {
             print
         }
     ' | sort
@@ -662,7 +662,26 @@ check_linked_github_issue_closure() {
 }
 
 # =============================================================================
-# Check 7: Active plan / issue naming (pre-push + ci)
+# Check 7: Historical workflow archives are not active records (pre-push + ci)
+# Completed plans and resolved issues are retained in PR/Git history instead of
+# being copied into docs/exec-plan/done/ or docs/issues/done/.
+# =============================================================================
+check_historical_workflow_archives() {
+    local archive_dir
+
+    for archive_dir in docs/exec-plan/done docs/issues/done; do
+        if [ -d "$archive_dir" ]; then
+            emit_warning \
+                "fixable" \
+                "Historical workflow archive '${archive_dir}' remains" \
+                "Completed plans and resolved issues are retrieved from the implementation PR or Git history; active workflow discovery must not include done directories." \
+                "Delete '${archive_dir}' and retrieve completed records from the implementation PR or Git history."
+        fi
+    done
+}
+
+# =============================================================================
+# Check 8: Active plan / issue naming (pre-push + ci)
 # Active files under docs/exec-plan/todo/ and docs/issues/ must use
 # <sequence>-<name>.md, while README.md remains exempt.
 # =============================================================================
@@ -672,7 +691,7 @@ check_active_workflow_file_naming() {
 }
 
 # =============================================================================
-# Check 8: Workspace workflow context contract (pre-push + ci)
+# Check 9: Workspace workflow context contract (pre-push + ci)
 # The workspace owns this layered documentation contract. Child repositories may
 # consume workflow skills without carrying every workspace document, so scope
 # this check to the workspace repository itself.
@@ -820,6 +839,7 @@ check_exec_plan_existence
 check_workflow_doc_startup_commands
 check_linked_issue_resolution
 check_linked_github_issue_closure
+check_historical_workflow_archives
 check_active_workflow_file_naming
 check_workflow_context_contract
 

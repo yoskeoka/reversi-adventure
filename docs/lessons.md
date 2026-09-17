@@ -54,4 +54,4 @@ Review at session start for relevant learnings.
 - **Mistake**: Opened/closed/reopened GitHub Issues to manage task lifecycle instead of using `docs/issues/`
 - **Pattern**: Treated GitHub Issues as the primary tracking system despite `docs/issues/` being the canonical source
 - **Rule**: `docs/issues/` is the project's issue tracker. GitHub Issues are for external contributors only. Never use `gh issue` commands for internal task management.
-- **Applied**: All issue lifecycle operations — create, resolve, move to done
+- **Applied**: Create issues in `docs/issues/`; delete resolved issues from the task branch and retrieve them from the implementation PR or Git history
