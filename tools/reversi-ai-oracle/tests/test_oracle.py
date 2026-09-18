@@ -1,9 +1,11 @@
 import copy
 import importlib.util
 import math
+import os
 from tempfile import TemporaryDirectory, TemporaryFile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 TOOL_PATH = Path(__file__).resolve().parents[1] / "oracle.py"
@@ -38,6 +40,10 @@ class OracleHarnessTests(unittest.TestCase):
         malformed["position_id"] = "bad\tid"
         with self.assertRaises(oracle.OracleError):
             oracle.validate_corpus_record(malformed)
+
+    def test_configured_cache_root_is_absolute(self):
+        with patch.dict(os.environ, {"REVERSI_ADVENTURE_ORACLE_CACHE": "relative/cache"}):
+            self.assertTrue(oracle.cache_root().is_absolute())
 
     def test_parse_solve_output_is_strict_and_normalizes_metrics(self):
         output = "\n".join(

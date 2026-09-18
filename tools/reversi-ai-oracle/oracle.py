@@ -357,10 +357,10 @@ def validate_corpus(records: list[dict[str, object]]) -> None:
 def cache_root() -> Path:
     configured = os.environ.get("REVERSI_ADVENTURE_ORACLE_CACHE")
     if configured:
-        return Path(configured).expanduser()
+        return Path(configured).expanduser().resolve()
     xdg_cache = os.environ.get("XDG_CACHE_HOME")
     base = Path(xdg_cache).expanduser() if xdg_cache else Path.home() / ".cache"
-    return base / "reversi-adventure" / "egaroucid" / ORACLE_VERSION
+    return (base / "reversi-adventure" / "egaroucid" / ORACLE_VERSION).resolve()
 
 
 def sha256_file(path: Path) -> str:
