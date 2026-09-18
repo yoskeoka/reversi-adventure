@@ -312,16 +312,18 @@ def validate_corpus_record(record: dict[str, object]) -> None:
     board = record["board"]
     side = record["side_to_move"]
     position_id = record["position_id"]
-    if record["schema_version"] != 1:
+    if type(record["schema_version"]) is not int or record["schema_version"] != 1:
         die(f"unsupported schema_version in corpus record {position_id!r}")
     if not isinstance(position_id, str) or not position_id:
         die("corpus position_id must be a non-empty string")
+    if any(character in position_id for character in "\t\r\n"):
+        die(f"corpus position_id contains a protocol delimiter: {position_id!r}")
     if not isinstance(board, str) or not BOARD_RE.fullmatch(board):
         die(f"invalid board in corpus record {position_id!r}")
     if side not in ("B", "W"):
         die(f"invalid side_to_move in corpus record {position_id!r}")
     expected_count = sum(cell != "." for cell in board)
-    if record["stone_count"] != expected_count:
+    if type(record["stone_count"]) is not int or record["stone_count"] != expected_count:
         die(f"stone_count mismatch in corpus record {position_id!r}")
     if record["phase"] != phase_for(board):
         die(f"phase mismatch in corpus record {position_id!r}")
@@ -540,16 +542,13 @@ def ensure_oracle(timeout: float) -> tuple[Path, Path]:
     expected_source_sha256 = archive_source_tree_sha256(archive)
     validate_source_directory(source)
     if not source.is_dir():
-        extract_root = root / ".extract"
-        extract_root.mkdir()
-        try:
+        with tempfile.TemporaryDirectory(prefix=".extract-", dir=root) as temporary:
+            extract_root = Path(temporary)
             safe_extract(archive, extract_root)
             extracted = [path for path in extract_root.iterdir() if path.is_dir()]
             if len(extracted) != 1:
                 die("pinned Egaroucid source archive has an unexpected layout")
             os.replace(extracted[0], source)
-        finally:
-            shutil.rmtree(extract_root, ignore_errors=True)
     if sha256_tree(source) != expected_source_sha256:
         die(f"pinned Egaroucid source integrity mismatch: {source}")
 

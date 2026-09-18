@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import math
 from tempfile import TemporaryDirectory, TemporaryFile
@@ -22,6 +23,21 @@ class OracleHarnessTests(unittest.TestCase):
         self.assertIn("Pass", {record["outcome"]["kind"] for record in records})
         self.assertIn("GameOver", {record["outcome"]["kind"] for record in records})
         self.assertEqual(records[0]["legal_moves"], ["c4", "d3", "e6", "f5"])
+
+    def test_corpus_validator_rejects_non_integer_fields_and_protocol_ids(self):
+        record = oracle.generate_corpus()[0]
+
+        for field, value in (("schema_version", True), ("stone_count", 4.0)):
+            malformed = copy.deepcopy(record)
+            malformed[field] = value
+            with self.subTest(field=field):
+                with self.assertRaises(oracle.OracleError):
+                    oracle.validate_corpus_record(malformed)
+
+        malformed = copy.deepcopy(record)
+        malformed["position_id"] = "bad\tid"
+        with self.assertRaises(oracle.OracleError):
+            oracle.validate_corpus_record(malformed)
 
     def test_parse_solve_output_is_strict_and_normalizes_metrics(self):
         output = "\n".join(

@@ -288,7 +288,7 @@ The versioned corpus and normalized report use the following wire contract:
 - A board is a 64-character row-major string from `a1` through `h8` using `B`,
   `W`, and `.`. `side_to_move` is `B` or `W`.
 - `legal_moves` is the complete legal move set in canonical coordinate order
-  (ASCII ascending, e.g. `a1`, `b1`, ..., `h8`).
+  (ASCII ascending, e.g. `a1`, `a2`, ..., `a8`, `b1`, ..., `h8`).
 - `phase` is `opening` for 4–20 stones, `midgame` for 21–44 stones, and
   `endgame` for 45–64 stones.
 - `outcome` is `MoveSet` with the legal moves, `Pass` when the side to move
