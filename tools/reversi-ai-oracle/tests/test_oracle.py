@@ -76,6 +76,7 @@ class OracleHarnessTests(unittest.TestCase):
             [
                 "| Level | Depth | Move | Score | Time | Nodes | NPS |",
                 "| 8 | 8@50% | d3 | +4 | 000:00:01.234 | 42 | 34 |",
+                "total 42 nodes in 1.234s NPS 34",
             ]
         )
 
@@ -94,6 +95,24 @@ class OracleHarnessTests(unittest.TestCase):
 
         with self.assertRaises(oracle.OracleError):
             oracle.parse_solve_output(output, [8], expected_level=8)
+
+    def test_missing_or_duplicate_summary_fails_closed(self):
+        table = "\n".join(
+            [
+                "| Level | Depth | Move | Score | Time | Nodes | NPS |",
+                "| 8 | 8@100% | d3 | +4 | 000:00:01.234 | 42 | 34 |",
+            ]
+        )
+
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(table, [8], expected_level=8)
+
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(
+                table + "\ntotal 42 nodes in 1.234s NPS 34\ntotal 42 nodes in 1.234s NPS 34",
+                [8],
+                expected_level=8,
+            )
 
     def test_non_finite_timeout_fails_closed(self):
         for timeout in (math.nan, math.inf, -math.inf):

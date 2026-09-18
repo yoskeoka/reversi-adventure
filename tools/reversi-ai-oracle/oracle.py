@@ -613,6 +613,7 @@ def parse_solve_output(
     output: str, required_plies: list[int], expected_level: int
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    summary_seen = False
     for line in output.splitlines():
         stripped = line.strip()
         if not stripped:
@@ -620,6 +621,9 @@ def parse_solve_output(
         if stripped.startswith("total "):
             if not SUMMARY_RE.fullmatch(stripped):
                 die(f"unexpected Egaroucid summary: {line!r}")
+            if summary_seen:
+                die("duplicate Egaroucid summary")
+            summary_seen = True
             continue
         if not stripped.startswith("|"):
             die(f"unexpected Egaroucid output: {line!r}")
@@ -653,6 +657,8 @@ def parse_solve_output(
                 "exact": False,
             }
         )
+    if not summary_seen:
+        die("Egaroucid output did not contain a total summary")
     if len(rows) != len(required_plies):
         die(f"Egaroucid returned {len(rows)} rows for {len(required_plies)} queries")
     for row, plies in zip(rows, required_plies):
