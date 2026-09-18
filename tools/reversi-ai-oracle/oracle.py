@@ -7,6 +7,7 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import select
@@ -31,6 +32,7 @@ SOURCE_SHA256 = "173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238
 DEFAULT_LEVEL = 8
 DEFAULT_TIMEOUT_SECONDS = 300.0
 HEADER = ["Level", "Depth", "Move", "Score", "Time", "Nodes", "NPS"]
+SUMMARY_RE = re.compile(r"^total \d+ nodes in \d+(?:\.\d+)?s NPS \d+$")
 COORDINATE_RE = re.compile(r"^[a-h][1-8]$")
 BOARD_RE = re.compile(r"^[BW.]{64}$")
 
@@ -427,7 +429,7 @@ def run_external(
 def validate_budget(level: int, timeout: float) -> None:
     if not 1 <= level <= 60:
         die(f"oracle level must be between 1 and 60: {level}")
-    if timeout <= 0:
+    if not math.isfinite(timeout) or timeout <= 0:
         die(f"oracle timeout must be positive: {timeout}")
 
 
@@ -492,7 +494,7 @@ def validate_cache_integrity(
 
 
 def ensure_oracle(timeout: float) -> tuple[Path, Path]:
-    if timeout <= 0:
+    if not math.isfinite(timeout) or timeout <= 0:
         die(f"oracle timeout must be positive: {timeout}")
     if sys.platform != "linux":
         die("the oracle adapter supports Linux and WSL2 only")
@@ -602,7 +604,7 @@ def parse_depth(value: str) -> tuple[int, float]:
         die(f"unexpected Egaroucid depth: {value!r}")
     percentage = float(match.group(2))
     if percentage > 100:
-        die(f"unexpected Egaroucid completion percentage: {value!r}")
+        die(f"unexpected Egaroucid MPC probability: {value!r}")
     return int(match.group(1)), percentage
 
 
@@ -612,7 +614,11 @@ def parse_solve_output(
     rows: list[dict[str, object]] = []
     for line in output.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("total "):
+        if not stripped:
+            continue
+        if stripped.startswith("total "):
+            if not SUMMARY_RE.fullmatch(stripped):
+                die(f"unexpected Egaroucid summary: {line!r}")
             continue
         if not stripped.startswith("|"):
             die(f"unexpected Egaroucid output: {line!r}")
@@ -632,7 +638,7 @@ def parse_solve_output(
             die(f"unexpected Egaroucid level: {level!r}")
         if int(level) != expected_level:
             die(f"Egaroucid returned level {level}, expected {expected_level}")
-        completed_depth, completion_percent = parse_depth(depth)
+        completed_depth, _probability = parse_depth(depth)
         if not re.fullmatch(r"\d+", nodes) or not re.fullmatch(r"\d+", nps):
             die(f"unexpected Egaroucid node count: {nodes!r}, {nps!r}")
         rows.append(
@@ -643,13 +649,13 @@ def parse_solve_output(
                 "nodes": int(nodes),
                 "elapsed_ms": parse_elapsed(elapsed),
                 "nps": int(nps),
-                "exact": completion_percent == 100.0,
+                "exact": False,
             }
         )
     if len(rows) != len(required_plies):
         die(f"Egaroucid returned {len(rows)} rows for {len(required_plies)} queries")
     for row, plies in zip(rows, required_plies):
-        row["exact"] = bool(row["exact"] and row["completed_depth"] >= plies)
+        row["exact"] = row["completed_depth"] >= plies
     return rows
 
 

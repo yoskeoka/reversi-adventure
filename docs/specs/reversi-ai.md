@@ -300,16 +300,18 @@ The versioned corpus and normalized report use the following wire contract:
   move, while preserving the canonical `a1` through `h8` cell order.
 
 An oracle analysis reports one record for each legal root move and derives the
-full equal-value `optimal_moves` set. Scores are disc-difference values from
-the root side's perspective. A project AI's selected move may be included as
-`selected_move`; its `selected_value` is the corresponding oracle value and
-`regret` is `best_value - selected_value`. Each selected/root evaluation
-contains `completed_depth`, `nodes`, `elapsed_ms`, and `exact`. `exact` is true
-only when the oracle completed the game result rather than returning a
-heuristic or interrupted result. A move in `optimal_moves` has zero regret and
-is an agreement even if it is not the oracle's displayed first move. The
-versioned golden projection may omit `elapsed_ms` (and other runtime-only
-fields) but retains all score, move, depth, node-count, and exactness data.
+full equal-value `optimal_moves` set. Scores are signed Egaroucid search values
+from the root side's perspective; when `exact` is true, the value is the final
+disc difference, while an incomplete search value is heuristic. A project AI's
+selected move may be included as `selected_move`; its `selected_value` is the
+corresponding oracle value and `regret` is `best_value - selected_value`. Each
+selected/root evaluation contains `completed_depth`, `nodes`, `elapsed_ms`, and
+`exact`. `exact` is true only when the reported depth reaches all remaining
+plies, rather than when the MPC probability merely reaches a threshold. A move
+in `optimal_moves` has zero regret and is an agreement even if it is not the
+oracle's displayed first move. The versioned golden projection may omit
+`elapsed_ms` (and other runtime-only fields) but retains all score, move, depth,
+node-count, and exactness data.
 
 The adapter must fail closed on a missing or hash-mismatched oracle, a modified
 cached source or binary, a process timeout, unexpected output, malformed
