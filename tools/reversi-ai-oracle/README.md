@@ -12,8 +12,10 @@ set. Set `REVERSI_ADVENTURE_ORACLE_CACHE` to use another task-specific cache.
 The source archive URL and SHA-256 are constants in `oracle.py`; a mismatch is
 fatal. Each invocation derives the expected source-tree digest from that
 verified archive, verifies the cached source against it, and rebuilds the
-executable before use. The cache also records source-tree and executable
-digests, so cache tampering fails closed.
+executable in a fresh temporary CMake build directory before use. The cache
+also records source-tree and executable digests for post-build consistency
+checks; the executable is never accepted solely because of those mutable cache
+records.
 
 ## Commands
 

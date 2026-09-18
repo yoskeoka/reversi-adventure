@@ -32,9 +32,7 @@ impl ZobristKeys {
         let mut state: u64 = 0x12345678_9ABCDEF0;
         for color_keys in &mut keys {
             for square in color_keys.iter_mut() {
-                state = state
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 *square = state;
             }
         }

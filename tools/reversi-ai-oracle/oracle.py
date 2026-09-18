@@ -540,36 +540,37 @@ def ensure_oracle(timeout: float) -> tuple[Path, Path]:
     if sha256_tree(source) != expected_source_sha256:
         die(f"pinned Egaroucid source integrity mismatch: {source}")
 
-    build_dir = root / "build"
-    run_external(
-        [
-            "cmake",
-            "-S",
-            str(source),
-            "-B",
-            str(build_dir),
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DHAS_NO_AVX2=ON",
-        ],
-        timeout=timeout,
-    )
     built_binary = source / "bin" / "Egaroucid_for_Console.out"
     if not built_binary.is_file():
         built_binary = source / "bin" / "Egaroucid_for_console.out"
     try:
-        run_external(
-            ["cmake", "--build", str(build_dir), "--clean-first", "--parallel", "2"],
-            timeout=timeout,
-        )
-        built_binary = find_oracle_binary(source)
-        binary_dir = root / "bin"
-        binary_dir.mkdir(exist_ok=True)
-        binary = binary_dir / built_binary.name
-        shutil.copy2(built_binary, binary)
-        binary.chmod(binary.stat().st_mode | 0o111)
-        resources = binary_dir / "resources"
-        shutil.rmtree(resources, ignore_errors=True)
-        shutil.copytree(source / "bin" / "resources", resources)
+        with tempfile.TemporaryDirectory(prefix=".build-", dir=root) as temporary:
+            build_dir = Path(temporary)
+            run_external(
+                [
+                    "cmake",
+                    "-S",
+                    str(source),
+                    "-B",
+                    str(build_dir),
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DHAS_NO_AVX2=ON",
+                ],
+                timeout=timeout,
+            )
+            run_external(
+                ["cmake", "--build", str(build_dir), "--parallel", "2"],
+                timeout=timeout,
+            )
+            built_binary = find_oracle_binary(source)
+            binary_dir = root / "bin"
+            binary_dir.mkdir(exist_ok=True)
+            binary = binary_dir / built_binary.name
+            shutil.copy2(built_binary, binary)
+            binary.chmod(binary.stat().st_mode | 0o111)
+            resources = binary_dir / "resources"
+            shutil.rmtree(resources, ignore_errors=True)
+            shutil.copytree(source / "bin" / "resources", resources)
     finally:
         built_binary.unlink(missing_ok=True)
 
