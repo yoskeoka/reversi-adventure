@@ -33,6 +33,7 @@ DEFAULT_LEVEL = 8
 DEFAULT_TIMEOUT_SECONDS = 300.0
 HEADER = ["Level", "Depth", "Move", "Score", "Time", "Nodes", "NPS"]
 SUMMARY_RE = re.compile(r"^total \d+ nodes in \d+(?:\.\d+)?s NPS \d+$")
+MAX_GTP_RESPONSE_LINES = 1024
 COORDINATE_RE = re.compile(r"^[a-h][1-8]$")
 BOARD_RE = re.compile(r"^[BW.]{64}$")
 
@@ -1026,23 +1027,34 @@ class GtpSession:
         try:
             self.process.stdin.write((command + "\n").encode("ascii"))
             self.process.stdin.flush()
+            deadline = time.monotonic() + self.timeout
+            timeout_message = f"oracle GTP command timed out after {self.timeout:g}s"
+
+            def remaining_timeout() -> float:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    die(timeout_message)
+                return remaining
+
             response = [
                 self.reader.read_line(
-                    self.timeout,
-                    f"oracle GTP command timed out after {self.timeout:g}s",
+                    remaining_timeout(),
+                    timeout_message,
                     "oracle GTP process exited unexpectedly",
                 )
             ]
             while True:
                 # The GTP protocol terminates every response with a blank line.
                 line = self.reader.read_line(
-                    self.timeout,
-                    f"oracle GTP command timed out after {self.timeout:g}s",
+                    remaining_timeout(),
+                    timeout_message,
                     "oracle GTP process exited before completing its response",
                 )
                 if not line:
                     break
                 response.append(line)
+                if len(response) >= MAX_GTP_RESPONSE_LINES:
+                    die(f"oracle GTP response has too many lines for {command!r}")
             if not response or not response[0].startswith(("=", "?")):
                 die(f"invalid oracle GTP response to {command!r}: {response!r}")
             if response[0].startswith("?"):
