@@ -27,6 +27,7 @@ make oracle-verify
 make oracle-golden
 make oracle-match
 make oracle-evaluate
+make oracle-ci
 ```
 
 `oracle-verify` analyzes the versioned corpus and compares its stable
@@ -46,6 +47,10 @@ regret in a report under `/tmp` by default. Override `ORACLE_LEVEL`,
 `ORACLE_REPORT`, and the `AI_*` Make variables as needed. The Make match target
 uses a deliberately small default level/depth so CI is bounded; strength
 comparisons should set a declared higher budget explicitly.
+
+`oracle-ci` performs normalized corpus verification and the match in one oracle
+process, so CI builds the pinned external source once while retaining the same
+verification and match gates.
 
 The candidate protocol is line-oriented and intentionally independent of the
 oracle:

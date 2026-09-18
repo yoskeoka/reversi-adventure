@@ -12,6 +12,7 @@ import math
 import os
 import re
 import select
+import signal
 import shlex
 import shutil
 import subprocess
@@ -816,6 +817,22 @@ class TimedLineReader:
             die("protocol response is not ASCII")
 
 
+def terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
 def gtp_move_from_response(response: list[str], command: str) -> str:
     fields = response[0].split()
     if len(fields) != 2:
@@ -843,6 +860,7 @@ class CandidateSession:
                 stderr=None,
                 text=False,
                 bufsize=0,
+                start_new_session=True,
             )
         except OSError as exc:
             die(f"unable to start candidate command: {exc}")
@@ -865,12 +883,7 @@ class CandidateSession:
         return candidate_move_from_line(line, position_id)
 
     def close(self) -> None:
-        self.process.terminate()
-        try:
-            self.process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait()
+        terminate_process_group(self.process)
         if self.process.stdin:
             self.process.stdin.close()
         if self.process.stdout:
@@ -1304,6 +1317,17 @@ def command_main(argv: list[str]) -> int:
     match.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     match.add_argument("--output", type=Path)
 
+    ci = subparsers.add_parser("ci")
+    ci.add_argument("--corpus", type=Path, default=default_paths()[0])
+    ci.add_argument("--golden", type=Path, default=default_paths()[1])
+    ci.add_argument("--level", type=int, default=DEFAULT_LEVEL)
+    ci.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    ci.add_argument("--candidate-command", required=True)
+    ci.add_argument("--games", type=int, default=2)
+    ci.add_argument("--match-level", type=int, default=DEFAULT_LEVEL)
+    ci.add_argument("--match-timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    ci.add_argument("--match-output", type=Path)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "generate-corpus":
@@ -1358,6 +1382,33 @@ def command_main(argv: list[str]) -> int:
             if args.output:
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 args.output.write_text(output + "\n", encoding="utf-8")
+            print(output)
+            return 0
+
+        if args.command == "ci":
+            validate_budget(args.level, args.timeout)
+            validate_budget(args.match_level, args.match_timeout)
+            records = load_jsonl(args.corpus)
+            validate_corpus(records)
+            binary, cwd = ensure_oracle(max(args.timeout, args.match_timeout))
+            reports = analyze_records(records, binary, cwd, args.level, args.timeout, None)
+            actual = golden_projection(reports)
+            expected = load_jsonl(args.golden)
+            if [canonical_json(item) for item in actual] != [canonical_json(item) for item in expected]:
+                die(f"normalized oracle report differs from golden: {args.golden}")
+            print(f"verified {len(reports)} normalized oracle reports")
+            summary = run_match(
+                binary,
+                cwd,
+                args.candidate_command,
+                args.games,
+                args.match_level,
+                args.match_timeout,
+            )
+            output = canonical_json(summary)
+            if args.match_output:
+                args.match_output.parent.mkdir(parents=True, exist_ok=True)
+                args.match_output.write_text(output + "\n", encoding="utf-8")
             print(output)
             return 0
     except OracleError as exc:
