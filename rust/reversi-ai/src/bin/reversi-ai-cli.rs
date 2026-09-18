@@ -15,9 +15,13 @@ fn usage() -> &'static str {
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
-    value
+    let parsed = value
         .parse::<u8>()
-        .map_err(|_| format!("{option} expects an unsigned 8-bit integer"))
+        .map_err(|_| format!("{option} expects a positive unsigned 8-bit integer"))?;
+    if parsed == 0 {
+        return Err(format!("{option} expects a positive unsigned 8-bit integer"));
+    }
+    Ok(parsed)
 }
 
 fn parse_args() -> Result<(String, AiConfig), String> {

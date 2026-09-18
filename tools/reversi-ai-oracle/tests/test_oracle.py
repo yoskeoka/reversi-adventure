@@ -60,6 +60,21 @@ class OracleHarnessTests(unittest.TestCase):
         with self.assertRaises(oracle.OracleError):
             oracle.parse_solve_output(output, [1], expected_level=8)
 
+    def test_table_header_is_required_and_unique(self):
+        row = "| 8 | 8@100% | d3 | +4 | 000:00:01.234 | 42 | 34 |"
+        summary = "total 42 nodes in 1.234s NPS 34"
+
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(f"{row}\n{summary}", [8], expected_level=8)
+
+        duplicate_header = "| Level | Depth | Move | Score | Time | Nodes | NPS |"
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(
+                f"{duplicate_header}\n{duplicate_header}\n{row}\n{summary}",
+                [8],
+                expected_level=8,
+            )
+
     def test_solve_level_mismatch_fails_closed(self):
         output = "\n".join(
             [

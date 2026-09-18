@@ -307,7 +307,9 @@ selected move may be included as `selected_move`; its `selected_value` is the
 corresponding oracle value and `regret` is `best_value - selected_value`. Each
 selected/root evaluation contains `completed_depth`, `nodes`, `elapsed_ms`, and
 `exact`. `exact` is true only when the reported depth reaches all remaining
-plies, rather than when the MPC probability merely reaches a threshold. A move
+placements under Egaroucid's search-depth convention, rather than when the MPC
+probability merely reaches a threshold. The pinned Egaroucid search does not
+decrement this depth for a forced pass. A move
 in `optimal_moves` has zero regret and is an agreement even if it is not the
 oracle's displayed first move. The versioned golden projection may omit
 `elapsed_ms` (and other runtime-only fields) but retains all score, move, depth,

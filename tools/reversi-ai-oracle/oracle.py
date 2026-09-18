@@ -610,9 +610,10 @@ def parse_depth(value: str) -> tuple[int, float]:
 
 
 def parse_solve_output(
-    output: str, required_plies: list[int], expected_level: int
+    output: str, required_depths: list[int], expected_level: int
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    header_seen = False
     summary_seen = False
     for line in output.splitlines():
         stripped = line.strip()
@@ -629,7 +630,12 @@ def parse_solve_output(
             die(f"unexpected Egaroucid output: {line!r}")
         fields = [field.strip() for field in stripped.split("|")[1:-1]]
         if fields == HEADER:
+            if header_seen:
+                die("duplicate Egaroucid table header")
+            header_seen = True
             continue
+        if not header_seen:
+            die("Egaroucid table row appeared before its header")
         if len(fields) != len(HEADER):
             die(f"unexpected Egaroucid table row: {line!r}")
         level, depth, move, score, elapsed, nodes, nps = fields
@@ -659,10 +665,12 @@ def parse_solve_output(
         )
     if not summary_seen:
         die("Egaroucid output did not contain a total summary")
-    if len(rows) != len(required_plies):
-        die(f"Egaroucid returned {len(rows)} rows for {len(required_plies)} queries")
-    for row, plies in zip(rows, required_plies):
-        row["exact"] = row["completed_depth"] >= plies
+    if not header_seen:
+        die("Egaroucid output did not contain its table header")
+    if len(rows) != len(required_depths):
+        die(f"Egaroucid returned {len(rows)} rows for {len(required_depths)} queries")
+    for row, required_depth in zip(rows, required_depths):
+        row["exact"] = row["completed_depth"] >= required_depth
     return rows
 
 
@@ -715,8 +723,10 @@ def run_solve(
             cwd=cwd,
             timeout=timeout,
         )
-        required_plies = [64 - sum(cell != "." for cell in board) for board, _ in queries]
-        rows = parse_solve_output(result.stdout, required_plies, level)
+        # Egaroucid's pinned search decrements depth for placements but not
+        # for a forced pass, so empty squares are its remaining exact depth.
+        required_depths = [board.count(".") for board, _ in queries]
+        rows = parse_solve_output(result.stdout, required_depths, level)
         for (board, side), row in zip(queries, rows):
             if str(row["move"]) not in legal_moves(board, side):
                 die(f"Egaroucid returned an illegal continuation move for {side}: {row['move']!r}")

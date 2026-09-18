@@ -2,8 +2,9 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn run_cli(input: &str) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_reversi-ai-cli"))
-        .args([
+    run_cli_with_args(
+        input,
+        [
             "--evaluator",
             "novice",
             "--opening-depth",
@@ -12,7 +13,13 @@ fn run_cli(input: &str) -> std::process::Output {
             "1",
             "--endgame-depth",
             "1",
-        ])
+        ],
+    )
+}
+
+fn run_cli_with_args<const N: usize>(input: &str, args: [&str; N]) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_reversi-ai-cli"))
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -90,4 +97,24 @@ fn cli_rejects_malformed_board_input() {
         String::from_utf8_lossy(&output.stdout).contains("board")
             || String::from_utf8_lossy(&output.stderr).contains("board")
     );
+}
+
+#[test]
+fn cli_rejects_zero_search_depth() {
+    let output = run_cli_with_args(
+        "",
+        [
+            "--evaluator",
+            "novice",
+            "--opening-depth",
+            "0",
+            "--midgame-depth",
+            "1",
+            "--endgame-depth",
+            "1",
+        ],
+    );
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("positive"));
 }
