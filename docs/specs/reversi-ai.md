@@ -313,7 +313,10 @@ decrement this depth for a forced pass. A move
 in `optimal_moves` has zero regret and is an agreement even if it is not the
 oracle's displayed first move. The versioned golden projection may omit
 `elapsed_ms` (and other runtime-only fields) but retains all score, move, depth,
-node-count, and exactness data.
+node-count, and exactness data. The solve parser requires exactly one expected
+table header and one terminal `total` summary; its node count and NPS must
+match the row aggregates, and its elapsed time must match them within the
+oracle's six-significant-digit formatter rounding.
 
 The adapter must fail closed on a missing or hash-mismatched oracle, a modified
 cached source or binary, a process timeout, unexpected output, malformed

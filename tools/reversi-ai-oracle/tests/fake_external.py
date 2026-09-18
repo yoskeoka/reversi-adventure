@@ -26,7 +26,7 @@ def main() -> int:
                 f"| 8 | 8@100% | {solve_moves[index]} | +1 | "
                 "000:00:00.001 | 10 | 10000 |"
             )
-    print("total 10 nodes in 0.001s NPS 10000")
+    print("total 40 nodes in 0.004s NPS 10000")
     return 0
 
 

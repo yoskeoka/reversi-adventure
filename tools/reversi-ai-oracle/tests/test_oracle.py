@@ -1,6 +1,6 @@
 import importlib.util
 import math
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, TemporaryFile
 import unittest
 from pathlib import Path
 
@@ -129,11 +129,34 @@ class OracleHarnessTests(unittest.TestCase):
                 expected_level=8,
             )
 
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(
+                table + "\ntotal 0 nodes in 0s NPS 0",
+                [8],
+                expected_level=8,
+            )
+
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(
+                table + "\ntotal 42 nodes in 1.234s NPS 34\n" + table.splitlines()[1],
+                [8],
+                expected_level=8,
+            )
+
     def test_non_finite_timeout_fails_closed(self):
         for timeout in (math.nan, math.inf, -math.inf):
             with self.subTest(timeout=timeout):
                 with self.assertRaises(oracle.OracleError):
                     oracle.validate_budget(8, timeout)
+
+    def test_protocol_line_limit_fails_closed(self):
+        with TemporaryFile() as stream:
+            stream.write(b"x" * (oracle.MAX_PROTOCOL_LINE_BYTES + 1))
+            stream.seek(0)
+            reader = oracle.TimedLineReader(stream)
+
+            with self.assertRaises(oracle.OracleError):
+                reader.read_line(1, "timed out", "unexpected EOF")
 
     def test_invalid_elapsed_time_fails_closed(self):
         output = "\n".join(
@@ -239,6 +262,17 @@ class OracleHarnessTests(unittest.TestCase):
 
             with self.assertRaises(oracle.OracleError):
                 oracle.validate_cache_integrity(manifest, source, binary)
+
+    def test_cache_source_symlink_fails_closed(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            target.mkdir()
+            source = root / "source"
+            source.symlink_to(target, target_is_directory=True)
+
+            with self.assertRaises(oracle.OracleError):
+                oracle.validate_source_directory(source)
 
     def test_rust_sources_do_not_reference_the_external_oracle(self):
         repository_root = Path(__file__).resolve().parents[3]

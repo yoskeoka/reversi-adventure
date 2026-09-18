@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import math
@@ -32,7 +33,10 @@ SOURCE_SHA256 = "173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238
 DEFAULT_LEVEL = 8
 DEFAULT_TIMEOUT_SECONDS = 300.0
 HEADER = ["Level", "Depth", "Move", "Score", "Time", "Nodes", "NPS"]
-SUMMARY_RE = re.compile(r"^total \d+ nodes in \d+(?:\.\d+)?s NPS \d+$")
+SUMMARY_RE = re.compile(
+    r"^total (?P<nodes>\d+) nodes in (?P<seconds>\d+(?:\.\d+)?)s NPS (?P<nps>\d+)$"
+)
+MAX_PROTOCOL_LINE_BYTES = 64 * 1024
 MAX_GTP_RESPONSE_LINES = 1024
 COORDINATE_RE = re.compile(r"^[a-h][1-8]$")
 BOARD_RE = re.compile(r"^[BW.]{64}$")
@@ -447,6 +451,13 @@ def find_oracle_binary(root: Path) -> Path:
     die("built Egaroucid Console executable was not found in the pinned cache")
 
 
+def validate_source_directory(source: Path) -> None:
+    if source.is_symlink():
+        die(f"pinned oracle source path must not be a symlink: {source}")
+    if source.exists() and not source.is_dir():
+        die(f"pinned oracle source path is not a directory: {source}")
+
+
 def archive_source_tree_sha256(archive: Path) -> str:
     with tempfile.TemporaryDirectory(prefix=".source-check-", dir=archive.parent) as temporary:
         destination = Path(temporary)
@@ -527,8 +538,7 @@ def ensure_oracle(timeout: float) -> tuple[Path, Path]:
         die(f"cached Egaroucid source SHA-256 mismatch: {archive}")
 
     expected_source_sha256 = archive_source_tree_sha256(archive)
-    if source.exists() and not source.is_dir():
-        die(f"pinned oracle source path is not a directory: {source}")
+    validate_source_directory(source)
     if not source.is_dir():
         extract_root = root / ".extract"
         extract_root.mkdir()
@@ -615,15 +625,25 @@ def parse_solve_output(
     rows: list[dict[str, object]] = []
     header_seen = False
     summary_seen = False
+    summary_nodes = 0
+    summary_seconds = Decimal(0)
+    summary_nps = 0
     for line in output.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
+        if summary_seen:
+            die("Egaroucid output has content after its total summary")
         if stripped.startswith("total "):
-            if not SUMMARY_RE.fullmatch(stripped):
+            summary = SUMMARY_RE.fullmatch(stripped)
+            if summary is None:
                 die(f"unexpected Egaroucid summary: {line!r}")
-            if summary_seen:
-                die("duplicate Egaroucid summary")
+            try:
+                summary_nodes = int(summary.group("nodes"))
+                summary_seconds = Decimal(summary.group("seconds"))
+                summary_nps = int(summary.group("nps"))
+            except (InvalidOperation, ValueError) as exc:
+                die(f"unexpected Egaroucid summary: {line!r}: {exc}")
             summary_seen = True
             continue
         if not stripped.startswith("|"):
@@ -669,6 +689,24 @@ def parse_solve_output(
         die("Egaroucid output did not contain its table header")
     if len(rows) != len(required_depths):
         die(f"Egaroucid returned {len(rows)} rows for {len(required_depths)} queries")
+    row_nodes = sum(int(row["nodes"]) for row in rows)
+    row_elapsed_ms = sum(int(row["elapsed_ms"]) for row in rows)
+    if summary_nodes != row_nodes:
+        die(f"Egaroucid summary node count {summary_nodes} does not match rows {row_nodes}")
+    expected_seconds = Decimal(row_elapsed_ms) / Decimal(1000)
+    if expected_seconds:
+        # Egaroucid prints the total with C++'s default six significant digits.
+        rounding_quantum = Decimal(1).scaleb(expected_seconds.adjusted() - 5)
+        if abs(summary_seconds - expected_seconds) > rounding_quantum / 2:
+            die(
+                f"Egaroucid summary time {summary_seconds}s does not match rows "
+                f"{expected_seconds}s"
+            )
+    elif summary_seconds != 0:
+        die(f"Egaroucid summary time {summary_seconds}s does not match zero row time")
+    expected_nps = row_nodes * 1000 // max(row_elapsed_ms, 1)
+    if summary_nps != expected_nps:
+        die(f"Egaroucid summary NPS {summary_nps} does not match rows {expected_nps}")
     for row, required_depth in zip(rows, required_depths):
         row["exact"] = row["completed_depth"] >= required_depth
     return rows
@@ -766,6 +804,8 @@ class TimedLineReader:
                 die(f"protocol pipe read failed: {exc}")
             if not chunk:
                 die(eof_message)
+            if len(self.buffer) + len(chunk) > MAX_PROTOCOL_LINE_BYTES:
+                die(f"protocol response line exceeds {MAX_PROTOCOL_LINE_BYTES} bytes")
             self.buffer.extend(chunk)
 
         newline = self.buffer.index(b"\n")
