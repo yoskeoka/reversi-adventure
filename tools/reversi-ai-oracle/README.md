@@ -10,8 +10,10 @@ The supported host environments are Linux and WSL2. The default cache is
 `$HOME/.cache/reversi-adventure/egaroucid/7.8.1` when `XDG_CACHE_HOME` is not
 set. Set `REVERSI_ADVENTURE_ORACLE_CACHE` to use another task-specific cache.
 The source archive URL and SHA-256 are constants in `oracle.py`; a mismatch is
-fatal. The cache also records source-tree and executable digests, so cache
-tampering fails closed.
+fatal. Each invocation derives the expected source-tree digest from that
+verified archive, verifies the cached source against it, and rebuilds the
+executable before use. The cache also records source-tree and executable
+digests, so cache tampering fails closed.
 
 ## Commands
 

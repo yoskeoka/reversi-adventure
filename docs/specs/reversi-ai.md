@@ -313,9 +313,11 @@ fields) but retains all score, move, depth, node-count, and exactness data.
 
 The adapter must fail closed on a missing or hash-mismatched oracle, a modified
 cached source or binary, a process timeout, unexpected output, malformed
-board/corpus data, or an incomplete root-move set. The adapter must not pass the
-oracle's ignored time-limit option; the wrapper process timeout is the only
-wall-clock safety limit.
+board/corpus data, or an incomplete root-move set. The expected source digest is
+derived from the verified archive rather than from a mutable cache manifest;
+the executable is rebuilt from that verified source before use. The adapter
+must not pass the oracle's ignored time-limit option; the wrapper process
+timeout is the only wall-clock safety limit.
 
 ## GDScript Bridge Additions
 

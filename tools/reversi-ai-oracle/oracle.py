@@ -433,6 +433,8 @@ def validate_budget(level: int, timeout: float) -> None:
 
 def find_oracle_binary(root: Path) -> Path:
     candidates = [
+        root / "bin" / "Egaroucid_for_Console.out",
+        root / "bin" / "Egaroucid_for_console.out",
         root / "source" / "bin" / "Egaroucid_for_Console.out",
         root / "source" / "bin" / "Egaroucid_for_console.out",
     ]
@@ -440,6 +442,16 @@ def find_oracle_binary(root: Path) -> Path:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
     die("built Egaroucid Console executable was not found in the pinned cache")
+
+
+def archive_source_tree_sha256(archive: Path) -> str:
+    with tempfile.TemporaryDirectory(prefix=".source-check-", dir=archive.parent) as temporary:
+        destination = Path(temporary)
+        safe_extract(archive, destination)
+        extracted = [path for path in destination.iterdir() if path.is_dir()]
+        if len(extracted) != 1:
+            die("pinned Egaroucid source archive has an unexpected layout")
+        return sha256_tree(extracted[0])
 
 
 def write_cache_integrity(path: Path, source: Path, binary: Path) -> None:
@@ -491,7 +503,6 @@ def ensure_oracle(timeout: float) -> tuple[Path, Path]:
         die(f"oracle cache is not writable: {root}: {exc}")
     archive = root / f"egaroucid-v{ORACLE_VERSION}.tar.gz"
     source = root / "source"
-    binary_marker = root / ".built"
     integrity_manifest = root / ".integrity.json"
 
     if not archive.is_file():
@@ -512,39 +523,61 @@ def ensure_oracle(timeout: float) -> tuple[Path, Path]:
     elif sha256_file(archive) != SOURCE_SHA256:
         die(f"cached Egaroucid source SHA-256 mismatch: {archive}")
 
-    if not binary_marker.is_file():
-        if not source.exists():
-            extract_root = root / ".extract"
-            extract_root.mkdir()
-            try:
-                safe_extract(archive, extract_root)
-                extracted = [path for path in extract_root.iterdir() if path.is_dir()]
-                if len(extracted) != 1:
-                    die("pinned Egaroucid source archive has an unexpected layout")
-                os.replace(extracted[0], source)
-            finally:
-                shutil.rmtree(extract_root, ignore_errors=True)
-        build_dir = root / "build"
+    expected_source_sha256 = archive_source_tree_sha256(archive)
+    if source.exists() and not source.is_dir():
+        die(f"pinned oracle source path is not a directory: {source}")
+    if not source.is_dir():
+        extract_root = root / ".extract"
+        extract_root.mkdir()
+        try:
+            safe_extract(archive, extract_root)
+            extracted = [path for path in extract_root.iterdir() if path.is_dir()]
+            if len(extracted) != 1:
+                die("pinned Egaroucid source archive has an unexpected layout")
+            os.replace(extracted[0], source)
+        finally:
+            shutil.rmtree(extract_root, ignore_errors=True)
+    if sha256_tree(source) != expected_source_sha256:
+        die(f"pinned Egaroucid source integrity mismatch: {source}")
+
+    build_dir = root / "build"
+    run_external(
+        [
+            "cmake",
+            "-S",
+            str(source),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DHAS_NO_AVX2=ON",
+        ],
+        timeout=timeout,
+    )
+    built_binary = source / "bin" / "Egaroucid_for_Console.out"
+    if not built_binary.is_file():
+        built_binary = source / "bin" / "Egaroucid_for_console.out"
+    try:
         run_external(
-            [
-                "cmake",
-                "-S",
-                str(source),
-                "-B",
-                str(build_dir),
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DHAS_NO_AVX2=ON",
-            ],
+            ["cmake", "--build", str(build_dir), "--clean-first", "--parallel", "2"],
             timeout=timeout,
         )
-        run_external(["cmake", "--build", str(build_dir), "--parallel", "2"], timeout=timeout)
-        binary = find_oracle_binary(root)
-        write_cache_integrity(integrity_manifest, source, binary)
-        binary_marker.write_text("built\n", encoding="utf-8")
+        built_binary = find_oracle_binary(source)
+        binary_dir = root / "bin"
+        binary_dir.mkdir(exist_ok=True)
+        binary = binary_dir / built_binary.name
+        shutil.copy2(built_binary, binary)
+        binary.chmod(binary.stat().st_mode | 0o111)
+        resources = binary_dir / "resources"
+        shutil.rmtree(resources, ignore_errors=True)
+        shutil.copytree(source / "bin" / "resources", resources)
+    finally:
+        built_binary.unlink(missing_ok=True)
 
     if not source.is_dir():
         die(f"pinned oracle source directory is missing: {source}")
-    binary = find_oracle_binary(root)
+    if sha256_tree(source) != expected_source_sha256:
+        die(f"pinned Egaroucid source changed during build: {source}")
+    write_cache_integrity(integrity_manifest, source, binary)
     validate_cache_integrity(integrity_manifest, source, binary)
     version = run_external([str(binary), "-version"], cwd=source, timeout=min(timeout, 30))
     if ORACLE_VERSION not in version.stdout and ORACLE_VERSION not in version.stderr:

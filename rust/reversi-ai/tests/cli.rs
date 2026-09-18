@@ -55,6 +55,32 @@ fn cli_returns_legal_moves_and_forced_passes() {
 }
 
 #[test]
+fn cli_reuses_player_without_crossing_side_to_move_cache_entries() {
+    let initial = "...........................WB......BW...........................";
+    let output = run_cli(&format!("black\t{initial}\tB\nwhite\t{initial}\tW\n"));
+
+    assert!(
+        output.status.success(),
+        "CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines = String::from_utf8(output.stdout)
+        .expect("CLI output was not UTF-8")
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+    assert!(matches!(
+        lines[0].as_str(),
+        "black\tc4" | "black\td3" | "black\te6" | "black\tf5"
+    ));
+    assert!(matches!(
+        lines[1].as_str(),
+        "white\tc5" | "white\td6" | "white\te3" | "white\tf4"
+    ));
+}
+
+#[test]
 fn cli_rejects_malformed_board_input() {
     let output =
         run_cli("bad\t...............................................................\tB\n");
