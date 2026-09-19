@@ -2,10 +2,10 @@ use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
 
-use crate::eval::{BoardEvaluator, EvalResult};
-use super::{SearchBudget, SearchOutcome};
 use super::ordering::order_moves;
 use super::tt::{Bound, TranspositionTable, TtEntry, ZobristKeys};
+use super::{SearchBudget, SearchOutcome};
+use crate::eval::{BoardEvaluator, EvalResult};
 
 /// Negascout search with iterative deepening.
 pub struct Negascout<'a, E: BoardEvaluator + ?Sized> {
@@ -32,11 +32,7 @@ pub(crate) struct CompletedSearch {
 }
 
 impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
-    pub fn new(
-        evaluator: &'a E,
-        tt: &'a mut TranspositionTable,
-        zobrist: &'a ZobristKeys,
-    ) -> Self {
+    pub fn new(evaluator: &'a E, tt: &'a mut TranspositionTable, zobrist: &'a ZobristKeys) -> Self {
         Self {
             evaluator,
             tt,
@@ -84,17 +80,11 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         let mut completed_depth = 0;
 
         for depth in 1..=max_depth {
-            let result = match self.negascout(
-                board,
-                color,
-                depth,
-                i32::MIN + 1,
-                i32::MAX - 1,
-                budget,
-            ) {
-                Ok(result) => result,
-                Err(()) => break,
-            };
+            let result =
+                match self.negascout(board, color, depth, i32::MIN + 1, i32::MAX - 1, budget) {
+                    Ok(result) => result,
+                    Err(()) => break,
+                };
 
             if !result.pv.is_empty() {
                 best_move = result.pv[0];
@@ -221,13 +211,34 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             let child = if first {
                 // PV node: full window search
                 first = false;
-                self.negascout(&new_board, color.opponent(), depth - 1, -beta, -alpha, budget)?
+                self.negascout(
+                    &new_board,
+                    color.opponent(),
+                    depth - 1,
+                    -beta,
+                    -alpha,
+                    budget,
+                )?
             } else {
                 // Null-window search
-                let nw = self.negascout(&new_board, color.opponent(), depth - 1, -alpha - 1, -alpha, budget)?;
+                let nw = self.negascout(
+                    &new_board,
+                    color.opponent(),
+                    depth - 1,
+                    -alpha - 1,
+                    -alpha,
+                    budget,
+                )?;
                 if -nw.score > alpha && -nw.score < beta {
                     // Fail high: re-search with full window
-                    self.negascout(&new_board, color.opponent(), depth - 1, -beta, -alpha, budget)?
+                    self.negascout(
+                        &new_board,
+                        color.opponent(),
+                        depth - 1,
+                        -beta,
+                        -alpha,
+                        budget,
+                    )?
                 } else {
                     nw
                 }
@@ -264,13 +275,16 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             Bound::Exact
         };
 
-        self.tt.store(hash, TtEntry {
+        self.tt.store(
             hash,
-            depth,
-            score: best_score,
-            bound,
-            best_move: Some(best_move),
-        });
+            TtEntry {
+                hash,
+                depth,
+                score: best_score,
+                bound,
+                best_move: Some(best_move),
+            },
+        );
 
         Ok(NodeResult {
             score: best_score,

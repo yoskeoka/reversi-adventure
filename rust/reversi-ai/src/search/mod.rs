@@ -4,13 +4,16 @@ pub mod tt;
 
 use reversi_engine::board::Board;
 use reversi_engine::types::{Color, Position};
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
-use crate::config::AiConfig;
-use crate::eval::{stable_context_fingerprint, BoardEvaluator, EvalResult};
 use self::negascout::Negascout;
 use self::tt::{TranspositionTable, ZobristKeys};
+use crate::config::AiConfig;
+use crate::eval::{stable_context_fingerprint, BoardEvaluator, EvalResult};
 
 /// Search result with PV and explanation data.
 #[derive(Debug, Clone)]
@@ -43,7 +46,11 @@ pub struct SearchBudget {
 
 impl SearchBudget {
     pub fn new(deadline: Instant) -> Self {
-        Self { deadline, node_limit: None, cancellation: None }
+        Self {
+            deadline,
+            node_limit: None,
+            cancellation: None,
+        }
     }
 
     pub fn with_time_limit(time_limit: Duration) -> Self {
@@ -61,7 +68,9 @@ impl SearchBudget {
     }
 
     pub(crate) fn interrupted(&self, nodes_searched: u64) -> bool {
-        self.cancellation.as_ref().is_some_and(|token| token.load(Ordering::Acquire))
+        self.cancellation
+            .as_ref()
+            .is_some_and(|token| token.load(Ordering::Acquire))
             || Instant::now() >= self.deadline
             || self.node_limit.is_some_and(|limit| nodes_searched >= limit)
     }
@@ -76,10 +85,7 @@ pub struct SearchEngine {
 
 const SEARCH_SEMANTICS_VERSION: u64 = 1;
 
-fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(
-    evaluator: &E,
-    config: &AiConfig,
-) -> u64 {
+fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(evaluator: &E, config: &AiConfig) -> u64 {
     stable_context_fingerprint(&[
         SEARCH_SEMANTICS_VERSION,
         evaluator.context_fingerprint(),
@@ -224,7 +230,9 @@ mod tests {
 
         // Verify the returned move is legal
         let legal = reversi_engine::moves::legal_moves(&board, Color::Black);
-        assert!(matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0));
+        assert!(
+            matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0)
+        );
     }
 
     #[test]
@@ -247,7 +255,9 @@ mod tests {
 
         let result = engine.search(&board, Color::Black, &evaluator, &config);
         let legal = reversi_engine::moves::legal_moves(&board, Color::Black);
-        assert!(matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0));
+        assert!(
+            matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0)
+        );
     }
 
     #[test]
@@ -328,7 +338,10 @@ mod tests {
         );
 
         assert_eq!(second.score, fresh.score);
-        assert_eq!(second_evaluations, fresh_evaluations.load(Ordering::Relaxed));
+        assert_eq!(
+            second_evaluations,
+            fresh_evaluations.load(Ordering::Relaxed)
+        );
         assert!(second_evaluations > 1);
     }
 
@@ -381,7 +394,9 @@ mod tests {
         );
 
         let legal = reversi_engine::moves::legal_moves(&board, Color::Black);
-        assert!(matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0));
+        assert!(
+            matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0)
+        );
         assert!(result.pv.is_empty());
         assert_eq!(result.score, None);
         assert_eq!(result.completed_depth, 0);
@@ -434,10 +449,18 @@ mod tests {
         pass_board.set(Position::new(0, 1), Color::White);
 
         let pass = SearchEngine::new().search_with_budget(
-            &pass_board, Color::White, &evaluator, &config, &budget,
+            &pass_board,
+            Color::White,
+            &evaluator,
+            &config,
+            &budget,
         );
         let game_over = SearchEngine::new().search_with_budget(
-            &Board::empty(), Color::Black, &evaluator, &config, &budget,
+            &Board::empty(),
+            Color::Black,
+            &evaluator,
+            &config,
+            &budget,
         );
 
         assert_eq!(pass.outcome, SearchOutcome::Pass);
@@ -450,13 +473,15 @@ mod tests {
         let board = Board::new();
         let evaluator = StrategicEvaluator::new();
         let config = AiConfig::new(4, 4, 4);
-        let run = || SearchEngine::new().search_with_budget(
-            &board,
-            Color::Black,
-            &evaluator,
-            &config,
-            &SearchBudget::with_time_limit(Duration::from_secs(1)).with_node_limit(20),
-        );
+        let run = || {
+            SearchEngine::new().search_with_budget(
+                &board,
+                Color::Black,
+                &evaluator,
+                &config,
+                &SearchBudget::with_time_limit(Duration::from_secs(1)).with_node_limit(20),
+            )
+        };
 
         let first = run();
         let second = run();

@@ -24,7 +24,8 @@ impl AiPlayer {
 
     /// Run search and return the best move with PV and evaluation.
     pub fn think(&mut self, board: &Board, color: Color, budget: &SearchBudget) -> SearchResult {
-        self.engine.search_with_budget(board, color, self.evaluator.as_ref(), &self.config, budget)
+        self.engine
+            .search_with_budget(board, color, self.evaluator.as_ref(), &self.config, budget)
     }
 
     /// Run search and generate a human-readable explanation.
@@ -47,10 +48,10 @@ impl AiPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::strategic::StrategicEvaluator;
     use crate::eval::novice::NoviceEvaluator;
-    use reversi_engine::moves;
+    use crate::eval::strategic::StrategicEvaluator;
     use crate::search::{SearchBudget, SearchOutcome};
+    use reversi_engine::moves;
     use std::time::Duration;
 
     fn budget() -> SearchBudget {
@@ -67,7 +68,9 @@ mod tests {
         let result = player.think(&board, Color::Black, &budget());
 
         let legal = moves::legal_moves(&board, Color::Black);
-        assert!(matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0));
+        assert!(
+            matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0)
+        );
     }
 
     #[test]
@@ -87,14 +90,10 @@ mod tests {
     #[test]
     fn test_strategic_beats_novice() {
         // Play a full game: strategic (black) vs novice (white)
-        let mut strategic_player = AiPlayer::new(
-            Box::new(StrategicEvaluator::new()),
-            AiConfig::new(3, 4, 5),
-        );
-        let mut novice_player = AiPlayer::new(
-            Box::new(NoviceEvaluator::new()),
-            AiConfig::new(2, 3, 3),
-        );
+        let mut strategic_player =
+            AiPlayer::new(Box::new(StrategicEvaluator::new()), AiConfig::new(3, 4, 5));
+        let mut novice_player =
+            AiPlayer::new(Box::new(NoviceEvaluator::new()), AiConfig::new(2, 3, 3));
 
         let mut game = reversi_engine::game::Game::new();
         let mut pass_count = 0;
@@ -118,7 +117,9 @@ mod tests {
                 Color::White => novice_player.think(&board, color, &budget()),
             };
 
-            let SearchOutcome::Move(position) = result.outcome else { panic!("legal state must return a move") };
+            let SearchOutcome::Move(position) = result.outcome else {
+                panic!("legal state must return a move")
+            };
             game.play(position).unwrap();
         }
 
@@ -134,16 +135,10 @@ mod tests {
 
     #[test]
     fn test_evaluator_name() {
-        let player = AiPlayer::new(
-            Box::new(StrategicEvaluator::new()),
-            AiConfig::new(1, 1, 1),
-        );
+        let player = AiPlayer::new(Box::new(StrategicEvaluator::new()), AiConfig::new(1, 1, 1));
         assert_eq!(player.evaluator_name(), "strategic");
 
-        let player = AiPlayer::new(
-            Box::new(NoviceEvaluator::new()),
-            AiConfig::new(1, 1, 1),
-        );
+        let player = AiPlayer::new(Box::new(NoviceEvaluator::new()), AiConfig::new(1, 1, 1));
         assert_eq!(player.evaluator_name(), "novice");
     }
 }

@@ -1,12 +1,12 @@
 use godot::prelude::*;
-use reversi_engine::board::Board;
-use reversi_engine::game::Game;
-use reversi_engine::types::{Color, GameStatus, Position};
 use reversi_ai::config::AiConfig;
 use reversi_ai::eval::novice::NoviceEvaluator;
 use reversi_ai::eval::strategic::StrategicEvaluator;
 use reversi_ai::player::AiPlayer;
 use reversi_ai::search::{SearchBudget, SearchOutcome};
+use reversi_engine::board::Board;
+use reversi_engine::game::Game;
+use reversi_engine::types::{Color, GameStatus, Position};
 use std::time::Duration;
 
 /// GDScript-callable wrapper for the Reversi game engine.
@@ -206,14 +206,17 @@ impl ReversiGame {
         }
         let board = *self.game.board();
         let color = self.game.current_turn();
-        let budget = SearchBudget::with_time_limit(Duration::from_millis(time_limit_millis.max(0) as u64));
+        let budget =
+            SearchBudget::with_time_limit(Duration::from_millis(time_limit_millis.max(0) as u64));
         let budget = if node_limit > 0 {
             budget.with_node_limit(node_limit as u64)
         } else {
             budget
         };
         match ai.think(&board, color, &budget).outcome {
-            SearchOutcome::Move(position) => Vector2i::new(position.row as i32, position.col as i32),
+            SearchOutcome::Move(position) => {
+                Vector2i::new(position.row as i32, position.col as i32)
+            }
             SearchOutcome::Pass | SearchOutcome::GameOver => Vector2i::new(-1, -1),
         }
     }
