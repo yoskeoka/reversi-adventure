@@ -107,7 +107,9 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             pv: best_pv,
             leaf_eval: best_leaf,
             completed_depth,
-            exact: max_depth > 0 && completed_depth == max_depth,
+            // A completed heuristic depth is useful, but it is not a proof of
+            // final disc difference. Only the endgame solver reports exact.
+            exact: false,
         }
     }
 

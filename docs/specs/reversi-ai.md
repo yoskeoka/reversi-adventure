@@ -89,6 +89,10 @@ struct AiConfig {
 }
 ```
 
+`ENDGAME_SOLVER_EMPTY_SQUARES` is the common exact-solver threshold. It is
+initially `12`: when the board has at most that many empty squares, every
+evaluator is bypassed and the engine attempts a complete endgame solve.
+
 - `AiConfig::depth_for_phase(stone_count: u32)` — Returns the appropriate depth based on stone count.
 
 ### Game Phase Detection
@@ -237,10 +241,34 @@ enum SearchOutcome {
 }
 ```
 
-- A state without a legal move returns `Pass` when the opponent can move and `GameOver` otherwise. It never exposes a sentinel `Position` or score.
+- A heuristic state without a legal move returns `Pass` when the opponent can
+  move and `GameOver` otherwise. It never exposes a sentinel `Position` or
+  score. Completed exact endgame states are the documented exception: they
+  retain the final root-side score.
 - For a legal-move state, search selects a legal root fallback before deeper work. If interrupted before depth 1 completes, it returns that fallback, an empty PV, no score or leaf evaluation, `completed_depth = 0`, and `exact = false`.
 - After each wholly completed depth, the result atomically advances to that iteration's move, PV, score, and leaf evaluation. A partial iteration is never returned or stored as the completed PV.
-- `exact` is true when a positive configured maximum depth completes without interruption. It describes completion of this bounded heuristic search, not an endgame proof.
+- Heuristic iterative deepening always reports `exact = false`, including when
+  its configured maximum depth completes. `exact = true` is reserved for a
+  completed final-disc proof from the endgame solver.
+
+### Exact endgame solving
+
+- At or below `ENDGAME_SOLVER_EMPTY_SQUARES`, `SearchEngine` uses the shared,
+  evaluator-independent endgame solver instead of heuristic iterative
+  deepening. The initial supported threshold is 12 empty squares.
+- A completed endgame result has `exact = true`, its `score` is the final disc
+  differential from the root side's perspective, and its PV contains only
+  played positions (a pass is represented by `SearchOutcome::Pass`, never by a
+  sentinel position).
+- The solver handles forced passes without consuming an empty square and
+  returns `GameOver` only when neither side can move. A terminal endgame score
+  is exact.
+- Exact endgame cache entries are private to the solver and are never read as
+  heuristic transposition-table entries. Heuristic TT entries must likewise
+  never cause `exact = true`.
+- If the supplied `SearchBudget` interrupts an endgame solve, the result keeps
+  the legal root fallback or the last wholly completed result, has `exact =
+  false`, and exposes no partial PV or partial exact score.
 
 ## Explanation
 
@@ -256,6 +284,7 @@ enum ExplainTag {
     ParityAdvantage,
     PieceAdvantage,
     ForcedMove,
+    ExactEndgame,
 }
 ```
 
@@ -281,6 +310,8 @@ struct MoveExplanation {
    - If only one legal move exists: `ForcedMove`.
    - If best move is a corner: `CornerGrab`.
    - If best move is adjacent to a corner and PV leads to corner take: `CornerSetup`.
+   - For an exact endgame result, show its final disc differential and PV with
+     `ExactEndgame`; do not derive a heuristic-factor delta.
 
 - `generate_explanation(board: &Board, color: Color, search_result: &SearchResult, evaluator: &dyn BoardEvaluator)` — Returns `MoveExplanation`.
 
