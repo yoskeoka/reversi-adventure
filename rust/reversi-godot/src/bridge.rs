@@ -6,6 +6,8 @@ use reversi_ai::config::AiConfig;
 use reversi_ai::eval::novice::NoviceEvaluator;
 use reversi_ai::eval::strategic::StrategicEvaluator;
 use reversi_ai::player::AiPlayer;
+use reversi_ai::search::{SearchBudget, SearchOutcome};
+use std::time::Duration;
 
 /// GDScript-callable wrapper for the Reversi game engine.
 #[derive(GodotClass)]
@@ -189,6 +191,13 @@ impl ReversiGame {
     /// Returns (-1, -1) if no AI is set or game is over.
     #[func]
     fn ai_think(&mut self) -> Vector2i {
+        self.ai_think_with_budget(500, 0)
+    }
+
+    /// Returns the AI's best move within a caller-provided turn budget.
+    /// `node_limit <= 0` leaves the deterministic node ceiling disabled.
+    #[func]
+    fn ai_think_with_budget(&mut self, time_limit_millis: i64, node_limit: i64) -> Vector2i {
         let Some(ai) = &mut self.ai else {
             return Vector2i::new(-1, -1);
         };
@@ -197,8 +206,16 @@ impl ReversiGame {
         }
         let board = *self.game.board();
         let color = self.game.current_turn();
-        let result = ai.think(&board, color);
-        Vector2i::new(result.best_move.row as i32, result.best_move.col as i32)
+        let budget = SearchBudget::with_time_limit(Duration::from_millis(time_limit_millis.max(0) as u64));
+        let budget = if node_limit > 0 {
+            budget.with_node_limit(node_limit as u64)
+        } else {
+            budget
+        };
+        match ai.think(&board, color, &budget).outcome {
+            SearchOutcome::Move(position) => Vector2i::new(position.row as i32, position.col as i32),
+            SearchOutcome::Pass | SearchOutcome::GameOver => Vector2i::new(-1, -1),
+        }
     }
 
     /// Returns the AI's move explanation as a VarDictionary.
@@ -213,7 +230,10 @@ impl ReversiGame {
         }
         let board = *self.game.board();
         let color = self.game.current_turn();
-        let explanation = ai.explain(&board, color);
+        let budget = SearchBudget::with_time_limit(Duration::from_millis(500));
+        let Some(explanation) = ai.explain(&board, color, &budget) else {
+            return VarDictionary::new();
+        };
 
         let mut pv_arr = Array::<Vector2i>::new();
         for pos in &explanation.pv {

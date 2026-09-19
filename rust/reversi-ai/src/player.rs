@@ -4,7 +4,7 @@ use reversi_engine::types::Color;
 use crate::config::AiConfig;
 use crate::eval::BoardEvaluator;
 use crate::explain::{self, MoveExplanation};
-use crate::search::{SearchEngine, SearchResult};
+use crate::search::{SearchBudget, SearchEngine, SearchResult};
 
 /// AI player combining an evaluator with search configuration.
 pub struct AiPlayer {
@@ -23,13 +23,18 @@ impl AiPlayer {
     }
 
     /// Run search and return the best move with PV and evaluation.
-    pub fn think(&mut self, board: &Board, color: Color) -> SearchResult {
-        self.engine.search(board, color, self.evaluator.as_ref(), &self.config)
+    pub fn think(&mut self, board: &Board, color: Color, budget: &SearchBudget) -> SearchResult {
+        self.engine.search_with_budget(board, color, self.evaluator.as_ref(), &self.config, budget)
     }
 
     /// Run search and generate a human-readable explanation.
-    pub fn explain(&mut self, board: &Board, color: Color) -> MoveExplanation {
-        let result = self.think(board, color);
+    pub fn explain(
+        &mut self,
+        board: &Board,
+        color: Color,
+        budget: &SearchBudget,
+    ) -> Option<MoveExplanation> {
+        let result = self.think(board, color, budget);
         explain::generate_explanation(board, color, &result, self.evaluator.as_ref())
     }
 
@@ -45,6 +50,12 @@ mod tests {
     use crate::eval::strategic::StrategicEvaluator;
     use crate::eval::novice::NoviceEvaluator;
     use reversi_engine::moves;
+    use crate::search::{SearchBudget, SearchOutcome};
+    use std::time::Duration;
+
+    fn budget() -> SearchBudget {
+        SearchBudget::with_time_limit(Duration::from_secs(30))
+    }
 
     #[test]
     fn test_ai_player_think() {
@@ -53,10 +64,10 @@ mod tests {
         let mut player = AiPlayer::new(evaluator, config);
 
         let board = Board::new();
-        let result = player.think(&board, Color::Black);
+        let result = player.think(&board, Color::Black, &budget());
 
         let legal = moves::legal_moves(&board, Color::Black);
-        assert!(legal & result.best_move.bit_mask() != 0);
+        assert!(matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0));
     }
 
     #[test]
@@ -66,7 +77,7 @@ mod tests {
         let mut player = AiPlayer::new(evaluator, config);
 
         let board = Board::new();
-        let explanation = player.explain(&board, Color::Black);
+        let explanation = player.explain(&board, Color::Black, &budget()).unwrap();
 
         let legal = moves::legal_moves(&board, Color::Black);
         assert!(legal & explanation.best_move.bit_mask() != 0);
@@ -103,11 +114,12 @@ mod tests {
             pass_count = 0;
 
             let result = match color {
-                Color::Black => strategic_player.think(&board, color),
-                Color::White => novice_player.think(&board, color),
+                Color::Black => strategic_player.think(&board, color, &budget()),
+                Color::White => novice_player.think(&board, color, &budget()),
             };
 
-            game.play(result.best_move).unwrap();
+            let SearchOutcome::Move(position) = result.outcome else { panic!("legal state must return a move") };
+            game.play(position).unwrap();
         }
 
         let (black, white) = game.score();

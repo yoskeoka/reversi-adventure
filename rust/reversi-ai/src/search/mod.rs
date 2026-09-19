@@ -4,6 +4,8 @@ pub mod tt;
 
 use reversi_engine::board::Board;
 use reversi_engine::types::{Color, Position};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::time::{Duration, Instant};
 
 use crate::config::AiConfig;
 use crate::eval::{stable_context_fingerprint, BoardEvaluator, EvalResult};
@@ -13,10 +15,56 @@ use self::tt::{TranspositionTable, ZobristKeys};
 /// Search result with PV and explanation data.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    pub best_move: Position,
-    pub score: i32,
+    pub outcome: SearchOutcome,
+    pub score: Option<i32>,
     pub pv: Vec<Position>,
-    pub leaf_eval: EvalResult,
+    pub leaf_eval: Option<EvalResult>,
+    pub completed_depth: u8,
+    pub nodes_searched: u64,
+    pub elapsed: Duration,
+    pub exact: bool,
+}
+
+/// Root outcome selected by a bounded search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchOutcome {
+    Move(Position),
+    Pass,
+    GameOver,
+}
+
+/// Caller-provided limits for a single search.
+#[derive(Debug, Clone)]
+pub struct SearchBudget {
+    deadline: Instant,
+    node_limit: Option<u64>,
+    cancellation: Option<Arc<AtomicBool>>,
+}
+
+impl SearchBudget {
+    pub fn new(deadline: Instant) -> Self {
+        Self { deadline, node_limit: None, cancellation: None }
+    }
+
+    pub fn with_time_limit(time_limit: Duration) -> Self {
+        Self::new(Instant::now() + time_limit)
+    }
+
+    pub fn with_node_limit(mut self, node_limit: u64) -> Self {
+        self.node_limit = Some(node_limit);
+        self
+    }
+
+    pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub(crate) fn interrupted(&self, nodes_searched: u64) -> bool {
+        self.cancellation.as_ref().is_some_and(|token| token.load(Ordering::Acquire))
+            || Instant::now() >= self.deadline
+            || self.node_limit.is_some_and(|limit| nodes_searched >= limit)
+    }
 }
 
 /// Search engine wrapping Negascout with transposition table.
@@ -49,12 +97,13 @@ impl SearchEngine {
     }
 
     /// Run search and return the best move with PV and evaluation.
-    pub fn search<E: BoardEvaluator + ?Sized>(
+    pub fn search_with_budget<E: BoardEvaluator + ?Sized>(
         &mut self,
         board: &Board,
         color: Color,
         evaluator: &E,
         config: &AiConfig,
+        budget: &SearchBudget,
     ) -> SearchResult {
         let context_fingerprint = search_context_fingerprint(evaluator, config);
         if self.context_fingerprint != Some(context_fingerprint) {
@@ -66,14 +115,36 @@ impl SearchEngine {
         let max_depth = config.depth_for_phase(stone_count);
 
         let mut search = Negascout::new(evaluator, &mut self.tt, &self.zobrist);
-        let (best_move, score, pv, leaf_eval) = search.search(board, color, max_depth);
+        let started = Instant::now();
+        let completed = search.search(board, color, max_depth, budget);
 
         SearchResult {
-            best_move,
-            score,
-            pv,
-            leaf_eval,
+            outcome: completed.outcome,
+            score: completed.score,
+            pv: completed.pv,
+            leaf_eval: completed.leaf_eval,
+            completed_depth: completed.completed_depth,
+            nodes_searched: search.nodes_searched(),
+            elapsed: started.elapsed(),
+            exact: completed.exact,
         }
+    }
+
+    /// Run search with a compatibility budget for callers that do not control a turn clock.
+    pub fn search<E: BoardEvaluator + ?Sized>(
+        &mut self,
+        board: &Board,
+        color: Color,
+        evaluator: &E,
+        config: &AiConfig,
+    ) -> SearchResult {
+        self.search_with_budget(
+            board,
+            color,
+            evaluator,
+            config,
+            &SearchBudget::with_time_limit(Duration::from_secs(30)),
+        )
     }
 
     /// Clear the transposition table.
@@ -93,9 +164,10 @@ mod tests {
     use super::*;
     use crate::eval::{strategic::StrategicEvaluator, EvalFactors};
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
+    use std::time::Duration;
 
     struct ContextEvaluator {
         score: i32,
@@ -152,7 +224,7 @@ mod tests {
 
         // Verify the returned move is legal
         let legal = reversi_engine::moves::legal_moves(&board, Color::Black);
-        assert!(legal & result.best_move.bit_mask() != 0);
+        assert!(matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0));
     }
 
     #[test]
@@ -175,7 +247,7 @@ mod tests {
 
         let result = engine.search(&board, Color::Black, &evaluator, &config);
         let legal = reversi_engine::moves::legal_moves(&board, Color::Black);
-        assert!(legal & result.best_move.bit_mask() != 0);
+        assert!(matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0));
     }
 
     #[test]
@@ -291,7 +363,106 @@ mod tests {
         if legal & 1 != 0 {
             // Corner A1 is legal
             let result = engine.search(&board, Color::Black, &evaluator, &config);
-            assert_eq!(result.best_move, Position::new(0, 0));
+            assert_eq!(result.outcome, SearchOutcome::Move(Position::new(0, 0)));
         }
+    }
+
+    #[test]
+    fn interrupted_before_depth_one_returns_legal_fallback_without_score() {
+        let board = Board::new();
+        let evaluator = StrategicEvaluator::new();
+        let config = AiConfig::new(3, 3, 3);
+        let result = SearchEngine::new().search_with_budget(
+            &board,
+            Color::Black,
+            &evaluator,
+            &config,
+            &SearchBudget::with_time_limit(Duration::from_secs(1)).with_node_limit(0),
+        );
+
+        let legal = reversi_engine::moves::legal_moves(&board, Color::Black);
+        assert!(matches!(result.outcome, SearchOutcome::Move(position) if legal & position.bit_mask() != 0));
+        assert!(result.pv.is_empty());
+        assert_eq!(result.score, None);
+        assert_eq!(result.completed_depth, 0);
+        assert!(!result.exact);
+    }
+
+    #[test]
+    fn cancellation_returns_the_documented_fallback() {
+        let board = Board::new();
+        let evaluator = StrategicEvaluator::new();
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let result = SearchEngine::new().search_with_budget(
+            &board,
+            Color::Black,
+            &evaluator,
+            &AiConfig::new(3, 3, 3),
+            &SearchBudget::with_time_limit(Duration::from_secs(1)).with_cancellation(cancelled),
+        );
+
+        assert_eq!(result.completed_depth, 0);
+        assert!(result.score.is_none());
+        assert!(result.pv.is_empty());
+    }
+
+    #[test]
+    fn expired_deadline_returns_the_documented_fallback() {
+        let board = Board::new();
+        let evaluator = StrategicEvaluator::new();
+        let result = SearchEngine::new().search_with_budget(
+            &board,
+            Color::Black,
+            &evaluator,
+            &AiConfig::new(3, 3, 3),
+            &SearchBudget::new(Instant::now()),
+        );
+
+        assert_eq!(result.completed_depth, 0);
+        assert!(result.score.is_none());
+        assert!(result.pv.is_empty());
+        assert!(!result.exact);
+    }
+
+    #[test]
+    fn no_move_states_are_explicit() {
+        let evaluator = StrategicEvaluator::new();
+        let config = AiConfig::new(3, 3, 3);
+        let budget = SearchBudget::with_time_limit(Duration::from_secs(1));
+        let mut pass_board = Board::empty();
+        pass_board.set(Position::new(0, 0), Color::Black);
+        pass_board.set(Position::new(0, 1), Color::White);
+
+        let pass = SearchEngine::new().search_with_budget(
+            &pass_board, Color::White, &evaluator, &config, &budget,
+        );
+        let game_over = SearchEngine::new().search_with_budget(
+            &Board::empty(), Color::Black, &evaluator, &config, &budget,
+        );
+
+        assert_eq!(pass.outcome, SearchOutcome::Pass);
+        assert_eq!(game_over.outcome, SearchOutcome::GameOver);
+        assert!(pass.score.is_none() && game_over.score.is_none());
+    }
+
+    #[test]
+    fn fixed_node_limit_is_deterministic() {
+        let board = Board::new();
+        let evaluator = StrategicEvaluator::new();
+        let config = AiConfig::new(4, 4, 4);
+        let run = || SearchEngine::new().search_with_budget(
+            &board,
+            Color::Black,
+            &evaluator,
+            &config,
+            &SearchBudget::with_time_limit(Duration::from_secs(1)).with_node_limit(20),
+        );
+
+        let first = run();
+        let second = run();
+        assert_eq!(first.outcome, second.outcome);
+        assert_eq!(first.pv, second.pv);
+        assert_eq!(first.completed_depth, second.completed_depth);
+        assert_eq!(first.nodes_searched, second.nodes_searched);
     }
 }

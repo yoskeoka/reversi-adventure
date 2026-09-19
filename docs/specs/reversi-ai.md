@@ -198,19 +198,49 @@ struct SearchEngine {
 ```
 
 - `SearchEngine::new()` — Create with default TT capacity (~1M entries).
-- `SearchEngine::search<E: BoardEvaluator + ?Sized>(board: &Board, color: Color, evaluator: &E, config: &AiConfig)` — Run iterative deepening search. Returns `SearchResult`.
+- `SearchEngine::search_with_budget<E: BoardEvaluator + ?Sized>(board: &Board, color: Color, evaluator: &E, config: &AiConfig, budget: &SearchBudget)` — Run iterative deepening search within the supplied budget. Returns `SearchResult`.
 - `SearchEngine::clear_tt()` — Clear all entries in the transposition table. Useful between games to avoid cross-game contamination.
+
+### SearchBudget
+
+```rust
+struct SearchBudget {
+    deadline: Instant,
+    node_limit: Option<u64>,
+    cancellation: Option<Arc<AtomicBool>>,
+}
+```
+
+- The deadline is monotonic and is the primary turn budget. `SearchBudget::with_time_limit` creates it from the current monotonic clock.
+- `node_limit` is an optional secondary, deterministic ceiling for tests, CI, corpus, and tuning runs. A fixed node limit must reproduce the result metadata, PV, and completed depth for the same search context.
+- `cancellation` is an optional, cloneable token owned by the caller. Another thread may set its `AtomicBool`; the search only reads it and owns no callback or worker.
+- Search polls all three limits during expansion. Reaching a deadline or node limit, or observing cancellation, interrupts the current iteration.
 
 ### SearchResult
 
 ```rust
 struct SearchResult {
-    best_move: Position,
-    score: i32,
+    outcome: SearchOutcome,
+    score: Option<i32>,
     pv: Vec<Position>,
-    leaf_eval: EvalResult,
+    leaf_eval: Option<EvalResult>,
+    completed_depth: u8,
+    nodes_searched: u64,
+    elapsed: Duration,
+    exact: bool,
+}
+
+enum SearchOutcome {
+    Move(Position),
+    Pass,
+    GameOver,
 }
 ```
+
+- A state without a legal move returns `Pass` when the opponent can move and `GameOver` otherwise. It never exposes a sentinel `Position` or score.
+- For a legal-move state, search selects a legal root fallback before deeper work. If interrupted before depth 1 completes, it returns that fallback, an empty PV, no score or leaf evaluation, `completed_depth = 0`, and `exact = false`.
+- After each wholly completed depth, the result atomically advances to that iteration's move, PV, score, and leaf evaluation. A partial iteration is never returned or stored as the completed PV.
+- `exact` is true only when the configured maximum depth completes without interruption; it describes completion of this bounded heuristic search, not an endgame proof.
 
 ## Explanation
 
@@ -265,8 +295,8 @@ struct AiPlayer {
 ```
 
 - `AiPlayer::new(evaluator: Box<dyn BoardEvaluator>, config: AiConfig)` — Constructor.
-- `AiPlayer::think(&mut self, board: &Board, color: Color)` — Run search and return `SearchResult`. Requires `&mut self` due to TT mutation.
-- `AiPlayer::explain(&mut self, board: &Board, color: Color)` — Run search and return `MoveExplanation`. Requires `&mut self` due to TT mutation.
+- `AiPlayer::think(&mut self, board: &Board, color: Color, budget: &SearchBudget)` — Run search and return `SearchResult`. Requires `&mut self` due to TT mutation.
+- `AiPlayer::explain(&mut self, board: &Board, color: Color, budget: &SearchBudget)` — Run search and return `Option<MoveExplanation>`. It returns `None` when search has no move or no completed evaluation. Requires `&mut self` due to TT mutation.
 - `AiPlayer::evaluator_name(&self) -> &str` — Returns the name of the current evaluator (e.g. `"strategic"`, `"novice"`).
 
 ## External Oracle Analysis
@@ -335,6 +365,8 @@ Added to the existing `ReversiGame` GDScript class:
 game.set_ai(evaluator_name: String, opening_depth: int, midgame_depth: int, endgame_depth: int) -> bool
 # evaluator_name: "strategic" or "novice"
 # Returns false if evaluator_name is unknown
+game.ai_think_with_budget(time_limit_millis: int, node_limit: int = 0) -> Vector2i
+# Returns (-1, -1) for Pass, GameOver, or no AI. node_limit <= 0 disables the node cap.
 
 # AI move
 game.ai_think() -> Vector2i
