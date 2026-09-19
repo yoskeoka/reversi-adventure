@@ -241,7 +241,10 @@ enum SearchOutcome {
 }
 ```
 
-- A state without a legal move returns `Pass` when the opponent can move and `GameOver` otherwise. It never exposes a sentinel `Position` or score.
+- A heuristic state without a legal move returns `Pass` when the opponent can
+  move and `GameOver` otherwise. It never exposes a sentinel `Position` or
+  score. Completed exact endgame states are the documented exception: they
+  retain the final root-side score.
 - For a legal-move state, search selects a legal root fallback before deeper work. If interrupted before depth 1 completes, it returns that fallback, an empty PV, no score or leaf evaluation, `completed_depth = 0`, and `exact = false`.
 - After each wholly completed depth, the result atomically advances to that iteration's move, PV, score, and leaf evaluation. A partial iteration is never returned or stored as the completed PV.
 - Heuristic iterative deepening always reports `exact = false`, including when

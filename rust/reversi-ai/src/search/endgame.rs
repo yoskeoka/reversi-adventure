@@ -297,6 +297,19 @@ mod tests {
     }
 
     #[test]
+    fn forced_root_pass_keeps_the_root_side_score_and_played_pv() {
+        let board = Board::from_string(
+            "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBWB.",
+        )
+        .unwrap();
+        let result = solve(&board, Color::Black);
+        assert_eq!(result.outcome, SearchOutcome::Pass);
+        assert!(result.exact);
+        assert_eq!(result.score, Some(58));
+        assert_eq!(result.pv, vec![Position::new(7, 7)]);
+    }
+
+    #[test]
     fn interruption_never_claims_exactness() {
         let board = Board::from_string(
             "WWWWWWW.\nWWWWWWW.\nWWWWWWB.\nWWWWWB..\nWWWWWB..\nWWWWWB..\nWWWWWB..\nBBBBBBB.",
