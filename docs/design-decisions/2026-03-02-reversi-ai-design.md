@@ -225,8 +225,11 @@ rust/reversi-ai/
 
 ## Deferred (logged as issues)
 
-- **Endgame solver**: perfect play in final N moves (docs/issues/0004-endgame-solver.md)
 - **Trained evaluator**: ML/RL-based pattern evaluation (docs/issues/0005-trained-evaluator.md)
+
+The shared exact endgame solver now handles up to 12 empty squares for every
+evaluator. Its score is the final root-side disc differential, not a heuristic
+evaluation.
 
 ## References
 
