@@ -54,7 +54,8 @@ impl SearchBudget {
     }
 
     pub fn with_time_limit(time_limit: Duration) -> Self {
-        Self::new(Instant::now() + time_limit)
+        let now = Instant::now();
+        Self::new(now.checked_add(time_limit).unwrap_or(now))
     }
 
     pub fn with_node_limit(mut self, node_limit: u64) -> Self {
@@ -73,6 +74,13 @@ impl SearchBudget {
             .is_some_and(|token| token.load(Ordering::Acquire))
             || Instant::now() >= self.deadline
             || self.node_limit.is_some_and(|limit| nodes_searched >= limit)
+    }
+
+    pub(crate) fn interrupted_after_completion(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|token| token.load(Ordering::Acquire))
+            || Instant::now() >= self.deadline
     }
 }
 
@@ -111,6 +119,7 @@ impl SearchEngine {
         config: &AiConfig,
         budget: &SearchBudget,
     ) -> SearchResult {
+        let started = Instant::now();
         let context_fingerprint = search_context_fingerprint(evaluator, config);
         if self.context_fingerprint != Some(context_fingerprint) {
             self.tt.clear();
@@ -121,7 +130,6 @@ impl SearchEngine {
         let max_depth = config.depth_for_phase(stone_count);
 
         let mut search = Negascout::new(evaluator, &mut self.tt, &self.zobrist);
-        let started = Instant::now();
         let completed = search.search(board, color, max_depth, budget);
 
         SearchResult {
@@ -437,6 +445,35 @@ mod tests {
         assert!(result.score.is_none());
         assert!(result.pv.is_empty());
         assert!(!result.exact);
+    }
+
+    #[test]
+    fn zero_depth_never_reports_exact() {
+        let result = SearchEngine::new().search_with_budget(
+            &Board::new(),
+            Color::Black,
+            &StrategicEvaluator::new(),
+            &AiConfig::new(0, 0, 0),
+            &SearchBudget::with_time_limit(Duration::from_secs(1)),
+        );
+
+        assert_eq!(result.completed_depth, 0);
+        assert!(!result.exact);
+        assert!(result.score.is_none());
+    }
+
+    #[test]
+    fn unrepresentable_time_limit_returns_immediate_fallback() {
+        let result = SearchEngine::new().search_with_budget(
+            &Board::new(),
+            Color::Black,
+            &StrategicEvaluator::new(),
+            &AiConfig::new(1, 1, 1),
+            &SearchBudget::with_time_limit(Duration::MAX),
+        );
+
+        assert_eq!(result.completed_depth, 0);
+        assert!(result.score.is_none());
     }
 
     #[test]

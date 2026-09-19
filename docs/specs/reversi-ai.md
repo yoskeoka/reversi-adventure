@@ -177,7 +177,7 @@ Low-level search implementation. Typically used via `SearchEngine` rather than d
 
 - `Negascout::new(evaluator: &'a E, tt: &'a mut TranspositionTable, zobrist: &'a ZobristKeys)` — Constructor.
 - `Negascout::nodes_searched(&self) -> u64` — Returns total node count from the last completed search.
-- `Negascout::search(board: &Board, color: Color, max_depth: u8)` — Run iterative deepening search. Returns `(best_move, score, pv, leaf_eval)`.
+- `Negascout::search(board: &Board, color: Color, max_depth: u8, budget: &SearchBudget)` — Internal budgeted iterative deepening search. Returns the root outcome and the last wholly completed iteration.
 - TT probes and stores use a Zobrist key that includes the current `color`, including when a pass keeps the board unchanged.
 - Internally runs depth 1, 2, ..., up to `max_depth`.
 - At each depth: Negascout with alpha-beta window.
@@ -211,7 +211,7 @@ struct SearchBudget {
 }
 ```
 
-- The deadline is monotonic and is the primary turn budget. `SearchBudget::with_time_limit` creates it from the current monotonic clock.
+- The deadline is monotonic and is the primary turn budget. `SearchBudget::with_time_limit` creates it from the current monotonic clock. A duration beyond the platform deadline range becomes an immediate deadline.
 - `node_limit` is an optional secondary, deterministic ceiling for tests, CI, corpus, and tuning runs. A fixed node limit must reproduce the result metadata, PV, and completed depth for the same search context.
 - `cancellation` is an optional, cloneable token owned by the caller. Another thread may set its `AtomicBool`; the search only reads it and owns no callback or worker.
 - Search polls all three limits during expansion. Reaching a deadline or node limit, or observing cancellation, interrupts the current iteration.
@@ -240,7 +240,7 @@ enum SearchOutcome {
 - A state without a legal move returns `Pass` when the opponent can move and `GameOver` otherwise. It never exposes a sentinel `Position` or score.
 - For a legal-move state, search selects a legal root fallback before deeper work. If interrupted before depth 1 completes, it returns that fallback, an empty PV, no score or leaf evaluation, `completed_depth = 0`, and `exact = false`.
 - After each wholly completed depth, the result atomically advances to that iteration's move, PV, score, and leaf evaluation. A partial iteration is never returned or stored as the completed PV.
-- `exact` is true only when the configured maximum depth completes without interruption; it describes completion of this bounded heuristic search, not an endgame proof.
+- `exact` is true when a positive configured maximum depth completes without interruption. It describes completion of this bounded heuristic search, not an endgame proof.
 
 ## Explanation
 
@@ -365,7 +365,7 @@ Added to the existing `ReversiGame` GDScript class:
 game.set_ai(evaluator_name: String, opening_depth: int, midgame_depth: int, endgame_depth: int) -> bool
 # evaluator_name: "strategic" or "novice"
 # Returns false if evaluator_name is unknown
-game.ai_think_with_budget(time_limit_millis: int, node_limit: int = 0) -> Vector2i
+game.ai_think_with_budget(time_limit_millis: int, node_limit: int) -> Vector2i
 # Returns (-1, -1) for Pass, GameOver, or no AI. node_limit <= 0 disables the node cap.
 
 # AI move

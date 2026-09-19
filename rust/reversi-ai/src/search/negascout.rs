@@ -45,7 +45,8 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         self.nodes_searched
     }
 
-    /// Run iterative deepening search up to max_depth.
+    /// Run iterative deepening search up to max_depth within budget.
+    /// Returns the last wholly completed iteration or a root-state outcome.
     pub(crate) fn search(
         &mut self,
         board: &Board,
@@ -85,12 +86,17 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                     Ok(result) => result,
                     Err(()) => break,
                 };
+            if budget.interrupted_after_completion() {
+                break;
+            }
 
             if !result.pv.is_empty() {
                 best_move = result.pv[0];
                 best_score = Some(result.score);
                 best_pv = result.pv;
-                best_leaf = result.leaf_eval;
+                if let Some(leaf_eval) = result.leaf_eval {
+                    best_leaf = Some(leaf_eval);
+                }
                 completed_depth = depth;
             }
         }
@@ -101,7 +107,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             pv: best_pv,
             leaf_eval: best_leaf,
             completed_depth,
-            exact: completed_depth == max_depth,
+            exact: max_depth > 0 && completed_depth == max_depth,
         }
     }
 
