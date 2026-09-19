@@ -21,7 +21,7 @@ pub struct TtEntry {
 
 /// Zobrist hash keys for board positions.
 pub struct ZobristKeys {
-    keys: [[u64; 64]; 2], // [color][square]
+    keys: [[u64; 64]; 2],   // [color][square]
     side_to_move: [u64; 2], // [side to move]
 }
 
@@ -32,13 +32,17 @@ impl ZobristKeys {
         let mut state: u64 = 0x12345678_9ABCDEF0;
         for color_keys in &mut keys {
             for square in color_keys.iter_mut() {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 *square = state;
             }
         }
         let mut side_to_move = [0u64; 2];
         for key in &mut side_to_move {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *key = state;
         }
         Self { keys, side_to_move }
@@ -136,7 +140,10 @@ mod tests {
         let board1 = Board::new();
         let mut board2 = Board::new();
         board2.set(Position::new(0, 0), Color::Black);
-        assert_ne!(keys.hash(&board1, Color::Black), keys.hash(&board2, Color::Black));
+        assert_ne!(
+            keys.hash(&board1, Color::Black),
+            keys.hash(&board2, Color::Black)
+        );
     }
 
     #[test]
@@ -148,7 +155,10 @@ mod tests {
 
         assert_eq!(reversi_engine::moves::legal_moves(&board, Color::White), 0);
         assert_ne!(reversi_engine::moves::legal_moves(&board, Color::Black), 0);
-        assert_ne!(keys.hash(&board, Color::Black), keys.hash(&board, Color::White));
+        assert_ne!(
+            keys.hash(&board, Color::Black),
+            keys.hash(&board, Color::White)
+        );
 
         let mut tt = TranspositionTable::new(1024);
         let black_hash = keys.hash(&board, Color::Black);

@@ -2,9 +2,10 @@ use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
 
-use crate::eval::{BoardEvaluator, EvalResult};
 use super::ordering::order_moves;
 use super::tt::{Bound, TranspositionTable, TtEntry, ZobristKeys};
+use super::{SearchBudget, SearchOutcome};
+use crate::eval::{BoardEvaluator, EvalResult};
 
 /// Negascout search with iterative deepening.
 pub struct Negascout<'a, E: BoardEvaluator + ?Sized> {
@@ -21,12 +22,17 @@ struct NodeResult {
     leaf_eval: Option<EvalResult>,
 }
 
+pub(crate) struct CompletedSearch {
+    pub outcome: SearchOutcome,
+    pub score: Option<i32>,
+    pub pv: Vec<Position>,
+    pub leaf_eval: Option<EvalResult>,
+    pub completed_depth: u8,
+    pub exact: bool,
+}
+
 impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
-    pub fn new(
-        evaluator: &'a E,
-        tt: &'a mut TranspositionTable,
-        zobrist: &'a ZobristKeys,
-    ) -> Self {
+    pub fn new(evaluator: &'a E, tt: &'a mut TranspositionTable, zobrist: &'a ZobristKeys) -> Self {
         Self {
             evaluator,
             tt,
@@ -39,44 +45,70 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         self.nodes_searched
     }
 
-    /// Run iterative deepening search up to max_depth.
-    /// Returns (best_move, score, pv, leaf_eval).
-    pub fn search(
+    /// Run iterative deepening search up to max_depth within budget.
+    /// Returns the last wholly completed iteration or a root-state outcome.
+    pub(crate) fn search(
         &mut self,
         board: &Board,
         color: Color,
         max_depth: u8,
-    ) -> (Position, i32, Vec<Position>, EvalResult) {
-        let mut best_move = Position::new(0, 0);
-        let mut best_score = i32::MIN;
+        budget: &SearchBudget,
+    ) -> CompletedSearch {
         let mut best_pv = Vec::new();
-        let mut best_leaf = self.evaluator.evaluate(board, color);
 
-        // Find any legal move as fallback
         let legal = moves::legal_moves(board, color);
         if legal == 0 {
-            return (best_move, 0, best_pv, best_leaf);
+            let outcome = if moves::has_legal_move(board, color.opponent()) {
+                SearchOutcome::Pass
+            } else {
+                SearchOutcome::GameOver
+            };
+            return CompletedSearch {
+                outcome,
+                score: None,
+                pv: best_pv,
+                leaf_eval: None,
+                completed_depth: 0,
+                exact: false,
+            };
         }
 
-        // Set initial best_move to first legal move
         let first_index = legal.trailing_zeros() as u8;
-        best_move = Position::from_bit_index(first_index);
+        let fallback = Position::from_bit_index(first_index);
+        let mut best_move = fallback;
+        let mut best_score = None;
+        let mut best_leaf = None;
+        let mut completed_depth = 0;
 
         for depth in 1..=max_depth {
-            self.nodes_searched = 0;
-            let result = self.negascout(board, color, depth, i32::MIN + 1, i32::MAX - 1);
+            let result =
+                match self.negascout(board, color, depth, i32::MIN + 1, i32::MAX - 1, budget) {
+                    Ok(result) => result,
+                    Err(()) => break,
+                };
+            if budget.interrupted_after_completion() {
+                break;
+            }
 
             if !result.pv.is_empty() {
                 best_move = result.pv[0];
-                best_score = result.score;
+                best_score = Some(result.score);
                 best_pv = result.pv;
-                if let Some(eval) = result.leaf_eval {
-                    best_leaf = eval;
+                if let Some(leaf_eval) = result.leaf_eval {
+                    best_leaf = Some(leaf_eval);
                 }
+                completed_depth = depth;
             }
         }
 
-        (best_move, best_score, best_pv, best_leaf)
+        CompletedSearch {
+            outcome: SearchOutcome::Move(best_move),
+            score: best_score,
+            pv: best_pv,
+            leaf_eval: best_leaf,
+            completed_depth,
+            exact: max_depth > 0 && completed_depth == max_depth,
+        }
     }
 
     /// Negascout (PVS) recursive search.
@@ -87,17 +119,21 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         depth: u8,
         mut alpha: i32,
         beta: i32,
-    ) -> NodeResult {
+        budget: &SearchBudget,
+    ) -> Result<NodeResult, ()> {
+        if budget.interrupted(self.nodes_searched) {
+            return Err(());
+        }
         self.nodes_searched += 1;
 
         // Leaf node: evaluate
         if depth == 0 {
             let eval = self.evaluator.evaluate(board, color);
-            return NodeResult {
+            return Ok(NodeResult {
                 score: eval.score,
                 pv: Vec::new(),
                 leaf_eval: Some(eval),
-            };
+            });
         }
 
         let hash = self.zobrist.hash(board, color);
@@ -107,19 +143,19 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             if entry.depth >= depth {
                 match entry.bound {
                     Bound::Exact => {
-                        return NodeResult {
+                        return Ok(NodeResult {
                             score: entry.score,
                             pv: entry.best_move.into_iter().collect(),
                             leaf_eval: None,
-                        };
+                        });
                     }
                     Bound::LowerBound => {
                         if entry.score >= beta {
-                            return NodeResult {
+                            return Ok(NodeResult {
                                 score: entry.score,
                                 pv: entry.best_move.into_iter().collect(),
                                 leaf_eval: None,
-                            };
+                            });
                         }
                         if entry.score > alpha {
                             alpha = entry.score;
@@ -127,11 +163,11 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                     }
                     Bound::UpperBound => {
                         if entry.score <= alpha {
-                            return NodeResult {
+                            return Ok(NodeResult {
                                 score: entry.score,
                                 pv: entry.best_move.into_iter().collect(),
                                 leaf_eval: None,
-                            };
+                            });
                         }
                     }
                 }
@@ -148,19 +184,19 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             if !moves::has_legal_move(board, color.opponent()) {
                 // Game over — evaluate final position
                 let eval = self.evaluator.evaluate(board, color);
-                return NodeResult {
+                return Ok(NodeResult {
                     score: eval.score,
                     pv: Vec::new(),
                     leaf_eval: Some(eval),
-                };
+                });
             }
             // Pass: search opponent's turn at same depth
-            let child = self.negascout(board, color.opponent(), depth, -beta, -alpha);
-            return NodeResult {
+            let child = self.negascout(board, color.opponent(), depth, -beta, -alpha, budget)?;
+            return Ok(NodeResult {
                 score: -child.score,
                 pv: child.pv,
                 leaf_eval: child.leaf_eval,
-            };
+            });
         }
 
         let ordered = order_moves(board, color, legal, tt_move, depth);
@@ -173,18 +209,42 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         let mut first = true;
 
         for pos in &ordered {
+            if budget.interrupted(self.nodes_searched) {
+                return Err(());
+            }
             let new_board = moves::make_move(board, color, *pos);
 
             let child = if first {
                 // PV node: full window search
                 first = false;
-                self.negascout(&new_board, color.opponent(), depth - 1, -beta, -alpha)
+                self.negascout(
+                    &new_board,
+                    color.opponent(),
+                    depth - 1,
+                    -beta,
+                    -alpha,
+                    budget,
+                )?
             } else {
                 // Null-window search
-                let nw = self.negascout(&new_board, color.opponent(), depth - 1, -alpha - 1, -alpha);
+                let nw = self.negascout(
+                    &new_board,
+                    color.opponent(),
+                    depth - 1,
+                    -alpha - 1,
+                    -alpha,
+                    budget,
+                )?;
                 if -nw.score > alpha && -nw.score < beta {
                     // Fail high: re-search with full window
-                    self.negascout(&new_board, color.opponent(), depth - 1, -beta, -alpha)
+                    self.negascout(
+                        &new_board,
+                        color.opponent(),
+                        depth - 1,
+                        -beta,
+                        -alpha,
+                        budget,
+                    )?
                 } else {
                     nw
                 }
@@ -221,18 +281,21 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             Bound::Exact
         };
 
-        self.tt.store(hash, TtEntry {
+        self.tt.store(
             hash,
-            depth,
-            score: best_score,
-            bound,
-            best_move: Some(best_move),
-        });
+            TtEntry {
+                hash,
+                depth,
+                score: best_score,
+                bound,
+                best_move: Some(best_move),
+            },
+        );
 
-        NodeResult {
+        Ok(NodeResult {
             score: best_score,
             pv: best_pv,
             leaf_eval: best_leaf,
-        }
+        })
     }
 }

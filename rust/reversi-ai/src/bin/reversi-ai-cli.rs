@@ -5,9 +5,11 @@ use reversi_ai::eval::novice::NoviceEvaluator;
 use reversi_ai::eval::strategic::StrategicEvaluator;
 use reversi_ai::eval::BoardEvaluator;
 use reversi_ai::player::AiPlayer;
+use reversi_ai::search::{SearchBudget, SearchOutcome};
 use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
+use std::time::Duration;
 
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice] [--opening-depth N] \
@@ -19,7 +21,9 @@ fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
         .parse::<u8>()
         .map_err(|_| format!("{option} expects a positive unsigned 8-bit integer"))?;
     if parsed == 0 {
-        return Err(format!("{option} expects a positive unsigned 8-bit integer"));
+        return Err(format!(
+            "{option} expects a positive unsigned 8-bit integer"
+        ));
     }
     Ok(parsed)
 }
@@ -88,7 +92,11 @@ fn choose_move(player: &mut AiPlayer, board: &Board, color: Color) -> String {
         return "pass".to_string();
     }
 
-    move_name(player.think(board, color).best_move)
+    let budget = SearchBudget::with_time_limit(Duration::from_secs(30));
+    match player.think(board, color, &budget).outcome {
+        SearchOutcome::Move(position) => move_name(position),
+        SearchOutcome::Pass | SearchOutcome::GameOver => "pass".to_string(),
+    }
 }
 
 fn main() -> Result<(), String> {

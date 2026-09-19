@@ -108,17 +108,17 @@ mod tests {
 
     #[test]
     fn test_position_weights_corners_highest() {
-        assert_eq!(POSITION_WEIGHTS[0], 120);   // A1
-        assert_eq!(POSITION_WEIGHTS[7], 120);   // H1
-        assert_eq!(POSITION_WEIGHTS[56], 120);  // A8
-        assert_eq!(POSITION_WEIGHTS[63], 120);  // H8
+        assert_eq!(POSITION_WEIGHTS[0], 120); // A1
+        assert_eq!(POSITION_WEIGHTS[7], 120); // H1
+        assert_eq!(POSITION_WEIGHTS[56], 120); // A8
+        assert_eq!(POSITION_WEIGHTS[63], 120); // H8
     }
 
     #[test]
     fn test_position_weights_x_squares_lowest() {
-        assert_eq!(POSITION_WEIGHTS[9], -40);   // B2 (X-square of A1)
-        assert_eq!(POSITION_WEIGHTS[14], -40);  // G2 (X-square of H1)
-        assert_eq!(POSITION_WEIGHTS[49], -40);  // B7 (X-square of A8)
-        assert_eq!(POSITION_WEIGHTS[54], -40);  // G7 (X-square of H8)
+        assert_eq!(POSITION_WEIGHTS[9], -40); // B2 (X-square of A1)
+        assert_eq!(POSITION_WEIGHTS[14], -40); // G2 (X-square of H1)
+        assert_eq!(POSITION_WEIGHTS[49], -40); // B7 (X-square of A8)
+        assert_eq!(POSITION_WEIGHTS[54], -40); // G7 (X-square of H8)
     }
 }

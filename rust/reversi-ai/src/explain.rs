@@ -3,7 +3,7 @@ use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
 
 use crate::eval::{BoardEvaluator, EvalFactors};
-use crate::search::SearchResult;
+use crate::search::{SearchOutcome, SearchResult};
 
 /// Tags for the primary strategic reason behind a move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,59 +53,63 @@ pub fn generate_explanation(
     color: Color,
     search_result: &SearchResult,
     evaluator: &dyn BoardEvaluator,
-) -> MoveExplanation {
-    let best = search_result.best_move;
+) -> Option<MoveExplanation> {
+    let SearchOutcome::Move(best) = search_result.outcome else {
+        return None;
+    };
+    let score = search_result.score?;
+    let leaf_eval = search_result.leaf_eval.as_ref()?;
     let legal = moves::legal_moves(board, color);
 
     // Check for forced move (only one legal move)
     if legal.count_ones() == 1 {
-        return MoveExplanation {
+        return Some(MoveExplanation {
             best_move: best,
             pv: search_result.pv.clone(),
-            score: search_result.score,
-            factors: search_result.leaf_eval.factors,
+            score,
+            factors: leaf_eval.factors,
             primary_reason: ExplainTag::ForcedMove,
-        };
+        });
     }
 
     // Check if best move is a corner
     if CORNERS.contains(&best.bit_index()) {
-        return MoveExplanation {
+        return Some(MoveExplanation {
             best_move: best,
             pv: search_result.pv.clone(),
-            score: search_result.score,
-            factors: search_result.leaf_eval.factors,
+            score,
+            factors: leaf_eval.factors,
             primary_reason: ExplainTag::CornerGrab,
-        };
+        });
     }
 
     // Check if PV leads to a corner take (corner setup)
     for pv_move in &search_result.pv {
         if CORNERS.contains(&pv_move.bit_index()) {
-            return MoveExplanation {
+            return Some(MoveExplanation {
                 best_move: best,
                 pv: search_result.pv.clone(),
-                score: search_result.score,
-                factors: search_result.leaf_eval.factors,
+                score,
+                factors: leaf_eval.factors,
                 primary_reason: ExplainTag::CornerSetup,
-            };
+            });
         }
     }
 
     // Compare factors: current position vs PV leaf
     let current_eval = evaluator.evaluate(board, color);
-    let delta = search_result.leaf_eval.factors - current_eval.factors;
+    let delta = leaf_eval.factors - current_eval.factors;
 
     // Find the factor with the largest positive delta
     let primary_reason = determine_primary_reason(&delta);
 
-    MoveExplanation {
+    Some(MoveExplanation {
         best_move: best,
         pv: search_result.pv.clone(),
-        score: search_result.score,
-        factors: search_result.leaf_eval.factors,
+        score,
+        factors: leaf_eval.factors,
         primary_reason,
-    }
+    })
 }
 
 fn determine_primary_reason(delta: &EvalFactors) -> ExplainTag {
@@ -138,13 +142,17 @@ mod tests {
         // Only one legal move for black (if any)
 
         let _search_result = SearchResult {
-            best_move: Position::new(0, 2),
-            score: 10,
+            outcome: SearchOutcome::Move(Position::new(0, 2)),
+            score: Some(10),
             pv: vec![Position::new(0, 2)],
-            leaf_eval: EvalResult {
+            leaf_eval: Some(EvalResult {
                 score: 10,
                 factors: EvalFactors::default(),
-            },
+            }),
+            completed_depth: 1,
+            nodes_searched: 1,
+            elapsed: std::time::Duration::ZERO,
+            exact: true,
         };
 
         // Simulate forced move: legal_moves has exactly 1 bit set
