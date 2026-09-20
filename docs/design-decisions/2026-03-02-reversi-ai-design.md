@@ -234,6 +234,20 @@ The shared exact endgame solver now handles up to 12 empty squares for every
 evaluator. Its score is the final root-side disc differential, not a heuristic
 evaluation.
 
+## Adopted pattern-evaluator representation
+
+The future learned evaluator owns an eight-base-pattern, eight-symmetry
+catalog rather than importing Egaroucid code, assets, file formats, or
+weights. Feature extraction uses a color-relative ternary encoding and one
+canonical board symmetry, so D4-equivalent boards have a single representation.
+It uses 60 non-interpolated occupied-disc phases (4 through 63) and predicts
+the requested color's final disc differential on the closed `-64..=64` scale.
+
+The representation is deliberately separate from `StrategicEvaluator` and
+move explanation: learned scores have no human-factor decomposition. A future
+artifact must carry reproducible, non-private provenance and every
+score-affecting identity must scope its transposition-table context.
+
 ## Deferred (logged as issues)
 
 - **Trained evaluator**: ML/RL-based pattern evaluation (docs/issues/0005-trained-evaluator.md)

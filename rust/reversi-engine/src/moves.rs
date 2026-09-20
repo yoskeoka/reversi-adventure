@@ -4,9 +4,14 @@ use crate::types::{Color, Position};
 /// Direction shifts for the 8 cardinal/diagonal directions.
 /// Each tuple is (row_delta, col_delta) represented as shift amount and mask.
 const DIRECTIONS: [(i8, i8); 8] = [
-    (-1, -1), (-1, 0), (-1, 1),
-    ( 0, -1),          ( 0, 1),
-    ( 1, -1), ( 1, 0), ( 1, 1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 /// Returns a bitmask of all legal move positions for the given color.

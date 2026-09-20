@@ -24,7 +24,12 @@ pub struct Position {
 
 impl Position {
     pub fn new(row: u8, col: u8) -> Self {
-        debug_assert!(row < 8 && col < 8, "Position out of bounds: ({}, {})", row, col);
+        debug_assert!(
+            row < 8 && col < 8,
+            "Position out of bounds: ({}, {})",
+            row,
+            col
+        );
         Self { row, col }
     }
 

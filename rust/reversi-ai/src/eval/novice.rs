@@ -26,10 +26,8 @@ impl NoviceEvaluator {
     /// Simple pseudo-random number for score perturbation.
     fn random_perturbation(&self, board: &Board) -> i32 {
         // Use board state as additional entropy
-        let hash = board.pieces(Color::Black)
-            .wrapping_mul(0x9E3779B97F4A7C15)
-            ^ board.pieces(Color::White)
-                .wrapping_mul(0x517CC1B727220A95)
+        let hash = board.pieces(Color::Black).wrapping_mul(0x9E3779B97F4A7C15)
+            ^ board.pieces(Color::White).wrapping_mul(0x517CC1B727220A95)
             ^ self.seed;
         // Map to small range [-3, 3]
         ((hash % 7) as i32) - 3
@@ -49,20 +47,18 @@ impl BoardEvaluator for NoviceEvaluator {
         let own = board.pieces(color);
         let opp = board.pieces(color.opponent());
 
-        let all_edges: u64 = 0xFF | (0xFF << 56)
-            | 0x0101_0101_0101_0101
-            | 0x8080_8080_8080_8080;
-        let edge_score = ((own & all_edges).count_ones() as i32
-            - (opp & all_edges).count_ones() as i32) * 5;
+        let all_edges: u64 = 0xFF | (0xFF << 56) | 0x0101_0101_0101_0101 | 0x8080_8080_8080_8080;
+        let edge_score =
+            ((own & all_edges).count_ones() as i32 - (opp & all_edges).count_ones() as i32) * 5;
 
         let noise = self.random_perturbation(board);
 
         let factors = EvalFactors {
-            corner_control: 0,    // novice doesn't think about corners specifically
-            stability: 0,         // novice doesn't understand stability
-            mobility: 0,          // novice ignores mobility
+            corner_control: 0, // novice doesn't think about corners specifically
+            stability: 0,      // novice doesn't understand stability
+            mobility: 0,       // novice ignores mobility
             edge_control: edge_score,
-            parity: 0,            // novice doesn't understand parity
+            parity: 0, // novice doesn't understand parity
             piece_count: piece_score,
         };
 

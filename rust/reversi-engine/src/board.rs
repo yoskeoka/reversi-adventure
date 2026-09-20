@@ -94,7 +94,11 @@ impl Board {
         for (row, line) in lines.iter().enumerate() {
             let chars: Vec<char> = line.chars().collect();
             if chars.len() != 8 {
-                return Err(format!("line {} has {} chars, expected 8", row, chars.len()));
+                return Err(format!(
+                    "line {} has {} chars, expected 8",
+                    row,
+                    chars.len()
+                ));
             }
             for (col, &ch) in chars.iter().enumerate() {
                 let pos = Position::new(row as u8, col as u8);
@@ -211,7 +215,10 @@ mod tests {
 
     #[test]
     fn test_is_full() {
-        let board = Board { black: u64::MAX, white: 0 };
+        let board = Board {
+            black: u64::MAX,
+            white: 0,
+        };
         assert!(board.is_full());
         assert!(!Board::new().is_full());
     }

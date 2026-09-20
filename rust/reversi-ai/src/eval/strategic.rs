@@ -43,16 +43,16 @@ impl StrategicEvaluator {
         // C-squares: adjacent to corners along edges
         // X-squares: diagonally adjacent to corners
         let c_squares: [(u8, &[u8]); 4] = [
-            (0, &[1, 8]),       // C-squares for corner A1
-            (7, &[6, 15]),      // C-squares for corner H1
-            (56, &[48, 57]),    // C-squares for corner A8
-            (63, &[55, 62]),    // C-squares for corner H8
+            (0, &[1, 8]),    // C-squares for corner A1
+            (7, &[6, 15]),   // C-squares for corner H1
+            (56, &[48, 57]), // C-squares for corner A8
+            (63, &[55, 62]), // C-squares for corner H8
         ];
         let x_squares: [(u8, u8); 4] = [
-            (0, 9),    // X-square for corner A1
-            (7, 14),   // X-square for corner H1
-            (56, 49),  // X-square for corner A8
-            (63, 54),  // X-square for corner H8
+            (0, 9),   // X-square for corner A1
+            (7, 14),  // X-square for corner H1
+            (56, 49), // X-square for corner A8
+            (63, 54), // X-square for corner H8
         ];
 
         let mut score = 0i32;
@@ -108,7 +108,7 @@ impl StrategicEvaluator {
 
         // Check each corner and propagate stability along edges
         let corner_edges: [(u8, &[(i8, i8)]); 4] = [
-            (0, &[(0, 1), (1, 0)]),   // A1: right and down
+            (0, &[(0, 1), (1, 0)]),    // A1: right and down
             (7, &[(0, -1), (1, 0)]),   // H1: left and down
             (56, &[(0, 1), (-1, 0)]),  // A8: right and up
             (63, &[(0, -1), (-1, 0)]), // H8: left and up
@@ -177,10 +177,10 @@ impl StrategicEvaluator {
         // Edge masks (excluding corners which are counted separately)
         let top_edge: u64 = 0b0111_1110; // bits 1-6
         let bottom_edge: u64 = 0b0111_1110 << 56; // bits 57-62
-        let left_edge: u64 = (1u64 << 8) | (1u64 << 16) | (1u64 << 24)
-            | (1u64 << 32) | (1u64 << 40) | (1u64 << 48); // bits 8,16,24,32,40,48
-        let right_edge: u64 = (1u64 << 15) | (1u64 << 23) | (1u64 << 31)
-            | (1u64 << 39) | (1u64 << 47) | (1u64 << 55); // bits 15,23,31,39,47,55
+        let left_edge: u64 =
+            (1u64 << 8) | (1u64 << 16) | (1u64 << 24) | (1u64 << 32) | (1u64 << 40) | (1u64 << 48); // bits 8,16,24,32,40,48
+        let right_edge: u64 =
+            (1u64 << 15) | (1u64 << 23) | (1u64 << 31) | (1u64 << 39) | (1u64 << 47) | (1u64 << 55); // bits 15,23,31,39,47,55
 
         let edges = top_edge | bottom_edge | left_edge | right_edge;
 
@@ -194,7 +194,11 @@ impl StrategicEvaluator {
     fn eval_parity(&self, board: &Board, _color: Color) -> i32 {
         let empty_count = board.empty_cells().count_ones() as i32;
         // Odd number of empties = advantage for current mover
-        if empty_count % 2 == 1 { 1 } else { -1 }
+        if empty_count % 2 == 1 {
+            1
+        } else {
+            -1
+        }
     }
 
     /// Evaluate piece count differential.

@@ -53,6 +53,47 @@ Implementations must return evaluation from the perspective of `color` (positive
 `StrategicEvaluator` includes its version and evaluation weights.
 `NoviceEvaluator` includes its version and seed.
 
+### Pattern-evaluator artifact contract
+
+The project-owned trained-pattern evaluator is a future `BoardEvaluator`
+implementation. This contract defines its input representation only; it does
+not change the strategic or novice evaluators, invoke an explanatory
+evaluator, or assign human-readable factors to a pattern score.
+
+- The catalog contains exactly 64 features: eight project-defined base square
+  patterns expanded through all eight dihedral symmetries of the 8-by-8 board.
+  Every feature contains at most ten squares. The catalog digest identifies
+  both the square order and this expansion order.
+- A square is ternary encoded from the requested color's perspective: empty
+  is `0`, the requested color is `1`, and the opponent is `2`. A feature code
+  is the square values accumulated in listed-square order as a base-three
+  integer.
+- Before extraction, the board is put in the lexicographically smallest of its
+  eight absolute-color symmetry orientations (ties use the lowest symmetry
+  number). Ternary codes remain relative to the requested color. Consequently
+  symmetric positions produce the same 64 feature codes, in catalog order, and
+  changing requested color swaps ternary `1` and `2` without changing feature
+  alignment.
+- There are exactly 60 discrete phase tables. Their indexes are the occupied
+  disc count minus four, covering occupied counts `4..=63`. A pass leaves the
+  phase unchanged; terminal 64-disc positions have no pattern phase. Scores
+  must not interpolate between phase tables.
+- A trained pattern score predicts the requested color's final disc
+  differential. It is an integer in inclusive range `-64..=64`. Accumulation
+  is deterministic integer arithmetic and an artifact is rejected when any
+  contribution, declared aggregate bound, or checked aggregate cannot satisfy
+  that range without overflow.
+- A weight artifact is immutable and identifies its format version, catalog
+  digest, phase definition, final-disc-difference score scale, safe source
+  provenance, and weight digest. Provenance may name a reproducible trainer,
+  input-manifest digest, and licenses; it must not embed private input data.
+  Its catalog, phase, scale, version, and weight identity are score-affecting
+  context and therefore enter the future evaluator's
+  `context_fingerprint()`.
+
+Pattern scores have no human-factor attribution and must not be combined with
+the explanatory evaluator or its explanation path.
+
 ### StrategicEvaluator
 
 Hand-tuned weights based on known Othello strategy. Evaluates:

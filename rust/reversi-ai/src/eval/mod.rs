@@ -1,4 +1,5 @@
 pub mod novice;
+pub mod pattern;
 pub mod strategic;
 
 use reversi_engine::board::Board;
@@ -32,13 +33,15 @@ pub(crate) fn stable_context_fingerprint(parts: &[u64]) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-    parts.iter().fold(FNV_OFFSET_BASIS, |mut fingerprint, part| {
-        for byte in part.to_le_bytes() {
-            fingerprint ^= u64::from(byte);
-            fingerprint = fingerprint.wrapping_mul(FNV_PRIME);
-        }
-        fingerprint
-    })
+    parts
+        .iter()
+        .fold(FNV_OFFSET_BASIS, |mut fingerprint, part| {
+            for byte in part.to_le_bytes() {
+                fingerprint ^= u64::from(byte);
+                fingerprint = fingerprint.wrapping_mul(FNV_PRIME);
+            }
+            fingerprint
+        })
 }
 
 impl std::ops::Sub for EvalFactors {
