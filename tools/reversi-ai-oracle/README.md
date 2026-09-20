@@ -28,6 +28,7 @@ make oracle-golden
 make oracle-match
 make oracle-evaluate
 make oracle-ci
+make oracle-calibration
 ```
 
 `oracle-verify` analyzes the versioned corpus and compares its stable
@@ -36,17 +37,25 @@ golden projection removes that machine-dependent field while retaining score,
 depth, node count, and exactness. No oracle time-limit option is passed. The
 adapter's subprocess timeout is the only wall-clock limit.
 
+The harness accepts only named, versioned profiles. `ci-smoke-v1` is the small
+bounded default used by the checked-in corpus/golden gate. It is deliberately
+not strength evidence. `strong-engine-hcap-v1` pins bookless Egaroucid v7.8.1
+to one thread, hash level 25, no evaluation override, and 100%-probability
+fixed depths 8 for decision moves 1--41 and 12 for moves 42--60. It records
+the candidate's uniform heuristic depth 12 and its 16-empty-square exact-solver
+threshold in every report. The command line never passes Egaroucid `-time`.
+
 `oracle-golden` is the explicit maintainer command for refreshing the checked-in
-golden projection after changing the pinned oracle, corpus, or search level.
+golden projection after changing the pinned oracle, corpus, or named profile.
 
 `oracle-match` plays two games from the standard opening, alternating colors,
 between the project `reversi-ai-cli` and Egaroucid. `oracle-evaluate` analyzes
 the corpus and includes the project CLI's selected move, oracle value, and
-regret in a report under `/tmp` by default. Override `ORACLE_LEVEL`,
-`ORACLE_TIMEOUT`, `ORACLE_MATCH_LEVEL`, `ORACLE_MATCH_TIMEOUT`,
-`ORACLE_REPORT`, and the `AI_*` Make variables as needed. The Make match target
-uses a deliberately small default level/depth so CI is bounded; strength
-comparisons should set a declared higher budget explicitly.
+regret in a report under `/tmp` by default. Override `ORACLE_PROFILE`,
+`ORACLE_TIMEOUT`, `ORACLE_MATCH_TIMEOUT`, `ORACLE_REPORT`, and the `AI_*` Make
+variables as needed. `oracle-calibration` runs the declared stronger profile
+and emits regret plus alternating-color results, but it is a baseline report,
+not a final 50% strength assertion.
 
 `oracle-ci` performs normalized corpus verification and the match in one oracle
 process, so CI builds the pinned external source once while retaining the same

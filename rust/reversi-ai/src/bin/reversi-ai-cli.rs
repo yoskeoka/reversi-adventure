@@ -13,7 +13,8 @@ use std::time::Duration;
 
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice] [--opening-depth N] \
---midgame-depth N --endgame-depth N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass"
+--midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
+[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N]\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -28,11 +29,27 @@ fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
     Ok(parsed)
 }
 
-fn parse_args() -> Result<(String, AiConfig), String> {
+fn parse_u32(value: &str, option: &str) -> Result<u32, String> {
+    value
+        .parse::<u32>()
+        .map_err(|_| format!("{option} expects an unsigned 32-bit integer"))
+}
+
+fn parse_u64(value: &str, option: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("{option} expects an unsigned 64-bit integer"))
+}
+
+fn parse_args() -> Result<(String, AiConfig, Duration, Option<u64>), String> {
     let mut evaluator = String::from("strategic");
     let mut opening_depth = 3;
     let mut midgame_depth = 4;
     let mut endgame_depth = 6;
+    let mut exact_solver_empty_squares = 12;
+    let mut time_limit = Duration::from_secs(30);
+    let mut node_limit = None;
+    let mut profile = None;
     let mut args = std::env::args().skip(1);
 
     while let Some(option) = args.next() {
@@ -49,6 +66,14 @@ fn parse_args() -> Result<(String, AiConfig), String> {
             "--opening-depth" => opening_depth = parse_u8(&value()?, "--opening-depth")?,
             "--midgame-depth" => midgame_depth = parse_u8(&value()?, "--midgame-depth")?,
             "--endgame-depth" => endgame_depth = parse_u8(&value()?, "--endgame-depth")?,
+            "--exact-solver-empty-squares" => {
+                exact_solver_empty_squares = parse_u32(&value()?, "--exact-solver-empty-squares")?
+            }
+            "--time-limit-ms" => {
+                time_limit = Duration::from_millis(parse_u64(&value()?, "--time-limit-ms")?)
+            }
+            "--node-limit" => node_limit = Some(parse_u64(&value()?, "--node-limit")?),
+            "--profile" => profile = Some(value()?),
             _ => return Err(format!("unknown option {option}\n{}", usage())),
         }
     }
@@ -56,10 +81,13 @@ fn parse_args() -> Result<(String, AiConfig), String> {
     if !matches!(evaluator.as_str(), "strategic" | "novice") {
         return Err(format!("unknown evaluator {evaluator:?}"));
     }
-    Ok((
-        evaluator,
-        AiConfig::new(opening_depth, midgame_depth, endgame_depth),
-    ))
+    let config = match profile.as_deref() {
+        None => AiConfig::new(opening_depth, midgame_depth, endgame_depth)
+            .with_exact_solver_empty_squares(exact_solver_empty_squares),
+        Some("strong-engine-hcap-v1") => AiConfig::strong_engine_hcap_v1(),
+        Some(name) => return Err(format!("unknown profile {name:?}")),
+    };
+    Ok((evaluator, config, time_limit, node_limit))
 }
 
 fn parse_color(value: &str) -> Result<Color, String> {
@@ -87,12 +115,21 @@ fn move_name(position: Position) -> String {
     format!("{}{}", (b'a' + position.col) as char, position.row + 1)
 }
 
-fn choose_move(player: &mut AiPlayer, board: &Board, color: Color) -> String {
+fn choose_move(
+    player: &mut AiPlayer,
+    board: &Board,
+    color: Color,
+    time_limit: Duration,
+    node_limit: Option<u64>,
+) -> String {
     if !moves::has_legal_move(board, color) {
         return "pass".to_string();
     }
 
-    let budget = SearchBudget::with_time_limit(Duration::from_secs(30));
+    let mut budget = SearchBudget::with_time_limit(time_limit);
+    if let Some(limit) = node_limit {
+        budget = budget.with_node_limit(limit);
+    }
     match player.think(board, color, &budget).outcome {
         SearchOutcome::Move(position) => move_name(position),
         SearchOutcome::Pass | SearchOutcome::GameOver => "pass".to_string(),
@@ -100,7 +137,7 @@ fn choose_move(player: &mut AiPlayer, board: &Board, color: Color) -> String {
 }
 
 fn main() -> Result<(), String> {
-    let (evaluator_name, config) = parse_args()?;
+    let (evaluator_name, config, time_limit, node_limit) = parse_args()?;
     let evaluator: Box<dyn BoardEvaluator> = match evaluator_name.as_str() {
         "strategic" => Box::new(StrategicEvaluator::new()),
         "novice" => Box::new(NoviceEvaluator::new()),
@@ -128,7 +165,7 @@ fn main() -> Result<(), String> {
         }
         let board = board_from_flat_string(fields[1])?;
         let color = parse_color(fields[2])?;
-        let move_name = choose_move(&mut player, &board, color);
+        let move_name = choose_move(&mut player, &board, color, time_limit, node_limit);
         writeln!(stdout, "{}\t{}", fields[0], move_name)
             .map_err(|error| format!("stdout: {error}"))?;
         stdout.flush().map_err(|error| format!("stdout: {error}"))?;

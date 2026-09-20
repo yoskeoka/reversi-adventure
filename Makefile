@@ -3,9 +3,8 @@ CARGO ?= cargo
 ORACLE_TOOL := tools/reversi-ai-oracle/oracle.py
 ORACLE_CORPUS := tools/reversi-ai-oracle/corpus.jsonl
 ORACLE_GOLDEN := tools/reversi-ai-oracle/golden.jsonl
-ORACLE_LEVEL ?= 8
+ORACLE_PROFILE ?= ci-smoke-v1
 ORACLE_TIMEOUT ?= 300
-ORACLE_MATCH_LEVEL ?= 2
 ORACLE_MATCH_TIMEOUT ?= 60
 ORACLE_MATCH_GAMES ?= 2
 ORACLE_REPORT ?= /tmp/reversi-adventure-oracle-report.jsonl
@@ -20,8 +19,9 @@ AI_MATCH_ENDGAME_DEPTH ?= 3
 AI_BINARY ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR)/debug/reversi-ai-cli,target/debug/reversi-ai-cli)
 AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPENING_DEPTH) --midgame-depth $(AI_MIDGAME_DEPTH) --endgame-depth $(AI_ENDGAME_DEPTH)
 AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH)
+AI_CALIBRATION_COMMAND := $(AI_BINARY) --evaluator strategic --profile strong-engine-hcap-v1
 
-.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus
+.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration
 
 oracle-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-oracle/tests -p 'test_*.py'
@@ -30,19 +30,24 @@ oracle-corpus:
 	$(PYTHON) $(ORACLE_TOOL) generate-corpus --output $(ORACLE_CORPUS)
 
 oracle-verify: oracle-test
-	$(PYTHON) $(ORACLE_TOOL) verify --corpus $(ORACLE_CORPUS) --golden $(ORACLE_GOLDEN) --level $(ORACLE_LEVEL) --timeout $(ORACLE_TIMEOUT)
+	$(PYTHON) $(ORACLE_TOOL) verify --corpus $(ORACLE_CORPUS) --golden $(ORACLE_GOLDEN) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT)
 
 oracle-golden:
-	$(PYTHON) $(ORACLE_TOOL) generate-golden --corpus $(ORACLE_CORPUS) --output $(ORACLE_GOLDEN) --level $(ORACLE_LEVEL) --timeout $(ORACLE_TIMEOUT)
+	$(PYTHON) $(ORACLE_TOOL) generate-golden --corpus $(ORACLE_CORPUS) --output $(ORACLE_GOLDEN) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT)
 
 oracle-match:
 	$(CARGO) build -p reversi-ai --bin reversi-ai-cli
-	$(PYTHON) $(ORACLE_TOOL) match --candidate-command "$(AI_MATCH_COMMAND)" --games $(ORACLE_MATCH_GAMES) --level $(ORACLE_MATCH_LEVEL) --timeout $(ORACLE_MATCH_TIMEOUT) --output $(ORACLE_MATCH_REPORT)
+	$(PYTHON) $(ORACLE_TOOL) match --candidate-command "$(AI_MATCH_COMMAND)" --games $(ORACLE_MATCH_GAMES) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_MATCH_TIMEOUT) --output $(ORACLE_MATCH_REPORT)
 
 oracle-evaluate:
 	$(CARGO) build -p reversi-ai --bin reversi-ai-cli
-	$(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output $(ORACLE_REPORT) --level $(ORACLE_LEVEL) --timeout $(ORACLE_TIMEOUT) --candidate-command "$(AI_COMMAND)"
+	$(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output $(ORACLE_REPORT) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT) --candidate-command "$(AI_COMMAND)"
 
 oracle-ci: oracle-test
 	$(CARGO) build -p reversi-ai --bin reversi-ai-cli
-	$(PYTHON) $(ORACLE_TOOL) ci --corpus $(ORACLE_CORPUS) --golden $(ORACLE_GOLDEN) --level $(ORACLE_LEVEL) --timeout $(ORACLE_TIMEOUT) --candidate-command "$(AI_MATCH_COMMAND)" --games $(ORACLE_MATCH_GAMES) --match-level $(ORACLE_MATCH_LEVEL) --match-timeout $(ORACLE_MATCH_TIMEOUT) --match-output $(ORACLE_MATCH_REPORT)
+	$(PYTHON) $(ORACLE_TOOL) ci --corpus $(ORACLE_CORPUS) --golden $(ORACLE_GOLDEN) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT) --candidate-command "$(AI_MATCH_COMMAND)" --games $(ORACLE_MATCH_GAMES) --match-timeout $(ORACLE_MATCH_TIMEOUT) --match-output $(ORACLE_MATCH_REPORT)
+
+oracle-calibration:
+	$(CARGO) build -p reversi-ai --bin reversi-ai-cli
+	$(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output $(ORACLE_REPORT) --profile strong-engine-hcap-v1 --timeout $(ORACLE_TIMEOUT) --candidate-command "$(AI_CALIBRATION_COMMAND)"
+	$(PYTHON) $(ORACLE_TOOL) match --candidate-command "$(AI_CALIBRATION_COMMAND)" --games $(ORACLE_MATCH_GAMES) --profile strong-engine-hcap-v1 --timeout $(ORACLE_MATCH_TIMEOUT) --output $(ORACLE_MATCH_REPORT)

@@ -45,16 +45,40 @@ class OracleHarnessTests(unittest.TestCase):
         with patch.dict(os.environ, {"REVERSI_ADVENTURE_ORACLE_CACHE": "relative/cache"}):
             self.assertTrue(oracle.cache_root().is_absolute())
 
+    def test_strength_profile_serializes_and_generates_only_fixed_custom_arguments(self):
+        profile = oracle.STRONG_ENGINE_HCAP_V1
+        metadata = oracle.profile_metadata(profile)
+        argv = oracle.oracle_argv(Path("oracle"), profile, solve_path=Path("positions.txt"), child_query=True)
+
+        self.assertEqual(metadata["name"], "strong-engine-hcap-v1")
+        self.assertEqual(metadata["candidate"]["exact_solver_empty_squares"], 16)
+        self.assertEqual(
+            argv,
+            ["oracle", "-nobook", "-thread", "1", "-hash", "25",
+             "-depthprobrange", "2", "42", "8", "100",
+             "-depthprobrange", "43", "60", "12", "100", "-solve", "positions.txt"],
+        )
+
+    def test_profile_rejects_modified_range_and_selects_decision_position_boundary(self):
+        malformed = oracle.OracleProfile(
+            "strong-engine-hcap-v1", 25,
+            (oracle.DepthProbabilityRange(1, 41, 8, "99"),), 12, 16,
+        )
+        with self.assertRaises(oracle.OracleError):
+            oracle.validate_profile(malformed)
+        self.assertEqual(oracle.profile_depth_at(oracle.STRONG_ENGINE_HCAP_V1, 44), 8)
+        self.assertEqual(oracle.profile_depth_at(oracle.STRONG_ENGINE_HCAP_V1, 45), 12)
+
     def test_parse_solve_output_is_strict_and_normalizes_metrics(self):
         output = "\n".join(
             [
                 "| Level | Depth | Move | Score | Time | Nodes | NPS |",
-                "| 8 | 8@100% | d3 | +4 | 000:00:01.234 | 42 | 34 |",
+                "| custom | 8@100% | d3 | +4 | 000:00:01.234 | 42 | 34 |",
                 "total 42 nodes in 1.234s NPS 34",
             ]
         )
 
-        result = oracle.parse_solve_output(output, [8], expected_level=8)
+        result = oracle.parse_solve_output(output, [8], oracle.STRONG_ENGINE_HCAP_V1)
 
         self.assertEqual(
             result,
@@ -80,24 +104,24 @@ class OracleHarnessTests(unittest.TestCase):
         )
 
         with self.assertRaises(oracle.OracleError):
-            oracle.parse_solve_output(output, [1], expected_level=8)
+            oracle.parse_solve_output(output, [1], oracle.STRONG_ENGINE_HCAP_V1)
 
     def test_table_header_is_required_and_unique(self):
-        row = "| 8 | 8@100% | d3 | +4 | 000:00:01.234 | 42 | 34 |"
+        row = "| custom | 8@100% | d3 | +4 | 000:00:01.234 | 42 | 34 |"
         summary = "total 42 nodes in 1.234s NPS 34"
 
         with self.assertRaises(oracle.OracleError):
-            oracle.parse_solve_output(f"{row}\n{summary}", [8], expected_level=8)
+            oracle.parse_solve_output(f"{row}\n{summary}", [8], oracle.STRONG_ENGINE_HCAP_V1)
 
         duplicate_header = "| Level | Depth | Move | Score | Time | Nodes | NPS |"
         with self.assertRaises(oracle.OracleError):
             oracle.parse_solve_output(
                 f"{duplicate_header}\n{duplicate_header}\n{row}\n{summary}",
                 [8],
-                expected_level=8,
+                oracle.STRONG_ENGINE_HCAP_V1,
             )
 
-    def test_solve_level_mismatch_fails_closed(self):
+    def test_legacy_numeric_level_fails_closed_for_a_profile(self):
         output = "\n".join(
             [
                 "| Level | Depth | Move | Score | Time | Nodes | NPS |",
@@ -106,20 +130,19 @@ class OracleHarnessTests(unittest.TestCase):
         )
 
         with self.assertRaises(oracle.OracleError):
-            oracle.parse_solve_output(output, [8], expected_level=8)
+            oracle.parse_solve_output(output, [8], oracle.STRONG_ENGINE_HCAP_V1)
 
-    def test_exact_depth_does_not_require_full_mpc_probability(self):
+    def test_custom_profile_requires_full_mpc_probability(self):
         output = "\n".join(
             [
                 "| Level | Depth | Move | Score | Time | Nodes | NPS |",
-                "| 8 | 8@50% | d3 | +4 | 000:00:01.234 | 42 | 34 |",
+                "| custom | 8@50% | d3 | +4 | 000:00:01.234 | 42 | 34 |",
                 "total 42 nodes in 1.234s NPS 34",
             ]
         )
 
-        result = oracle.parse_solve_output(output, [8], expected_level=8)
-
-        self.assertTrue(result[0]["exact"])
+        with self.assertRaises(oracle.OracleError):
+            oracle.parse_solve_output(output, [8], oracle.STRONG_ENGINE_HCAP_V1)
 
     def test_malformed_summary_fails_closed(self):
         output = "\n".join(
@@ -131,7 +154,7 @@ class OracleHarnessTests(unittest.TestCase):
         )
 
         with self.assertRaises(oracle.OracleError):
-            oracle.parse_solve_output(output, [8], expected_level=8)
+            oracle.parse_solve_output(output, [8], oracle.CI_SMOKE_V1)
 
     def test_missing_or_duplicate_summary_fails_closed(self):
         table = "\n".join(
@@ -142,27 +165,27 @@ class OracleHarnessTests(unittest.TestCase):
         )
 
         with self.assertRaises(oracle.OracleError):
-            oracle.parse_solve_output(table, [8], expected_level=8)
+            oracle.parse_solve_output(table, [8], oracle.CI_SMOKE_V1)
 
         with self.assertRaises(oracle.OracleError):
             oracle.parse_solve_output(
                 table + "\ntotal 42 nodes in 1.234s NPS 34\ntotal 42 nodes in 1.234s NPS 34",
                 [8],
-                expected_level=8,
+                oracle.CI_SMOKE_V1,
             )
 
         with self.assertRaises(oracle.OracleError):
             oracle.parse_solve_output(
                 table + "\ntotal 0 nodes in 0s NPS 0",
                 [8],
-                expected_level=8,
+                oracle.CI_SMOKE_V1,
             )
 
         with self.assertRaises(oracle.OracleError):
             oracle.parse_solve_output(
                 table + "\ntotal 42 nodes in 1.234s NPS 34\n" + table.splitlines()[1],
                 [8],
-                expected_level=8,
+                oracle.CI_SMOKE_V1,
             )
 
     def test_non_finite_timeout_fails_closed(self):
@@ -189,7 +212,7 @@ class OracleHarnessTests(unittest.TestCase):
         )
 
         with self.assertRaises(oracle.OracleError):
-            oracle.parse_solve_output(output, [8], expected_level=8)
+            oracle.parse_solve_output(output, [8], oracle.CI_SMOKE_V1)
 
     def test_golden_projection_removes_only_machine_dependent_elapsed_time(self):
         reports = [
@@ -240,7 +263,7 @@ class OracleHarnessTests(unittest.TestCase):
             [record],
             fixture,
             fixture.parent,
-            level=8,
+            profile=oracle.CI_SMOKE_V1,
             timeout=5,
             candidate_command=command,
         )

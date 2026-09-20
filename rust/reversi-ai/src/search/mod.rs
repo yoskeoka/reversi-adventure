@@ -95,9 +95,6 @@ pub struct SearchEngine {
 
 const SEARCH_SEMANTICS_VERSION: u64 = 1;
 
-/// Maximum number of empty squares solved exactly for every evaluator.
-pub const ENDGAME_SOLVER_EMPTY_SQUARES: u32 = 12;
-
 fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(evaluator: &E, config: &AiConfig) -> u64 {
     stable_context_fingerprint(&[
         SEARCH_SEMANTICS_VERSION,
@@ -134,7 +131,7 @@ impl SearchEngine {
         let stone_count = board.count(Color::Black) + board.count(Color::White);
         let max_depth = config.depth_for_phase(stone_count);
 
-        if board.empty_cells().count_ones() <= ENDGAME_SOLVER_EMPTY_SQUARES {
+        if board.empty_cells().count_ones() <= config.exact_solver_empty_squares {
             let mut nodes_searched = 0;
             let completed =
                 EndgameSolver::new(&self.zobrist, &mut nodes_searched).solve(board, color, budget);

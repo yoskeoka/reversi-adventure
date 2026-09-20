@@ -86,12 +86,15 @@ struct AiConfig {
     opening_depth: u8,    // stone count 4-20
     midgame_depth: u8,    // stone count 21-44
     endgame_depth: u8,    // stone count 45-64
+    exact_solver_empty_squares: u32,
 }
 ```
 
-`ENDGAME_SOLVER_EMPTY_SQUARES` is the common exact-solver threshold. It is
-initially `12`: when the board has at most that many empty squares, every
-evaluator is bypassed and the engine attempts a complete endgame solve.
+`exact_solver_empty_squares` is the exact-solver start threshold. When the
+decision position has at most this many empty squares, every evaluator is
+bypassed and the engine attempts a complete final-disc solve. It is not an
+endgame search depth. The default remains `12`; the named
+`strong-engine-hcap-v1` candidate profile uses `16`.
 
 - `AiConfig::depth_for_phase(stone_count: u32)` — Returns the appropriate depth based on stone count.
 
@@ -253,9 +256,9 @@ enum SearchOutcome {
 
 ### Exact endgame solving
 
-- At or below `ENDGAME_SOLVER_EMPTY_SQUARES`, `SearchEngine` uses the shared,
-  evaluator-independent endgame solver instead of heuristic iterative
-  deepening. The initial supported threshold is 12 empty squares.
+- At or below `AiConfig::exact_solver_empty_squares`, `SearchEngine` uses the
+  shared, evaluator-independent endgame solver instead of heuristic iterative
+  deepening. The default threshold is 12 empty squares.
 - A completed endgame result has `exact = true`, its `score` is the final disc
   differential from the root side's perspective, and its PV contains only
   played positions (a pass is represented by `SearchOutcome::Pass`, never by a
@@ -386,6 +389,37 @@ derived from the verified archive rather than from a mutable cache manifest;
 the executable is rebuilt from that verified source before use. The adapter
 must not pass the oracle's ignored time-limit option; the wrapper process
 timeout is the only wall-clock safety limit.
+
+### Versioned strength profiles
+
+`strong-engine-hcap-v1` is the reproducible calibration profile. Every oracle
+analysis and match report serializes the complete profile object alongside the
+pinned source digest. It fixes Egaroucid Console v7.8.1, source digest,
+bookless operation, one thread, hash level 25, no evaluation override, and no
+oracle time-control argument. A subprocess timeout is only a safety failure
+boundary, never a fairness budget.
+
+Its Egaroucid fixed-depth, 100%-probability ranges are move numbers 1--41 at
+depth 8 and 42--60 at depth 12. An Egaroucid move number is `occupied_discs -
+3` in the decision position before the move, so the latter range starts at 45
+occupied discs. The adapter must reject a legacy numeric-level response when a
+custom-depth response is required, and must reject any mismatch of the profile,
+source, book/eval setting, hash/thread setting, corpus, or report metadata.
+
+The candidate half of `strong-engine-hcap-v1` uses heuristic depth 12 for every
+non-exact decision position (including the opening and the 17--19-empty-square
+interval), starts exact solving at at most 16 empty squares, and accepts a
+caller-owned monotonic deadline. An optional node ceiling is a deterministic
+tuning or CI limit, not the production fairness budget. Interrupted exact
+searches retain only a legal fallback or wholly completed result, with
+`exact = false` and no partial exact score/PV.
+
+The profile is a calibration baseline, not proof of the final strength target.
+That target must be evaluated separately on a declared held-out,
+color-swapped, opening-rotated suite and report `wins / all games >= 0.50`
+separately from match points (where a draw is 0.5), with a sample-size and
+confidence rule. `ci-smoke-v1` remains a distinct small, bounded profile and
+cannot be used to assert calibration or final strength.
 
 ## GDScript Bridge Additions
 
