@@ -66,6 +66,7 @@ struct AiConfig {
     opening_depth: u8,    // stone count 0-20
     midgame_depth: u8,    // stone count 21-44
     endgame_depth: u8,    // stone count 45-64
+    exact_solver_empty_squares: u32, // complete final-disc solving threshold
 }
 ```
 
@@ -132,9 +133,13 @@ Simple hash map storing: best move, score, depth, bound type (exact/lower/upper)
 
 Board is two `u64` values (16 bytes). Copy per search node — negligible cost compared to evaluation. No mutate+unmake needed. Simpler and less bug-prone.
 
-### Phase Detection
+### Phase Detection and exact-solving threshold
 
 Count total pieces on board. Map to opening (0-20), midgame (21-44), endgame (45-64). Use corresponding depth from AiConfig.
+
+`endgame_depth` remains the heuristic search depth for the ordinary 45--64
+stone phase. It does not name the point at which exact solving begins. That
+separate, decision-position threshold is `exact_solver_empty_squares`.
 
 ## Evaluator Implementations
 

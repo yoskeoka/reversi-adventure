@@ -49,4 +49,4 @@ jobs:
           key: reversi-adventure-egaroucid-${{ runner.os }}-${{ runner.arch }}-7.8.1-${{ hashFiles('tools/reversi-ai-oracle/oracle.py') }}
 
       - name: Verify oracle harness and compare project AI against oracle
-        run: make oracle-ci ORACLE_LEVEL=8 ORACLE_TIMEOUT=300 ORACLE_MATCH_LEVEL=2 ORACLE_MATCH_TIMEOUT=60
+        run: make oracle-ci ORACLE_PROFILE=ci-smoke-v1 ORACLE_TIMEOUT=300 ORACLE_MATCH_TIMEOUT=60

@@ -22,7 +22,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 
 ORACLE_VERSION = "7.8.1"
@@ -31,7 +31,6 @@ SOURCE_URL = (
     f"v{ORACLE_VERSION}.tar.gz"
 )
 SOURCE_SHA256 = "173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b"
-DEFAULT_LEVEL = 8
 DEFAULT_TIMEOUT_SECONDS = 300.0
 HEADER = ["Level", "Depth", "Move", "Score", "Time", "Nodes", "NPS"]
 SUMMARY_RE = re.compile(
@@ -45,6 +44,127 @@ BOARD_RE = re.compile(r"^[BW.]{64}$")
 
 class OracleError(RuntimeError):
     """A fail-closed adapter error suitable for command-line reporting."""
+
+
+class DepthProbabilityRange(NamedTuple):
+    move_start: int
+    move_end: int
+    depth: int
+    probability: str
+
+
+class OracleProfile(NamedTuple):
+    name: str
+    hash_level: int
+    depth_ranges: tuple[DepthProbabilityRange, ...]
+    candidate_depth: int
+    candidate_exact_solver_empty_squares: int
+    legacy_level: int | None = None
+
+
+CI_SMOKE_V1 = OracleProfile(
+    name="ci-smoke-v1",
+    hash_level=25,
+    depth_ranges=(),
+    candidate_depth=2,
+    candidate_exact_solver_empty_squares=12,
+    legacy_level=8,
+)
+STRONG_ENGINE_HCAP_V1 = OracleProfile(
+    name="strong-engine-hcap-v1",
+    hash_level=25,
+    depth_ranges=(
+        DepthProbabilityRange(1, 41, 8, "100"),
+        DepthProbabilityRange(42, 60, 12, "100"),
+    ),
+    candidate_depth=12,
+    candidate_exact_solver_empty_squares=16,
+)
+PROFILES = {profile.name: profile for profile in (CI_SMOKE_V1, STRONG_ENGINE_HCAP_V1)}
+
+
+def validate_profile(profile: OracleProfile) -> None:
+    if profile.name not in PROFILES or PROFILES[profile.name] != profile:
+        die(f"unknown or modified oracle profile: {profile.name!r}")
+    if profile.hash_level != 25 or profile.candidate_depth < 1:
+        die(f"invalid oracle profile: {profile.name!r}")
+    if profile.legacy_level is not None:
+        if profile.depth_ranges or not (1 <= profile.legacy_level <= 60):
+            die(f"invalid legacy oracle profile: {profile.name!r}")
+        return
+    previous_end = 0
+    for item in profile.depth_ranges:
+        if not (1 <= item.move_start <= item.move_end <= 60):
+            die(f"invalid depth range in profile {profile.name!r}")
+        if item.move_start <= previous_end or not (1 <= item.depth <= 60):
+            die(f"overlapping or invalid depth range in profile {profile.name!r}")
+        if item.probability != "100":
+            die(f"profile {profile.name!r} must use 100% probability")
+        previous_end = item.move_end
+
+
+def profile_from_name(name: str) -> OracleProfile:
+    profile = PROFILES.get(name)
+    if profile is None:
+        die(f"unknown oracle profile: {name!r}")
+    validate_profile(profile)
+    return profile
+
+
+def profile_metadata(profile: OracleProfile) -> dict[str, object]:
+    validate_profile(profile)
+    return {
+        "name": profile.name,
+        "oracle": {
+            "name": "Egaroucid for Console",
+            "version": ORACLE_VERSION,
+            "source_url": SOURCE_URL,
+            "source_sha256": SOURCE_SHA256,
+            "book": False,
+            "threads": 1,
+            "hash_level": profile.hash_level,
+            "evaluation_override": False,
+            "depth_probability_ranges": [
+                {"move_start": item.move_start, "move_end": item.move_end,
+                 "depth": item.depth, "probability": item.probability}
+                for item in profile.depth_ranges
+            ],
+            "legacy_level": profile.legacy_level,
+        },
+        "candidate": {
+            "heuristic_depth": profile.candidate_depth,
+            "exact_solver_empty_squares": profile.candidate_exact_solver_empty_squares,
+        },
+    }
+
+
+def profile_depth_at(profile: OracleProfile, occupied_discs: int) -> int:
+    validate_profile(profile)
+    if profile.legacy_level is not None:
+        return 60
+    move_number = occupied_discs - 3
+    for item in profile.depth_ranges:
+        if item.move_start <= move_number <= item.move_end:
+            return item.depth
+    die(f"profile {profile.name!r} has no depth for decision move {move_number}")
+
+
+def oracle_argv(binary: Path, profile: OracleProfile, *, solve_path: Path | None = None,
+               child_query: bool = False, gtp: bool = False) -> list[str]:
+    validate_profile(profile)
+    argv = [str(binary), "-nobook", "-thread", "1", "-hash", str(profile.hash_level)]
+    if profile.legacy_level is not None:
+        argv.extend(["-level", str(profile.legacy_level)])
+    for item in profile.depth_ranges:
+        start = item.move_start + (1 if child_query else 0)
+        end = min(item.move_end + (1 if child_query else 0), 60)
+        if start <= end:
+            argv.extend(["-depthprobrange", str(start), str(end), str(item.depth), item.probability])
+    if gtp:
+        argv.extend(["-gtp", "-quiet"])
+    if solve_path is not None:
+        argv.extend(["-solve", str(solve_path)])
+    return argv
 
 
 def die(message: str) -> NoReturn:
@@ -620,8 +740,9 @@ def parse_depth(value: str) -> tuple[int, float]:
 
 
 def parse_solve_output(
-    output: str, required_depths: list[int], expected_level: int
+    output: str, required_depths: list[int], expected_profile: OracleProfile
 ) -> list[dict[str, object]]:
+    validate_profile(expected_profile)
     rows: list[dict[str, object]] = []
     header_seen = False
     summary_seen = False
@@ -665,11 +786,13 @@ def parse_solve_output(
             die(f"unexpected Egaroucid move: {move!r}")
         if not re.fullmatch(r"[+-]?\d+", score):
             die(f"unexpected Egaroucid score: {score!r}")
-        if not re.fullmatch(r"\d+", level):
-            die(f"unexpected Egaroucid level: {level!r}")
-        if int(level) != expected_level:
-            die(f"Egaroucid returned level {level}, expected {expected_level}")
-        completed_depth, _probability = parse_depth(depth)
+        if expected_profile.legacy_level is None and level != "custom":
+            die(f"Egaroucid returned level {level!r}, expected custom profile output")
+        if expected_profile.legacy_level is not None and level != str(expected_profile.legacy_level):
+            die(f"Egaroucid returned level {level!r}, expected {expected_profile.legacy_level}")
+        completed_depth, probability = parse_depth(depth)
+        if expected_profile.legacy_level is None and probability != 100:
+            die(f"Egaroucid custom profile did not report 100% probability: {depth!r}")
         if not re.fullmatch(r"\d+", nodes) or not re.fullmatch(r"\d+", nps):
             die(f"unexpected Egaroucid node count: {nodes!r}, {nps!r}")
         rows.append(
@@ -732,10 +855,13 @@ def run_solve(
     queries: list[tuple[str, str]],
     binary: Path,
     cwd: Path,
-    level: int,
+    profile: OracleProfile,
     timeout: float,
+    *,
+    child_query: bool,
 ) -> list[dict[str, object]]:
-    validate_budget(level, timeout)
+    validate_profile(profile)
+    validate_budget(1, timeout)
     if not queries:
         return []
     with tempfile.NamedTemporaryFile(
@@ -748,23 +874,14 @@ def run_solve(
             problem.write(to_egaroucid_problem(board, side) + "\n")
     try:
         result = run_external(
-            [
-                str(binary),
-                "-level",
-                str(level),
-                "-thread",
-                "1",
-                "-nobook",
-                "-solve",
-                str(problem_path),
-            ],
+            oracle_argv(binary, profile, solve_path=problem_path, child_query=child_query),
             cwd=cwd,
             timeout=timeout,
         )
         # Egaroucid's pinned search decrements depth for placements but not
         # for a forced pass, so empty squares are its remaining exact depth.
-        required_depths = [board.count(".") for board, _ in queries]
-        rows = parse_solve_output(result.stdout, required_depths, level)
+        required_depths = [min(board.count("."), profile_depth_at(profile, board.count("B") + board.count("W") - (1 if child_query else 0))) for board, _ in queries]
+        rows = parse_solve_output(result.stdout, required_depths, profile)
         for (board, side), row in zip(queries, rows):
             if str(row["move"]) not in legal_moves(board, side):
                 die(f"Egaroucid returned an illegal continuation move for {side}: {row['move']!r}")
@@ -894,10 +1011,11 @@ def analyze_records(
     records: list[dict[str, object]],
     binary: Path,
     cwd: Path,
-    level: int,
+    profile: OracleProfile,
     timeout: float,
     candidate_command: str | None,
 ) -> list[dict[str, object]]:
+    validate_profile(profile)
     candidate = (
         CandidateSession(candidate_command, repo_root(), timeout) if candidate_command else None
     )
@@ -910,8 +1028,10 @@ def analyze_records(
                     position_id, str(record["board"]), str(record["side_to_move"])
                 )
 
-        queries: list[tuple[str, str]] = []
-        query_meta: list[tuple[str, int, str, int]] = []
+        child_queries: list[tuple[str, str]] = []
+        child_meta: list[tuple[str, int, str, int]] = []
+        pass_queries: list[tuple[str, str]] = []
+        pass_meta: list[tuple[str, int, str, int]] = []
         evaluations_by_position: dict[str, list[dict[str, object] | None]] = {}
         for record in records:
             board = str(record["board"])
@@ -937,24 +1057,27 @@ def analyze_records(
                         }
                         continue
                     effective_side, sign = effective_query(child, child_side)
-                    queries.append((child, effective_side))
-                    query_meta.append((position_id, move_index, str(move), -sign))
+                    child_queries.append((child, effective_side))
+                    child_meta.append((position_id, move_index, str(move), -sign))
             elif record["outcome"]["kind"] == "Pass":
                 effective_side, sign = effective_query(board, side)
-                queries.append((board, effective_side))
-                query_meta.append((position_id, 0, "pass", sign))
+                pass_queries.append((board, effective_side))
+                pass_meta.append((position_id, 0, "pass", sign))
 
-        raw_results = run_solve(queries, binary, cwd, level, timeout)
-        for (position_id, move_index, move, sign), raw in zip(query_meta, raw_results):
-            evaluation = {
-                "move": move,
-                "value": sign * int(raw["value"]),
-                "completed_depth": raw["completed_depth"],
-                "nodes": raw["nodes"],
-                "elapsed_ms": raw["elapsed_ms"],
-                "exact": raw["exact"],
-            }
-            evaluations_by_position[position_id][move_index] = evaluation
+        for query_meta, raw_results in (
+            (child_meta, run_solve(child_queries, binary, cwd, profile, timeout, child_query=True)),
+            (pass_meta, run_solve(pass_queries, binary, cwd, profile, timeout, child_query=False)),
+        ):
+            for (position_id, move_index, move, sign), raw in zip(query_meta, raw_results):
+                evaluation = {
+                    "move": move,
+                    "value": sign * int(raw["value"]),
+                    "completed_depth": raw["completed_depth"],
+                    "nodes": raw["nodes"],
+                    "elapsed_ms": raw["elapsed_ms"],
+                    "exact": raw["exact"],
+                }
+                evaluations_by_position[position_id][move_index] = evaluation
 
         reports: list[dict[str, object]] = []
         for record in records:
@@ -1035,15 +1158,7 @@ def analyze_records(
                     "legal_moves": legal,
                     "outcome": record["outcome"],
                     "provenance": record["provenance"],
-                    "oracle": {
-                        "name": "Egaroucid for Console",
-                        "version": ORACLE_VERSION,
-                        "source_url": SOURCE_URL,
-                        "source_sha256": SOURCE_SHA256,
-                        "level": level,
-                        "book": False,
-                        "threads": 1,
-                    },
+                    "profile": profile_metadata(profile),
                     "analysis": analysis,
                 }
             )
@@ -1063,19 +1178,11 @@ def golden_projection(reports: list[dict[str, object]]) -> list[dict[str, object
 
 
 class GtpSession:
-    def __init__(self, binary: Path, cwd: Path, level: int, timeout: float) -> None:
+    def __init__(self, binary: Path, cwd: Path, profile: OracleProfile, timeout: float) -> None:
+        validate_profile(profile)
         try:
             self.process = subprocess.Popen(
-                [
-                    str(binary),
-                    "-gtp",
-                    "-quiet",
-                    "-nobook",
-                    "-thread",
-                    "1",
-                    "-level",
-                    str(level),
-                ],
+                oracle_argv(binary, profile, gtp=True),
                 cwd=cwd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -1163,17 +1270,18 @@ def run_match(
     cwd: Path,
     candidate_command: str,
     games: int,
-    level: int,
+    profile: OracleProfile,
     timeout: float,
 ) -> dict[str, object]:
-    validate_budget(level, timeout)
+    validate_profile(profile)
+    validate_budget(1, timeout)
     if games < 1:
         die("match requires at least one game")
     candidate = CandidateSession(candidate_command, repo_root(), timeout)
     game_reports: list[dict[str, object]] = []
     try:
         for game_index in range(games):
-            oracle = GtpSession(binary, cwd, level, timeout)
+            oracle = GtpSession(binary, cwd, profile, timeout)
             try:
                 board = "".join("........" for _ in range(8))
                 cells = list(board)
@@ -1260,15 +1368,7 @@ def run_match(
         counts[str(report["result"])] += 1
     return {
         "schema_version": 1,
-        "oracle": {
-            "name": "Egaroucid for Console",
-            "version": ORACLE_VERSION,
-            "source_url": SOURCE_URL,
-            "source_sha256": SOURCE_SHA256,
-            "level": level,
-            "book": False,
-            "threads": 1,
-        },
+        "profile": profile_metadata(profile),
         "games": games,
         "summary": counts,
         "results": game_reports,
@@ -1294,37 +1394,36 @@ def command_main(argv: list[str]) -> int:
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("--corpus", type=Path, default=default_paths()[0])
     analyze.add_argument("--output", type=Path, required=True)
-    analyze.add_argument("--level", type=int, default=DEFAULT_LEVEL)
+    analyze.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     analyze.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     analyze.add_argument("--candidate-command")
 
     golden = subparsers.add_parser("generate-golden")
     golden.add_argument("--corpus", type=Path, default=default_paths()[0])
     golden.add_argument("--output", type=Path, default=default_paths()[1])
-    golden.add_argument("--level", type=int, default=DEFAULT_LEVEL)
+    golden.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     golden.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
 
     verify = subparsers.add_parser("verify")
     verify.add_argument("--corpus", type=Path, default=default_paths()[0])
     verify.add_argument("--golden", type=Path, default=default_paths()[1])
-    verify.add_argument("--level", type=int, default=DEFAULT_LEVEL)
+    verify.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     verify.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
 
     match = subparsers.add_parser("match")
     match.add_argument("--candidate-command", required=True)
     match.add_argument("--games", type=int, default=2)
-    match.add_argument("--level", type=int, default=DEFAULT_LEVEL)
+    match.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     match.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     match.add_argument("--output", type=Path)
 
     ci = subparsers.add_parser("ci")
     ci.add_argument("--corpus", type=Path, default=default_paths()[0])
     ci.add_argument("--golden", type=Path, default=default_paths()[1])
-    ci.add_argument("--level", type=int, default=DEFAULT_LEVEL)
+    ci.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     ci.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     ci.add_argument("--candidate-command", required=True)
     ci.add_argument("--games", type=int, default=2)
-    ci.add_argument("--match-level", type=int, default=DEFAULT_LEVEL)
     ci.add_argument("--match-timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     ci.add_argument("--match-output", type=Path)
 
@@ -1338,11 +1437,12 @@ def command_main(argv: list[str]) -> int:
             return 0
 
         if args.command == "verify":
-            validate_budget(args.level, args.timeout)
+            profile = profile_from_name(args.profile)
+            validate_budget(1, args.timeout)
             records = load_jsonl(args.corpus)
             validate_corpus(records)
             binary, cwd = ensure_oracle(args.timeout)
-            reports = analyze_records(records, binary, cwd, args.level, args.timeout, None)
+            reports = analyze_records(records, binary, cwd, profile, args.timeout, None)
             actual = golden_projection(reports)
             expected = load_jsonl(args.golden)
             if [canonical_json(item) for item in actual] != [canonical_json(item) for item in expected]:
@@ -1351,32 +1451,35 @@ def command_main(argv: list[str]) -> int:
             return 0
 
         if args.command == "generate-golden":
-            validate_budget(args.level, args.timeout)
+            profile = profile_from_name(args.profile)
+            validate_budget(1, args.timeout)
             records = load_jsonl(args.corpus)
             validate_corpus(records)
             binary, cwd = ensure_oracle(args.timeout)
-            reports = analyze_records(records, binary, cwd, args.level, args.timeout, None)
+            reports = analyze_records(records, binary, cwd, profile, args.timeout, None)
             write_jsonl(args.output, golden_projection(reports))
             print(f"wrote {len(reports)} golden oracle reports to {args.output}")
             return 0
 
         if args.command == "analyze":
-            validate_budget(args.level, args.timeout)
+            profile = profile_from_name(args.profile)
+            validate_budget(1, args.timeout)
             records = load_jsonl(args.corpus)
             validate_corpus(records)
             binary, cwd = ensure_oracle(args.timeout)
             reports = analyze_records(
-                records, binary, cwd, args.level, args.timeout, args.candidate_command
+                records, binary, cwd, profile, args.timeout, args.candidate_command
             )
             write_jsonl(args.output, reports)
             print(f"wrote {len(reports)} oracle reports to {args.output}")
             return 0
 
         if args.command == "match":
-            validate_budget(args.level, args.timeout)
+            profile = profile_from_name(args.profile)
+            validate_budget(1, args.timeout)
             binary, cwd = ensure_oracle(args.timeout)
             summary = run_match(
-                binary, cwd, args.candidate_command, args.games, args.level, args.timeout
+                binary, cwd, args.candidate_command, args.games, profile, args.timeout
             )
             output = canonical_json(summary)
             if args.output:
@@ -1386,12 +1489,13 @@ def command_main(argv: list[str]) -> int:
             return 0
 
         if args.command == "ci":
-            validate_budget(args.level, args.timeout)
-            validate_budget(args.match_level, args.match_timeout)
+            profile = profile_from_name(args.profile)
+            validate_budget(1, args.timeout)
+            validate_budget(1, args.match_timeout)
             records = load_jsonl(args.corpus)
             validate_corpus(records)
             binary, cwd = ensure_oracle(max(args.timeout, args.match_timeout))
-            reports = analyze_records(records, binary, cwd, args.level, args.timeout, None)
+            reports = analyze_records(records, binary, cwd, profile, args.timeout, None)
             actual = golden_projection(reports)
             expected = load_jsonl(args.golden)
             if [canonical_json(item) for item in actual] != [canonical_json(item) for item in expected]:
@@ -1402,7 +1506,7 @@ def command_main(argv: list[str]) -> int:
                 cwd,
                 args.candidate_command,
                 args.games,
-                args.match_level,
+                profile,
                 args.match_timeout,
             )
             output = canonical_json(summary)
