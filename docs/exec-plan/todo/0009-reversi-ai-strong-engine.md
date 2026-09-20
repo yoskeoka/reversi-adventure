@@ -46,14 +46,21 @@ child plans and measured by the shared oracle and endgame foundations.
   midgame search depth 12 with complete solving beginning at 16 empty squares.
   It deliberately distinguishes those terms from the ordinary opening,
   midgame, and late-game turn ranges.
-- Independently implement phase/pattern evaluation and reproducible training
-  artifacts.
-- Improve conventional-engine reading depth through time-bounded search,
-  ordering, caching, and the shared exact endgame solver.
-- Define whether an opening book is needed and, if so, its provenance and
-  licensing before integration.
-- Establish held-out oracle regret and balanced-game evidence for each strength
-  preset, including a high-strength preset.
+- `0012-reversi-ai-pattern-evaluator-contract.md` defines the project-owned
+  feature, phase, symmetry, artifact-identity, and explanation boundary.
+- `0013-reversi-ai-pattern-training.md` makes the data, split, optimizer, and
+  validation evidence reproducible before runtime integration.
+- `0014-reversi-ai-trained-evaluator-runtime.md` integrates only validated
+  project-owned artifacts into the Rust evaluator and its TT identity.
+- `0015-reversi-ai-search-acceleration.md` improves conventional search from a
+  fixed baseline while preserving every budget and exactness guarantee.
+- `0016-reversi-ai-exact-solver-16.md` separately proves the 16-empty-square
+  exact-solver threshold or retains 12 with evidence.
+- `0017-reversi-ai-opening-book-policy.md` decides book adoption, provenance,
+  and licensing; it does not make the bookless acceptance profile conditional.
+- `0018-reversi-ai-strong-engine-acceptance.md` freezes the profile, runs the
+  held-out color-balanced suite, and decides the `wins / all games >= 0.50`
+  target without tuning on its fixtures.
 
 ## Verification
 
