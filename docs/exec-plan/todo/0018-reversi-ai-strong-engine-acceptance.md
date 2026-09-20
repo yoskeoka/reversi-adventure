@@ -32,10 +32,11 @@ during the held-out run or claim parity with unrestricted world-class engines.
 
 ## Black-box contract and work
 
-1. Freeze source commit, candidate artifact/config, accepted book artifact (or
-   an explicit bookless declaration), `strong-engine-hcap-v1`, opening suite
-   digest, suite seed, hardware/resource declaration, and report schema before
-   the first held-out game.
+1. Freeze source commit, candidate weight artifact, all `AiConfig` reading
+   depths and exact-solver threshold, accepted book artifact and `--book` mode
+   (or an explicit bookless declaration), `strong-engine-hcap-v1`, opening
+   suite digest, suite seed, hardware/resource declaration, and report schema
+   before the first held-out game.
 2. Use legal, diverse opening prefixes; pair each with reversed colors and
    symmetry rotations where applicable. No opening used for tuning may enter
    this suite.

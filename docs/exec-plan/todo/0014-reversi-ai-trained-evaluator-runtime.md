@@ -7,9 +7,10 @@
 Make a validated project-owned pattern artifact available to `reversi-ai` as a
 fast, independently applicable `TrainedEvaluator`. Completion includes safe
 loading or build-owned embedding, plus selection from the existing oracle
-candidate CLI protocol. It excludes training changes, search tuning,
-Godot/product selection, and every explanatory or independent/strategic-
-evaluator integration.
+candidate CLI protocol. Its caller-selected reading depths and exact-solver
+threshold remain adjustable through `AiConfig`. It excludes training changes,
+search tuning, Godot/product selection, opening-book integration, and every
+explanatory or independent/strategic-evaluator integration.
 
 ## Existing references
 
@@ -29,7 +30,8 @@ evaluator integration.
   select it with an explicit artifact path for oracle evaluation. The trained
   CLI path uses `SearchEngine` directly rather than `AiPlayer`, whose generic
   explanation method is outside this plan. Preserve the existing long-lived
-  stdin/stdout move protocol and default difficulty.
+  stdin/stdout move protocol and expose the normal `AiConfig` depth and
+  exact-solver controls.
 - (NEW) build-owned generated/embed path only if artifact loading cannot meet
   release packaging constraints; never hand-edit generated output.
 
@@ -46,7 +48,17 @@ evaluator integration.
    constructs or exposes `AiPlayer::explain`. The trained evaluator supplies no
    human-factor attribution; product-facing explanation integration is deferred
    to game development through a separate plan.
-4. Measure memory, allocation, and single-thread evaluator speed before making
+4. In trained CLI mode, preserve adjustable `--opening-depth`,
+   `--midgame-depth`, `--endgame-depth`, and `--exact-solver-empty-squares`.
+   A named profile either supplies all of these values or rejects conflicting
+   explicit values; it never silently ignores a requested setting. The final
+   acceptance plan freezes and reports the chosen values.
+5. Opening-book selection is a separate, optional move-selection policy, not a
+   weight-artifact or evaluator parameter. The conditional 0017 integration
+   plan adds the trained CLI's explicit `--book off|PATH` control after an
+   accepted artifact exists. Until then, trained CLI mode is explicitly
+   bookless.
+6. Measure memory, allocation, and single-thread evaluator speed before making
    it eligible for a later high-strength preset.
 
 Depends on 0012 and 0013. Child 0018 consumes its reports.
@@ -58,6 +70,8 @@ Depends on 0012 and 0013. Child 0018 consumes its reports.
 - Artifact tamper/version/context-fingerprint/TT-isolation regressions.
 - Regression that trained CLI mode uses the evaluation-only search path and
   cannot emit a `MoveExplanation` or an `ExplainTag`.
+- CLI regressions for every adjustable `AiConfig` field and for profile/explicit
+  setting conflicts.
 - Corpus regret report under the 0011 profile, recorded as evidence only.
 - `git diff --check`.
 

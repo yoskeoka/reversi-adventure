@@ -39,6 +39,9 @@ external oracle book a product dependency.
    profile remains bookless.
 4. If accepted, book choice must be deterministic, legal, explainable as a
    book move, and fall back to the search engine on a miss or invalid record.
+   Its dedicated integration plan adds `--book off|PATH` to trained candidate
+   CLI mode, so oracle matches can explicitly compare book-enabled and
+   bookless configurations.
 
 Depends on 0011. It may investigate alongside 0012--0016. Any accepted book
 receives a dedicated integration child plan; its completed, frozen artifact is
