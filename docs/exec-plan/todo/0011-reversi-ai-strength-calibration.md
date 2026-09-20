@@ -42,6 +42,8 @@ new versioned profile with comparative evidence.
 - (MODIFY) `docs/specs/reversi-ai.md` -- define a versioned external-oracle
   strength profile, its report/match metadata, the distinct midgame-depth and
   exact-solver-threshold terms, and the held-out match acceptance vocabulary.
+- (MODIFY) `docs/design-decisions/2026-03-02-reversi-ai-design.md` -- replace
+  the ambiguous `endgame_depth` terminology where it means exact-solver start.
 - (MODIFY) `tools/reversi-ai-oracle/oracle.py` -- accept and validate a
   structured profile rather than raw option fragments; construct and parse the
   Egaroucid custom-depth invocation safely.
@@ -73,17 +75,20 @@ new versioned profile with comparative evidence.
    - no Egaroucid `-time`; process timeout remains a safety failure boundary,
      never a fairness budget.
 
-2. Map Egaroucid's move number (`occupied discs - 3`) explicitly. Thus the
-   second range begins at 45 occupied discs. The profile's 12 means a
-   complete-solve start at 12 remaining empty squares, not "12-ply endgame
-   search".
+2. Define every threshold against the decision position before its move. Map
+   Egaroucid's move number (`occupied discs - 3`) against that board: the
+   second range begins at 45 occupied discs. The profile's 12 means complete
+   solving starts when the decision position has at most 12 empty squares.
+   This is a threshold, not a 12-ply heuristic search.
 
-3. Define the candidate profile independently: project midgame heuristic
-   search depth 12; exact solver starts at at most 16 empty squares; caller
+3. Define the candidate profile independently: heuristic depth 12 for every
+   non-exact decision position, including opening and the 17--19-empty-square
+   late-game interval; exact solver starts at at most 16 empty squares; caller
    owned monotonic deadline is the production budget; fixed node ceilings are
-   optional deterministic tuning/CI limits. A later child may improve either
-   implementation, but it must preserve this profile's identity or publish a
-   new version.
+   optional deterministic tuning/CI limits. The profile calls out its
+   midgame-depth target while fully declaring match behavior. A later child may
+   improve either implementation, but it must preserve this profile's identity
+   or publish a new version.
 
 4. A run must fail closed when its profile, source digest, book/eval artifact,
    hash/thread setting, custom-depth response, corpus, or report metadata does
@@ -105,9 +110,12 @@ new versioned profile with comparative evidence.
    harness. Keep arbitrary Egaroucid argv, external book/eval files, multiple
    threads, and time-control modes outside the profile contract.
 3. Extend `-solve` and GTP match process construction to use the profile's
-   fixed-depth ranges. Adapt parsing for Egaroucid's custom-depth response and
-   include the profile in golden/report projections without admitting
-   machine-time drift.
+   fixed-depth ranges. Bind each range to the decision position before a move.
+   Because `-solve` receives child positions for root-move analysis, batch or
+   dispatch its calls with the corresponding shifted profile; for GTP, restart
+   and replay legal history when a profile transition is needed. Cover forced
+   passes. Adapt parsing for Egaroucid's custom-depth response and include the
+   profile in golden/report projections without admitting machine-time drift.
 4. Add project CLI/config support necessary to run the candidate profile and
    prove that its 16-empty-square exact solver obeys its `SearchBudget`. Do
    not silently convert a timeout into a partial exact result.
@@ -130,7 +138,8 @@ after step 1 but cannot claim this profile until its verification passes.
 - Run the existing corpus/golden verification and prove that legacy level-only
   profiles remain compatible or are explicitly versioned/migrated.
 - Run profile fixture tests at occupied-disc boundaries 4, 20, 21, 40, 41,
-  44, and 45, including a forced-pass position.
+  44, 45, 63, and terminal 64, including a forced-pass position and the
+  decision-position versus child-query boundary.
 - Run focused `reversi-ai` tests for the 16-empty-square exact-solver start,
   deadline/node-limit interruption, and legal last-completed fallback.
 - Run a bounded, alternating-color calibration match and retain its profile
