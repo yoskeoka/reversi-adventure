@@ -24,8 +24,10 @@ child plans and measured by the shared oracle and endgame foundations.
 ## Change map
 
 - (MODIFY) future `docs/specs/reversi-ai.md` and design decision record --
-  define engine mode, budget presets, analysis/explanation contract, and
-  measurable strength target.
+  define engine mode, midgame search depth, exact-solver start threshold in
+  remaining empty squares, analysis/explanation contract, and measurable
+  strength target. Do not call the latter "endgame depth": it is the point at
+  which complete solving starts, not a heuristic search depth.
 - (NEW) detailed child plans for pattern evaluation/training, search
   acceleration, optional book policy, artifact provenance, and benchmarks.
 - (MODIFY) `docs/design-decisions/2026-03-02-reversi-ai-design.md` and
@@ -38,6 +40,12 @@ child plans and measured by the shared oracle and endgame foundations.
 
 ## Intended child work
 
+- `0011-reversi-ai-strength-calibration.md` first fixes the versioned oracle
+  and candidate resource profiles. Its initial target is oracle midgame search
+  depth 8 with complete solving beginning at 12 empty squares, versus project
+  midgame search depth 12 with complete solving beginning at 16 empty squares.
+  It deliberately distinguishes those terms from the ordinary opening,
+  midgame, and late-game turn ranges.
 - Independently implement phase/pattern evaluation and reproducible training
   artifacts.
 - Improve conventional-engine reading depth through time-bounded search,
