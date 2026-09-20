@@ -26,8 +26,10 @@ evaluator integration.
 - (NEW) `rust/reversi-ai/src/eval/trained.rs` and tests.
 - (MODIFY) `rust/reversi-ai/src/eval/mod.rs`, `lib.rs`, and
   `bin/reversi-ai-cli.rs` -- expose the evaluator as a library capability and
-  select it with an explicit artifact path for oracle evaluation. Preserve the
-  existing long-lived stdin/stdout move protocol and default difficulty.
+  select it with an explicit artifact path for oracle evaluation. The trained
+  CLI path uses `SearchEngine` directly rather than `AiPlayer`, whose generic
+  explanation method is outside this plan. Preserve the existing long-lived
+  stdin/stdout move protocol and default difficulty.
 - (NEW) build-owned generated/embed path only if artifact loading cannot meet
   release packaging constraints; never hand-edit generated output.
 
@@ -40,9 +42,10 @@ evaluator integration.
    cross weights or phase definitions.
 3. Add `--evaluator trained --trained-artifact PATH` to the existing candidate
    CLI so the external oracle harness can run matches. The CLI does not invoke
-   or combine any independent/strategic evaluator. The trained evaluator
-   supplies no human-factor attribution; product-facing explanation integration
-   is deferred to game development.
+   or combine any independent/strategic evaluator, and trained mode never
+   constructs or exposes `AiPlayer::explain`. The trained evaluator supplies no
+   human-factor attribution; product-facing explanation integration is deferred
+   to game development through a separate plan.
 4. Measure memory, allocation, and single-thread evaluator speed before making
    it eligible for a later high-strength preset.
 
@@ -53,6 +56,8 @@ Depends on 0012 and 0013. Child 0018 consumes its reports.
 - `cargo test -p reversi-ai`, library and CLI load/error/protocol tests, and
   Clippy.
 - Artifact tamper/version/context-fingerprint/TT-isolation regressions.
+- Regression that trained CLI mode uses the evaluation-only search path and
+  cannot emit a `MoveExplanation` or an `ExplainTag`.
 - Corpus regret report under the 0011 profile, recorded as evidence only.
 - `git diff --check`.
 
