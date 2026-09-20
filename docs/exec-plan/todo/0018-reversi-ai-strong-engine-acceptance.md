@@ -5,10 +5,11 @@
 ## Objective and completion boundary
 
 Run the final held-out evidence suite for the project-owned strong engine under
-the calibrated bookless handicap profile. Completion establishes whether the
-engine wins at least 50% of games against the restricted oracle. It does not
-retune the engine during the held-out run or claim parity with unrestricted
-world-class engines.
+the calibrated external-oracle handicap profile. Completion establishes whether
+the engine wins at least 50% of games against the restricted oracle. The frozen
+candidate includes a completed, accepted project-owned opening book when one
+exists; otherwise it is explicitly bookless. It does not retune the engine
+during the held-out run or claim parity with unrestricted world-class engines.
 
 ## Existing references
 
@@ -31,9 +32,11 @@ world-class engines.
 
 ## Black-box contract and work
 
-1. Freeze source commit, candidate artifact/config, `strong-engine-hcap-v1`,
-   opening suite digest, suite seed, hardware/resource declaration, and report
-   schema before the first held-out game.
+1. Freeze source commit, candidate weight artifact, all `AiConfig` reading
+   depths and exact-solver threshold, accepted book artifact and `--book` mode
+   (or an explicit bookless declaration), `strong-engine-hcap-v1`, opening
+   suite digest, suite seed, hardware/resource declaration, and report schema
+   before the first held-out game.
 2. Use legal, diverse opening prefixes; pair each with reversed colors and
    symmetry rotations where applicable. No opening used for tuning may enter
    this suite.
@@ -46,8 +49,9 @@ world-class engines.
 5. If the target misses, preserve evidence and revise the profile only through
    a new calibration plan. Do not tune on the held-out fixtures.
 
-Depends on completed 0011, 0014, 0015, and 0016. It may consume 0017's policy
-record, but its acceptance profile remains bookless.
+Depends on completed 0011, 0014, 0015, 0016, and the 0017 policy record. If
+0017 accepts a book, its dedicated integration child plan must also complete
+before this plan freezes the candidate.
 
 ## Verification
 

@@ -11,7 +11,7 @@ or a claim that the final engine meets the match target.
 
 ## Existing references
 
-- `docs/exec-plan/todo/0012-reversi-ai-pattern-evaluator-contract.md:1-58` --
+- `docs/exec-plan/todo/0012-reversi-ai-pattern-evaluator-contract.md:1-75` --
   artifact and feature contract.
 - `docs/exec-plan/todo/0011-reversi-ai-strength-calibration.md:83-97` --
   held-out evidence and profile identity.
@@ -38,8 +38,10 @@ or a claim that the final engine meets the match target.
 2. Pin trainer version, random seed, feature-contract digest, optimizer and
    hyperparameters. A rerun from identical inputs must reproduce artifact
    digest or have an explicit documented numeric tolerance.
-3. Report loss and move-quality metrics by phase, with the calibration corpus
-   held out from tuning. Never derive product provenance from private data.
+3. Train the 64-feature, 60-discrete-phase, final-disc-difference contract
+   from 0012. Report loss and move-quality metrics by phase, with the
+   calibration corpus held out from tuning. Never derive product provenance
+   from private data.
 4. Fail closed on missing licenses, schema/digest mismatch, leakage, NaN,
    overflow, or an artifact outside the 0012 score contract.
 5. Provide a small CPU test fixture; large-scale training is manual or CI
