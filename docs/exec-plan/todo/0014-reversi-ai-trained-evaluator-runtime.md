@@ -6,38 +6,43 @@
 
 Make a validated project-owned pattern artifact available to `reversi-ai` as a
 fast, independently applicable `TrainedEvaluator`. Completion includes safe
-loading or build-owned embedding and regressions. It excludes training changes,
-search tuning, CLI/Godot selection, and every explanatory or independent/
-strategic-evaluator integration.
+loading or build-owned embedding, plus selection from the existing oracle
+candidate CLI protocol. It excludes training changes, search tuning,
+Godot/product selection, and every explanatory or independent/strategic-
+evaluator integration.
 
 ## Existing references
 
 - `docs/exec-plan/todo/0012-reversi-ai-pattern-evaluator-contract.md:1-75`.
 - `docs/exec-plan/todo/0013-reversi-ai-pattern-training.md:1-62`.
 - `docs/specs/reversi-ai.md:9-80,109-145` -- evaluator identity and TT.
-- `rust/reversi-ai/src/eval/mod.rs` and search context consumers.
+- `rust/reversi-ai/src/eval/mod.rs`, search context consumers, and
+  `rust/reversi-ai/src/bin/reversi-ai-cli.rs`.
 
 ## Change map
 
 - (MODIFY) `docs/specs/reversi-ai.md` -- artifact loading/embedding and error
   behavior.
 - (NEW) `rust/reversi-ai/src/eval/trained.rs` and tests.
-- (MODIFY) `rust/reversi-ai/src/eval/mod.rs` and `lib.rs` -- expose the
-  evaluator as a library capability without changing default difficulty
-  behavior or selecting it from product-facing callers.
+- (MODIFY) `rust/reversi-ai/src/eval/mod.rs`, `lib.rs`, and
+  `bin/reversi-ai-cli.rs` -- expose the evaluator as a library capability and
+  select it with an explicit artifact path for oracle evaluation. Preserve the
+  existing long-lived stdin/stdout move protocol and default difficulty.
 - (NEW) build-owned generated/embed path only if artifact loading cannot meet
   release packaging constraints; never hand-edit generated output.
 
 ## Black-box contract and work
 
 1. Validate artifact version, feature digest, length, score scale, provenance,
-   and checksum before use. A bad artifact returns a clear library load error;
-   it never silently falls back to another evaluator.
+   and checksum before use. A bad artifact returns a clear library/CLI load
+   error; it never silently falls back to another evaluator.
 2. Include artifact identity in `context_fingerprint()` so TT entries never
    cross weights or phase definitions.
-3. Do not change, invoke, combine with, or select any independent/strategic
-   evaluator. The trained evaluator supplies no human-factor attribution;
-   product-facing explanation integration is deferred to game development.
+3. Add `--evaluator trained --trained-artifact PATH` to the existing candidate
+   CLI so the external oracle harness can run matches. The CLI does not invoke
+   or combine any independent/strategic evaluator. The trained evaluator
+   supplies no human-factor attribution; product-facing explanation integration
+   is deferred to game development.
 4. Measure memory, allocation, and single-thread evaluator speed before making
    it eligible for a later high-strength preset.
 
@@ -45,7 +50,8 @@ Depends on 0012 and 0013. Child 0018 consumes its reports.
 
 ## Verification
 
-- `cargo test -p reversi-ai`, library load/error tests, and Clippy.
+- `cargo test -p reversi-ai`, library and CLI load/error/protocol tests, and
+  Clippy.
 - Artifact tamper/version/context-fingerprint/TT-isolation regressions.
 - Corpus regret report under the 0011 profile, recorded as evidence only.
 - `git diff --check`.
