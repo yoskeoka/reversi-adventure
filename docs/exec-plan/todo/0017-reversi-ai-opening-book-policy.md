@@ -27,9 +27,10 @@ external oracle book a product dependency.
 
 ## Black-box contract and work
 
-1. Compare bookless strong-engine results with a proposed project-owned book
-   against a fixed opening suite. State whether the gain changes the 0018
-   acceptance outcome rather than assuming it does.
+1. Investigate compliant open-license candidates early and compare bookless
+   strong-engine results with a proposed project-owned book against a fixed
+   opening suite. State whether the gain changes the 0018 acceptance outcome
+   rather than assuming it does.
 2. A candidate book needs a creator/source license, reproducible generation,
    content digest, format version, legal-move validation, maximum coverage,
    update policy, and release-size budget.
@@ -39,8 +40,10 @@ external oracle book a product dependency.
 4. If accepted, book choice must be deterministic, legal, explainable as a
    book move, and fall back to the search engine on a miss or invalid record.
 
-Depends on 0011. It may investigate alongside 0012--0016, but any integration
-is a new child plan. Child 0018 uses the bookless profile regardless.
+Depends on 0011. It may investigate alongside 0012--0016. Any accepted book
+receives a dedicated integration child plan; its completed, frozen artifact is
+eligible for the 0018 acceptance candidate. If it is rejected or that plan is
+not complete, 0018 uses a bookless candidate and records that fact.
 
 ## Verification
 
