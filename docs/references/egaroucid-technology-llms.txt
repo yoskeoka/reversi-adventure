@@ -72,6 +72,11 @@ Our Phase 2 design adopts:
 
 Deferred for future enhancement:
 - Trained pattern evaluation (docs/issues/0005-trained-evaluator.md)
-- Endgame solver (docs/issues/0004-endgame-solver.md)
 - SIMD optimization
 - Parallelization
+
+## Adopted endgame boundary
+
+Reversi Adventure now uses an evaluator-independent, pass-aware exact solver
+through 12 empty squares. Egaroucid remains an external development and CI
+oracle; it is not linked into the game or solver.

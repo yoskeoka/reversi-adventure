@@ -223,9 +223,14 @@ rust/reversi-ai/
 - Integration tests: known positions with expected best moves
 - Evaluator comparison: StrategicEvaluator should beat NoviceEvaluator in self-play
 
+## Adopted endgame solver
+
+The shared exact endgame solver now handles up to 12 empty squares for every
+evaluator. Its score is the final root-side disc differential, not a heuristic
+evaluation.
+
 ## Deferred (logged as issues)
 
-- **Endgame solver**: perfect play in final N moves (docs/issues/0004-endgame-solver.md)
 - **Trained evaluator**: ML/RL-based pattern evaluation (docs/issues/0005-trained-evaluator.md)
 
 ## References

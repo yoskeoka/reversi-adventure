@@ -16,6 +16,7 @@ pub enum ExplainTag {
     ParityAdvantage,
     PieceAdvantage,
     ForcedMove,
+    ExactEndgame,
 }
 
 impl ExplainTag {
@@ -30,6 +31,7 @@ impl ExplainTag {
             ExplainTag::ParityAdvantage => "parity_advantage",
             ExplainTag::PieceAdvantage => "piece_advantage",
             ExplainTag::ForcedMove => "forced_move",
+            ExplainTag::ExactEndgame => "exact_endgame",
         }
     }
 }
@@ -58,6 +60,19 @@ pub fn generate_explanation(
         return None;
     };
     let score = search_result.score?;
+
+    // Exact endgame scores are final disc margins, not heuristic values. Do
+    // not call the evaluator or manufacture factor deltas for this path.
+    if search_result.exact {
+        return Some(MoveExplanation {
+            best_move: best,
+            pv: search_result.pv.clone(),
+            score,
+            factors: EvalFactors::default(),
+            primary_reason: ExplainTag::ExactEndgame,
+        });
+    }
+
     let leaf_eval = search_result.leaf_eval.as_ref()?;
     let legal = moves::legal_moves(board, color);
 
@@ -165,6 +180,30 @@ mod tests {
     fn test_corner_grab_tag() {
         let tag = ExplainTag::CornerGrab;
         assert_eq!(tag.as_str(), "corner_grab");
+    }
+
+    #[test]
+    fn test_exact_endgame_does_not_require_a_heuristic_leaf() {
+        let board = Board::new();
+        let result = SearchResult {
+            outcome: SearchOutcome::Move(Position::new(2, 3)),
+            score: Some(12),
+            pv: vec![Position::new(2, 3)],
+            leaf_eval: None,
+            completed_depth: 12,
+            nodes_searched: 1,
+            elapsed: std::time::Duration::ZERO,
+            exact: true,
+        };
+        let explanation = generate_explanation(
+            &board,
+            Color::Black,
+            &result,
+            &crate::eval::strategic::StrategicEvaluator::new(),
+        )
+        .unwrap();
+        assert_eq!(explanation.primary_reason, ExplainTag::ExactEndgame);
+        assert_eq!(explanation.score, 12);
     }
 
     #[test]

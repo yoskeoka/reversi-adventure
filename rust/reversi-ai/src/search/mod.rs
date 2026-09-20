@@ -1,3 +1,4 @@
+pub mod endgame;
 pub mod negascout;
 pub mod ordering;
 pub mod tt;
@@ -10,6 +11,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use self::endgame::EndgameSolver;
 use self::negascout::Negascout;
 use self::tt::{TranspositionTable, ZobristKeys};
 use crate::config::AiConfig;
@@ -93,6 +95,9 @@ pub struct SearchEngine {
 
 const SEARCH_SEMANTICS_VERSION: u64 = 1;
 
+/// Maximum number of empty squares solved exactly for every evaluator.
+pub const ENDGAME_SOLVER_EMPTY_SQUARES: u32 = 12;
+
 fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(evaluator: &E, config: &AiConfig) -> u64 {
     stable_context_fingerprint(&[
         SEARCH_SEMANTICS_VERSION,
@@ -128,6 +133,22 @@ impl SearchEngine {
 
         let stone_count = board.count(Color::Black) + board.count(Color::White);
         let max_depth = config.depth_for_phase(stone_count);
+
+        if board.empty_cells().count_ones() <= ENDGAME_SOLVER_EMPTY_SQUARES {
+            let mut nodes_searched = 0;
+            let completed =
+                EndgameSolver::new(&self.zobrist, &mut nodes_searched).solve(board, color, budget);
+            return SearchResult {
+                outcome: completed.outcome,
+                score: completed.score,
+                pv: completed.pv,
+                leaf_eval: None,
+                completed_depth: completed.completed_depth,
+                nodes_searched,
+                elapsed: started.elapsed(),
+                exact: completed.exact,
+            };
+        }
 
         let mut search = Negascout::new(evaluator, &mut self.tt, &self.zobrist);
         let completed = search.search(board, color, max_depth, budget);
@@ -526,5 +547,35 @@ mod tests {
         assert_eq!(first.pv, second.pv);
         assert_eq!(first.completed_depth, second.completed_depth);
         assert_eq!(first.nodes_searched, second.nodes_searched);
+    }
+
+    #[test]
+    fn twelve_empty_positions_bypass_every_evaluator() {
+        let board = Board::from_string(
+            "WWWWWWW.\nWWWWWWW.\nWWWWWWB.\nWWWWWB..\nWWWWWB..\nWWWWWB..\nWWWWWB..\nBBBBBBB.",
+        )
+        .unwrap();
+        let budget = SearchBudget::with_time_limit(Duration::from_secs(30));
+        let config = AiConfig::new(1, 1, 1);
+        let strategic = SearchEngine::new().search_with_budget(
+            &board,
+            Color::Black,
+            &StrategicEvaluator::new(),
+            &config,
+            &budget,
+        );
+        let novice = SearchEngine::new().search_with_budget(
+            &board,
+            Color::Black,
+            &crate::eval::novice::NoviceEvaluator::new(),
+            &config,
+            &budget,
+        );
+
+        assert!(strategic.exact && novice.exact);
+        assert_eq!(strategic.score, Some(-28));
+        assert_eq!(strategic.outcome, novice.outcome);
+        assert_eq!(strategic.score, novice.score);
+        assert_eq!(strategic.pv, novice.pv);
     }
 }
