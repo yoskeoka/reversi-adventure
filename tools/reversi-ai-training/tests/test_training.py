@@ -33,7 +33,7 @@ class PatternTrainingTests(unittest.TestCase):
             self.assertEqual(first_artifact.read_bytes(), second_artifact.read_bytes())
             self.assertEqual(first_report.read_bytes(), second_report.read_bytes())
             self.assertEqual(training.read_json(first_artifact)["feature_contract"]["catalog_digest"], training.catalog_digest())
-            self.assertIn("5", training.read_json(first_report)["phase_metrics"])
+            self.assertEqual(set(training.read_json(first_report)["phase_metrics"]), {"6"})
 
     def test_rejects_symmetry_equivalent_split_leakage(self):
         manifest, records = self.load_fixture()
@@ -53,6 +53,20 @@ class PatternTrainingTests(unittest.TestCase):
             training.validate_records([(bad_entry, [])])
         artifact = training.artifact_from(manifest, records, training.digest(manifest))
         artifact["weight_digest"] = "0" * 64
+        with self.assertRaises(training.TrainingError):
+            training.validate_artifact(artifact)
+
+    def test_rejects_incomplete_provenance_and_noncanonical_table_keys(self):
+        manifest, records = self.load_fixture()
+        artifact = training.artifact_from(manifest, records, training.digest(manifest))
+        del artifact["provenance"]["seed"]
+        artifact["artifact_digest"] = training.digest({key: value for key, value in artifact.items() if key != "artifact_digest"})
+        with self.assertRaises(training.TrainingError):
+            training.validate_artifact(artifact)
+        artifact = training.artifact_from(manifest, records, training.digest(manifest))
+        artifact["weights"] = {"not-a-phase": [{} for _ in range(training.FEATURE_COUNT)]}
+        artifact["weight_digest"] = training.digest(artifact["weights"])
+        artifact["artifact_digest"] = training.digest({key: value for key, value in artifact.items() if key != "artifact_digest"})
         with self.assertRaises(training.TrainingError):
             training.validate_artifact(artifact)
 

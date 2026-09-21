@@ -115,6 +115,12 @@ def require_int(value: Any, name: str, lower: int | None = None, upper: int | No
     return value
 
 
+def require_decimal_key(value: Any, name: str, lower: int | None = None, upper: int | None = None) -> int:
+    if not isinstance(value, str) or not value.isdecimal() or (len(value) > 1 and value.startswith("0")):
+        raise TrainingError(f"{name} must be a canonical decimal integer key")
+    return require_int(int(value), name, lower, upper)
+
+
 def parse_position(value: dict[str, Any], context: str) -> tuple[str, str, int]:
     board, side = value.get("board"), value.get("side")
     if not isinstance(board, str) or len(board) != 64 or any(cell not in "BW." for cell in board):
@@ -265,22 +271,31 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
     if artifact.get("format_version") != FORMAT_VERSION or artifact.get("feature_contract") != {"format_version": FORMAT_VERSION, "catalog_digest": catalog_digest(), "phase_count": PHASE_COUNT, "score_scale": SCORE_SCALE}:
         raise TrainingError("artifact feature contract mismatch")
     provenance = artifact.get("provenance")
-    if not isinstance(provenance, dict) or provenance.get("trainer_version") != TRAINER_VERSION or not isinstance(provenance.get("licenses"), list) or not provenance["licenses"]:
+    if not isinstance(provenance, dict) or provenance.get("trainer_version") != TRAINER_VERSION:
         raise TrainingError("artifact provenance is incomplete")
+    manifest_digest = provenance.get("input_manifest_digest")
+    if not isinstance(manifest_digest, str) or len(manifest_digest) != 64 or any(character not in "0123456789abcdef" for character in manifest_digest):
+        raise TrainingError("artifact provenance has an invalid input manifest digest")
+    require_int(provenance.get("seed"), "artifact provenance seed", 0)
+    if provenance.get("optimizer") != {"name": "sparse_mean_v1", "normalization_divisor": FEATURE_COUNT}:
+        raise TrainingError("artifact provenance has an unsupported optimizer")
+    licenses = provenance.get("licenses")
+    if not isinstance(licenses, list) or not licenses or any(not isinstance(license_name, str) or not license_name for license_name in licenses):
+        raise TrainingError("artifact provenance has invalid licenses")
     bounds, weights = artifact.get("feature_max_abs"), artifact.get("weights")
     if not isinstance(bounds, list) or len(bounds) != FEATURE_COUNT or any(require_int(value, "feature bound", 0, 1) != value for value in bounds) or sum(bounds) > 64:
         raise TrainingError("artifact feature bounds are unsafe")
     if not isinstance(weights, dict) or artifact.get("weight_digest") != digest(weights):
         raise TrainingError("artifact weight digest mismatch")
     for phase, tables in weights.items():
-        require_int(int(phase), "weight phase", 0, PHASE_COUNT - 1)
+        require_decimal_key(phase, "weight phase", 0, PHASE_COUNT - 1)
         if not isinstance(tables, list) or len(tables) != FEATURE_COUNT:
             raise TrainingError("artifact tables have an invalid feature count")
         for feature, table in enumerate(tables):
             if not isinstance(table, dict):
                 raise TrainingError("artifact feature table is invalid")
             for code, value in table.items():
-                require_int(int(code), "feature code", 0)
+                require_decimal_key(code, "feature code", 0)
                 require_int(value, "weight", -bounds[feature], bounds[feature])
     expected = dict(artifact)
     actual = expected.pop("artifact_digest", None)
@@ -293,7 +308,7 @@ def validation_report(artifact: dict[str, Any], records: list[dict[str, Any]], m
     phases: dict[str, dict[str, float | int | None]] = {}
     buckets: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
-        if record["split"] != "train":
+        if record["split"] == "held_out":
             buckets[extract_features(record["board"], record["side"])[0]].append(record)
     for phase, rows in sorted(buckets.items()):
         errors, agreements, candidates = [], 0, 0

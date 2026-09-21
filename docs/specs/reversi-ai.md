@@ -119,10 +119,11 @@ and neither its datasets nor caches are runtime dependencies.
   leakage error. Calibration and acceptance corpora are held-out inputs and
   are never training or optimizer-tuning inputs.
 - The trainer consumes the fixed 64 features and 60 discrete phases above and
-  emits a sparse JSON artifact plus a JSON validation report. It records the
-  manifest digest, trainer version, seed, feature-contract digest, optimizer
-  parameters, input licenses, per-phase loss, and candidate top-target
-  agreement. Its sparse per-phase/per-feature tables use integer weights; each
+  emits a sparse JSON artifact plus a JSON validation report. The report uses
+  only `held_out` records (never `validation`) and records the manifest digest,
+  trainer version, seed, feature-contract digest, optimizer parameters, input
+  licenses, per-phase loss, and candidate top-target agreement. Its sparse
+  per-phase/per-feature tables use integer weights; each
   feature's declared absolute bound is at most one and all 64 bounds sum to at
   most 64, so every selected aggregate is representable on the required
   `-64..=64` scale without overflow.
