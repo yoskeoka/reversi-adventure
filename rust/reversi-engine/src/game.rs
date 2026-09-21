@@ -55,7 +55,10 @@ impl Game {
 
     /// Returns the score as (black_count, white_count).
     pub fn score(&self) -> (u32, u32) {
-        (self.board.count(Color::Black), self.board.count(Color::White))
+        (
+            self.board.count(Color::Black),
+            self.board.count(Color::White),
+        )
     }
 
     pub fn is_game_over(&self) -> bool {
@@ -264,7 +267,10 @@ mod tests {
         if !moves::has_legal_move(&board, Color::White) {
             let status = game.pass_turn().unwrap();
             // After white passes, check if black can play or game is over
-            assert!(matches!(status, GameStatus::InProgress | GameStatus::Passed | GameStatus::GameOver(_)));
+            assert!(matches!(
+                status,
+                GameStatus::InProgress | GameStatus::Passed | GameStatus::GameOver(_)
+            ));
         }
     }
 }

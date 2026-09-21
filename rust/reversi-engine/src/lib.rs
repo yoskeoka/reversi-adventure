@@ -1,4 +1,4 @@
-pub mod types;
 pub mod board;
-pub mod moves;
 pub mod game;
+pub mod moves;
+pub mod types;
