@@ -315,6 +315,63 @@ for a repeated run in the same search context. Elapsed time is a supplemental
 same-host release-build measurement only. The profiler is neither game code
 nor an oracle candidate protocol and does not change the public move-only CLI.
 
+### Search performance benchmark
+
+`search-performance-v1` is a release-only, same-host performance suite. Its
+immutable corpus contains exactly sixteen legal decision positions from four
+pinned, bookless, one-thread Egaroucid v7.8.1 self-play games: positions at
+20, 40, 44, and 48 occupied discs per game. Records identify a board and its
+provenance, not a permanent benchmark workload: the runner selects the search
+configuration for a requested measurement. A corpus record identifies its schema and profile digests, source-game
+opening prefix and transcript digests, board digest, side to move, occupied
+count, phase, and replayable provenance. No two records may represent boards
+equivalent under a D4 symmetry.
+
+Corpus generation starts every game from the initial board. Its separate
+`search-performance-self-play-v1` profile uses the pinned, bookless,
+one-thread oracle at level 6, with six randomized opening plies to create four
+distinct legal games quickly. It records the generated transcript and fails
+rather than accepting an illegal move, pass mismatch, timeout, incomplete
+game, invalid replay, duplicate/D4-equivalent board, or non-reproducible
+canonical JSON Lines output. This generator profile is distinct from and does
+not alter `strong-engine-hcap-v1`.
+
+Every record also carries an analysis made with the distinct
+`search-performance-reference-v1` profile: the same pinned source identity,
+one thread, hash level 25, bookless default evaluation, fixed 100-percent
+depth 12 analysis for the 20- and 40-stone roots, complete depth 20 analysis
+for 44-stone roots, and complete depth 16 analysis for 48-stone roots. Exact
+records include root-side final-disc score and the optimal move
+set. Midgame analysis is a non-authoritative observation from that pinned
+oracle configuration, not a ground-truth answer, training label, correctness
+oracle, or acceptance threshold: the project's strategic evaluator may
+legitimately select a different move or score. It is retained only as
+reproducible reference provenance and this benchmark does not require the
+project engine to imitate the external engine.
+
+The workloads include `midgame-depth-12` (`AiConfig(12, 12, 12)`, exact
+threshold zero), `exact-16` (the same depths with exact threshold 16), and
+future exact-solving workloads such as 20 empty squares. A
+full-depth measurement uses a fresh `SearchEngine` for each invocation and a
+time-only monotonic `SearchBudget`; it requires a per-position timeout and
+rejects a node limit. Fixed-node diagnostics remain supported separately and
+continue to require a node limit. A successful midgame sample completes depth
+12 with `exact = false`; a successful exact sample completes depth 16 with
+`exact = true`. Timeout, cancellation, and any incomplete configured depth
+are failed samples: they are omitted from timing aggregates and fail the run.
+
+The release comparator takes explicit baseline and candidate binaries, warms
+each once, alternates their board order, and takes at least five measured
+repetitions. Its canonical report contains raw nanoseconds; per-position
+medians and ratios; workload geometric means; nodes, outcome, score, PV,
+completed depth, and exactness; binary commits; Rust/build metadata; host OS,
+architecture, and CPU model; runner version; and complete profile identity.
+Reports from incompatible environments are not compared. CI checks corpus and
+report schema, provenance digests, legality, oracle metadata, deterministic
+non-timing fields, and comparison arithmetic using a fake clock. CI never
+asserts elapsed speed; a documented human-run release command is the sole
+performance evidence.
+
 ### SearchEngine
 
 Wrapper around `Negascout` managing the transposition table and Zobrist keys.

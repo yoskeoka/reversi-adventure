@@ -72,3 +72,21 @@ fn search_profile_encodes_terminal_outcomes_and_repeats_fixed_node_projection() 
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn search_profile_requires_exactly_one_budget_mode() {
+    for arguments in [
+        vec!["--corpus", "-"],
+        vec!["--corpus", "-", "--node-limit", "1", "--time-limit-ms", "1"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_reversi-ai-search-profile"))
+            .args(arguments)
+            .output()
+            .expect("failed to start reversi-ai-search-profile");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("exactly one")
+                || String::from_utf8_lossy(&output.stderr).contains("mutually exclusive")
+        );
+    }
+}
