@@ -41,9 +41,12 @@ of empty squares, not by CPU architecture or instruction set.
 
 ## Black-box contract and work
 
-1. Build the empty-square list and orthogonal connected-component parity once
-   at the exact root. Update/restore bounded state for each played square;
-   passes do not remove an empty or change region membership.
+1. Build the empty-square list and orthogonal connected components at the exact
+   root. Removing a played square may split its old component, so recompute the
+   affected remaining component(s) with an allocation-free bitset flood fill
+   after every placement and restore the prior masks from bounded per-ply
+   state. A pass is the only transition that leaves empties and component
+   membership unchanged.
 2. Replace `Vec` region traversal and general sorting with fixed arrays/bitsets.
    Preserve TT move first, odd-region preference, existing secondary order,
    and deterministic equal-score tie-breaking.
@@ -68,8 +71,9 @@ of empty squares, not by CPU architecture or instruction set.
 - Exhaustively compare specialized and generic solvers for every reachable
   position in a bounded one-through-four-empty corpus, both sides to move,
   including pass and game-over cases.
-- Property tests for empty-list update/restore, component masks, parity after a
-  move/pass, ordering stability, and node/budget accounting.
+- Property tests for empty-list update/restore, bridge-square removal that
+  splits one region into two or more components, component masks, parity after
+  a move/pass, ordering stability, and node/budget accounting.
 - Differential oracle-checked 13--16-empty fixtures and all 0021 exact boards;
   apply the timing gate and rerun the 20-empty `+26` fixture for five minutes.
 - Rust tests, Clippy, GDExtension build, workflow lint, and `git diff --check`.

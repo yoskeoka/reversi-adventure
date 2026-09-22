@@ -44,10 +44,14 @@ stability, add selectivity, or change the 16-empty supported threshold.
    continuation. Start with provable corner-anchored/full-line cases; unknown
    discs remain unstable. Do not call `StrategicEvaluator` or treat its feature
    value as exact evidence.
-2. Derive inclusive lower and upper final root-side disc-difference bounds from
-   stable ownership plus every remaining non-stable square. Cut off only when
-   one bound proves fail-low/fail-high for the actual window; store only the
-   corresponding valid TT bound.
+2. At each `negamax(board, color, alpha, beta)` node, derive bounds in that
+   node's current-`color` score perspective. If `own_stable` and
+   `opponent_stable` are proven counts, the inclusive interval is
+   `[2 * own_stable - 64, 64 - 2 * opponent_stable]`. Compare only that
+   interval with the node's alpha/beta window and store the matching bound in
+   the same perspective. A pass recurses with the opponent color and negated
+   window/result exactly like the existing solver; never compare a root-side
+   interval directly inside a child node.
 3. Freeze the maximum remaining-empty count at which computing stability is
    attempted, based on pre-measurement cost data, then record attempts, proven
    discs, and cutoffs. No benchmark-position-specific rule is allowed.
@@ -68,8 +72,10 @@ stability, add selectivity, or change the 16-empty supported threshold.
 
 - Exhaustively enumerate legal continuations for a tractable low-empty corpus
   and prove every disc labeled stable remains owned at all terminals.
-- For each tested node, compare derived bounds with the true exhaustive score
-  and assert inclusion before enabling any cutoff.
+- For each tested node and side to move, compare the current-color bounds with
+  the true exhaustive current-color score and assert inclusion. Include the
+  same unchanged board before and after a forced pass to verify sign/window/TT
+  polarity before enabling any cutoff.
 - Differential solver tests across reachable boards, forced passes, terminal
   positions, narrow/full windows, cache reuse, deadline, node limit, and
   cancellation.

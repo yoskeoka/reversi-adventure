@@ -63,9 +63,11 @@ unchanged.
   widening, TT bounds, pass/game-over, and cancellation at each retry.
 - Differential full-depth tests against an explicit full-window mode across
   the benchmark and a deterministic reachable-position corpus.
-- Fixed-node repeatability tests must compare candidate runs with each other;
-  a different completed depth from the older traversal is permitted only as a
-  documented consequence of changed node use.
+- Fixed-node repeatability is a non-gating diagnostic: candidate runs must
+  match each other, while a baseline/candidate completed-depth difference may
+  be recorded as changed node use. It cannot waive the acceptance requirement
+  that every full-depth 0021 outcome, score, PV, configured depth, and exact
+  flag match.
 - Apply the 0021 timing gate; run Rust AI tests, Clippy, GDExtension build,
   workflow lint, and `git diff --check`.
 
