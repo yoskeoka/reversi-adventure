@@ -41,7 +41,7 @@ pub enum SearchOutcome {
 /// Caller-provided limits for a single search.
 #[derive(Debug, Clone)]
 pub struct SearchBudget {
-    deadline: Instant,
+    deadline: Option<Instant>,
     node_limit: Option<u64>,
     cancellation: Option<Arc<AtomicBool>>,
 }
@@ -49,7 +49,7 @@ pub struct SearchBudget {
 impl SearchBudget {
     pub fn new(deadline: Instant) -> Self {
         Self {
-            deadline,
+            deadline: Some(deadline),
             node_limit: None,
             cancellation: None,
         }
@@ -65,6 +65,18 @@ impl SearchBudget {
         self
     }
 
+    /// Create a deterministic diagnostics budget with only a node ceiling.
+    ///
+    /// Product callers should use `with_time_limit` so a turn always has a
+    /// monotonic deadline. This mode is for reproducible profiling and tests.
+    pub fn with_node_limit_only(node_limit: u64) -> Self {
+        Self {
+            deadline: None,
+            node_limit: Some(node_limit),
+            cancellation: None,
+        }
+    }
+
     pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
         self.cancellation = Some(cancellation);
         self
@@ -74,7 +86,9 @@ impl SearchBudget {
         self.cancellation
             .as_ref()
             .is_some_and(|token| token.load(Ordering::Acquire))
-            || Instant::now() >= self.deadline
+            || self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
             || self.node_limit.is_some_and(|limit| nodes_searched >= limit)
     }
 
@@ -82,7 +96,9 @@ impl SearchBudget {
         self.cancellation
             .as_ref()
             .is_some_and(|token| token.load(Ordering::Acquire))
-            || Instant::now() >= self.deadline
+            || self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
     }
 }
 

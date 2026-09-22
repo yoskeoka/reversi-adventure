@@ -2,7 +2,7 @@ use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
 
-use super::ordering::order_moves;
+use super::ordering::order_moves_with_successors;
 use super::tt::{Bound, TranspositionTable, TtEntry, ZobristKeys};
 use super::{SearchBudget, SearchOutcome};
 use crate::eval::{BoardEvaluator, EvalResult};
@@ -201,20 +201,23 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             });
         }
 
-        let ordered = order_moves(board, color, legal, tt_move, depth);
+        let ordered = order_moves_with_successors(board, color, legal, tt_move, depth);
 
         let original_alpha = alpha;
         let mut best_score = i32::MIN;
         let mut best_pv = Vec::new();
         let mut best_leaf = None;
-        let mut best_move = ordered[0];
+        let mut best_move = ordered[0].position;
         let mut first = true;
 
-        for pos in &ordered {
+        for ordered_move in &ordered {
             if budget.interrupted(self.nodes_searched) {
                 return Err(());
             }
-            let new_board = moves::make_move(board, color, *pos);
+            let pos = ordered_move.position;
+            let new_board = ordered_move
+                .successor
+                .unwrap_or_else(|| moves::make_move(board, color, pos));
 
             let child = if first {
                 // PV node: full window search
@@ -256,11 +259,11 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
 
             if score > best_score {
                 best_score = score;
-                best_move = *pos;
+                best_move = pos;
 
                 // Build PV: this move + child's PV
                 best_pv = Vec::with_capacity(1 + child.pv.len());
-                best_pv.push(*pos);
+                best_pv.push(pos);
                 best_pv.extend_from_slice(&child.pv);
                 best_leaf = child.leaf_eval;
             }
