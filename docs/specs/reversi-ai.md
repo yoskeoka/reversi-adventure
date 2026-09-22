@@ -195,8 +195,8 @@ struct AiConfig {
 `exact_solver_empty_squares` is the exact-solver start threshold. When the
 decision position has at most this many empty squares, every evaluator is
 bypassed and the engine attempts a complete final-disc solve. It is not an
-endgame search depth. The default remains `12`; the named
-`strong-engine-hcap-v1` candidate profile uses `16`.
+endgame search depth. The default and the named `strong-engine-hcap-v1`
+candidate profile use `16`.
 
 - `AiConfig::depth_for_phase(stone_count: u32)` — Returns the appropriate depth based on stone count.
 
@@ -360,7 +360,10 @@ enum SearchOutcome {
 
 - At or below `AiConfig::exact_solver_empty_squares`, `SearchEngine` uses the
   shared, evaluator-independent endgame solver instead of heuristic iterative
-  deepening. The default threshold is 12 empty squares.
+  deepening. The default threshold is 16 empty squares. The representative
+  16-empty-square oracle-checked fixture must complete within 1,000,000 solver
+  nodes; this is a profile evidence ceiling, not a replacement for a caller's
+  deadline, node limit, or cancellation token.
 - A completed endgame result has `exact = true`, its `score` is the final disc
   differential from the root side's perspective, and its PV contains only
   played positions (a pass is represented by `SearchOutcome::Pass`, never by a
