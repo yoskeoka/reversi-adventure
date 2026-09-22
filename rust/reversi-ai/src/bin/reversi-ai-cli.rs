@@ -54,7 +54,7 @@ fn parse_args() -> Result<CliArgs, String> {
     let mut opening_depth = 3;
     let mut midgame_depth = 4;
     let mut endgame_depth = 6;
-    let mut exact_solver_empty_squares = 12;
+    let mut exact_solver_empty_squares = AiConfig::DEFAULT_EXACT_SOLVER_EMPTY_SQUARES;
     let mut time_limit = Duration::from_secs(30);
     let mut node_limit = None;
     let mut profile = None;

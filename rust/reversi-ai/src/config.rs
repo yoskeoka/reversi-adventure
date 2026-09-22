@@ -9,12 +9,15 @@ pub struct AiConfig {
 }
 
 impl AiConfig {
+    /// Default decision-position threshold for evaluator-independent exact solving.
+    pub const DEFAULT_EXACT_SOLVER_EMPTY_SQUARES: u32 = 16;
+
     pub fn new(opening_depth: u8, midgame_depth: u8, endgame_depth: u8) -> Self {
         Self {
             opening_depth,
             midgame_depth,
             endgame_depth,
-            exact_solver_empty_squares: 12,
+            exact_solver_empty_squares: Self::DEFAULT_EXACT_SOLVER_EMPTY_SQUARES,
         }
     }
 
@@ -26,7 +29,8 @@ impl AiConfig {
 
     /// Candidate settings declared by the versioned strength calibration profile.
     pub fn strong_engine_hcap_v1() -> Self {
-        Self::new(12, 12, 12).with_exact_solver_empty_squares(16)
+        Self::new(12, 12, 12)
+            .with_exact_solver_empty_squares(Self::DEFAULT_EXACT_SOLVER_EMPTY_SQUARES)
     }
 
     /// Returns the search depth for the current game phase based on stone count.
@@ -76,5 +80,10 @@ mod tests {
         assert_eq!(config.depth_for_phase(44), 12);
         assert_eq!(config.depth_for_phase(60), 12);
         assert_eq!(config.exact_solver_empty_squares, 16);
+    }
+
+    #[test]
+    fn default_exact_solver_threshold_is_sixteen_empty_squares() {
+        assert_eq!(AiConfig::new(1, 1, 1).exact_solver_empty_squares, 16);
     }
 }

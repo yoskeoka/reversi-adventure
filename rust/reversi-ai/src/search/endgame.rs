@@ -260,16 +260,19 @@ fn region_size(empty: u64, start: Position) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{atomic::AtomicBool, Arc};
     use std::time::Duration;
+    use std::time::Instant;
 
-    fn solve(board: &Board, color: Color) -> CompletedEndgame {
+    fn solve(board: &Board, color: Color) -> (CompletedEndgame, u64) {
         let keys = ZobristKeys::new();
         let mut nodes = 0;
-        EndgameSolver::new(&keys, &mut nodes).solve(
+        let result = EndgameSolver::new(&keys, &mut nodes).solve(
             board,
             color,
             &SearchBudget::with_time_limit(Duration::from_secs(30)),
-        )
+        );
+        (result, nodes)
     }
 
     #[test]
@@ -278,7 +281,7 @@ mod tests {
             "WWWWWWW.\nWWWWWWW.\nWWWWWWB.\nWWWWWB..\nWWWWWB..\nWWWWWB..\nWWWWWB..\nBBBBBBB.",
         )
         .unwrap();
-        let result = solve(&board, Color::Black);
+        let (result, _) = solve(&board, Color::Black);
         assert!(result.exact);
         assert_eq!(result.score, Some(-28));
         assert_eq!(result.completed_depth, 12);
@@ -292,8 +295,8 @@ mod tests {
             "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBWW",
         )
         .unwrap();
-        assert_eq!(solve(&board, Color::Black).score, Some(60));
-        assert_eq!(solve(&board, Color::White).score, Some(-60));
+        assert_eq!(solve(&board, Color::Black).0.score, Some(60));
+        assert_eq!(solve(&board, Color::White).0.score, Some(-60));
     }
 
     #[test]
@@ -302,7 +305,7 @@ mod tests {
             "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBWB.",
         )
         .unwrap();
-        let result = solve(&board, Color::Black);
+        let (result, _) = solve(&board, Color::Black);
         assert_eq!(result.outcome, SearchOutcome::Pass);
         assert!(result.exact);
         assert_eq!(result.score, Some(58));
@@ -311,10 +314,7 @@ mod tests {
 
     #[test]
     fn interruption_never_claims_exactness() {
-        let board = Board::from_string(
-            "WWWWWWW.\nWWWWWWW.\nWWWWWWB.\nWWWWWB..\nWWWWWB..\nWWWWWB..\nWWWWWB..\nBBBBBBB.",
-        )
-        .unwrap();
+        let board = sixteen_empty_board();
         let keys = ZobristKeys::new();
         let mut nodes = 0;
         let result = EndgameSolver::new(&keys, &mut nodes).solve(
@@ -325,5 +325,95 @@ mod tests {
         assert!(!result.exact);
         assert_eq!(result.score, None);
         assert!(result.pv.is_empty());
+    }
+
+    #[test]
+    fn deadline_and_cancellation_at_sixteen_empty_squares_never_claim_exactness() {
+        let board = sixteen_empty_board();
+        let interrupted = |budget: SearchBudget| {
+            let keys = ZobristKeys::new();
+            let mut nodes = 0;
+            EndgameSolver::new(&keys, &mut nodes).solve(&board, Color::Black, &budget)
+        };
+
+        let expired = interrupted(SearchBudget::new(Instant::now()));
+        let cancelled = interrupted(
+            SearchBudget::with_time_limit(Duration::from_secs(30))
+                .with_cancellation(Arc::new(AtomicBool::new(true))),
+        );
+        for result in [expired, cancelled] {
+            assert!(!result.exact);
+            assert_eq!(result.score, None);
+            assert!(result.pv.is_empty());
+            assert!(
+                matches!(result.outcome, SearchOutcome::Move(position) if moves::legal_moves(&board, Color::Black) & position.bit_mask() != 0)
+            );
+        }
+    }
+
+    #[test]
+    fn solves_oracle_checked_thirteen_to_sixteen_empty_fixtures() {
+        // Independent fixed-depth solving reports these root-side final disc
+        // differentials. The fixtures are legal positions from one
+        // deterministic game, not synthetic board shapes.
+        let fixtures = [
+            (
+                "..B.W.....BBW.WB.B.WWWBW.WWWBBWWB.WBBWWWWWWWWBW.WWBWBBB.BBBBBBB.",
+                Color::Black,
+                6,
+                16,
+            ),
+            (
+                "..B.W.B...BBW.BB.B.WWWBW.WWWBBWWB.WBBWWWWWWWWBW.WWBWBBB.BBBBBBB.",
+                Color::White,
+                10,
+                15,
+            ),
+            (
+                "..B.W.B...BBW.BB.B.WWWBW.WWWBBWWB.WBWWWWWWWWWWW.WWBWBBW.BBBBBBBW",
+                Color::Black,
+                -10,
+                14,
+            ),
+            (
+                "..B.W.B...BBW.BB.BBBBBBW.BBWBBWWB.BBWWWWWWBWWWW.WWBWBBW.BBBBBBBW",
+                Color::White,
+                20,
+                13,
+            ),
+        ];
+
+        for (flat, color, expected_score, empty_squares) in fixtures {
+            let board = Board::from_string(&format_board(flat)).unwrap();
+            let (result, nodes) = solve(&board, color);
+            assert!(
+                result.exact,
+                "{empty_squares}-empty fixture was interrupted"
+            );
+            assert_eq!(result.score, Some(expected_score));
+            assert!(
+                matches!(result.outcome, SearchOutcome::Move(position) if moves::legal_moves(&board, color) & position.bit_mask() != 0)
+            );
+            assert_eq!(result.completed_depth, empty_squares);
+            if empty_squares == 16 {
+                assert!(nodes <= 1_000_000, "16-empty fixture used {nodes} nodes");
+            }
+        }
+    }
+
+    fn sixteen_empty_board() -> Board {
+        Board::from_string(&format_board(
+            "..B.W.....BBW.WB.B.WWWBW.WWWBBWWB.WBBWWWWWWWWBW.WWBWBBB.BBBBBBB.",
+        ))
+        .unwrap()
+    }
+
+    fn format_board(flat: &str) -> String {
+        flat.as_bytes()
+            .chunks(8)
+            .map(std::str::from_utf8)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n")
     }
 }

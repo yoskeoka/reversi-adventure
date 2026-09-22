@@ -230,7 +230,7 @@ rust/reversi-ai/
 
 ## Adopted endgame solver
 
-The shared exact endgame solver now handles up to 12 empty squares for every
+The shared exact endgame solver now handles up to 16 empty squares for every
 evaluator. Its score is the final root-side disc differential, not a heuristic
 evaluation.
 
