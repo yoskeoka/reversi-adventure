@@ -12,6 +12,12 @@ and an oracle corpus-regret report. It establishes evidence for a candidate;
 it does not tune on 0018's held-out openings, claim the 50% win line, alter
 runtime search semantics, or add human-facing explanations.
 
+The reinforcement cycle is a human-operated long-running job. A human starts
+it in a separate terminal from the generated frozen manifest; an AI agent does
+not start, wait for, poll, monitor, or claim completion of that job. A later
+task receives only its immutable artifact/report paths and digests, validates
+them, and then decides whether 0018 may freeze the candidate.
+
 ## Existing references
 
 - `docs/specs/reversi-ai.md:56-145` -- pattern contract and offline trainer.
@@ -41,6 +47,9 @@ runtime search semantics, or add human-facing explanations.
    artifact digest, evaluator/search profile, exact-solver threshold, book
    mode, game count, pairing/rotation policy, seed, resource cap, and update
    rule. Self-play must use only project-owned binaries and artifacts.
+   Document the exact human-run command, output directory, and stop/restart
+   behavior. The command writes its report atomically only after a complete
+   cycle; partial output is not candidate evidence.
 2. Generate legal games with color-swapped and symmetry-rotated pairs. Record
    every game input, terminal score, failure, and digest; a timeout, malformed
    record, or incomplete pair fails the cycle rather than being omitted.
@@ -63,12 +72,17 @@ runtime search semantics, or add human-facing explanations.
 - 0018 depends on this plan's recorded selected artifact; it performs the
   separate 50%-win acceptance measurement and triggers a new calibration or
   reinforcement plan if the line is missed.
+- The long-running command is explicitly handed to a human. An AI may prepare
+  its manifest and validate completed immutable outputs, but must not monitor
+  an in-progress reinforcement run.
 
 ## Verification
 
 - Unit tests for deterministic pair generation, legal replay, update bounds,
   seed reproducibility, split isolation, and baseline-on-tie selection.
 - Run the bounded fixture twice and require byte-identical artifacts/reports.
+- Verify that the human-run command documents its output digest and that a
+  partial or missing report fails closed without any monitoring loop.
 - Validate the selected artifact through `TrainedEvaluator` and run the
   evaluation-only candidate CLI with the frozen configuration.
 - Generate the corpus-regret report; confirm it is not an 0018 opening suite.
