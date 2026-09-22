@@ -270,6 +270,10 @@ Moves are ordered for maximum pruning efficiency:
 4. Static positional value (pre-defined 8x8 weight table)
 
 - `order_moves(board: &Board, color: Color, moves_mask: u64, tt_move: Option<Position>, depth: u8)` — Returns `Vec<Position>` in priority order. When `depth < 3`, the expensive opponent-mobility calculation is skipped.
+- Heuristic Negascout reuses each successor board generated for full
+  opponent-mobility ordering, rather than generating that same successor a
+  second time before recursive search. This implementation detail preserves
+  the documented ordered positions and does not apply to exact endgame search.
 
 ### Negascout
 
@@ -294,6 +298,22 @@ Low-level search implementation. Typically used via `SearchEngine` rather than d
   - First move (PV node): search with full window [alpha, beta].
   - Remaining moves: null-window search [alpha, alpha+1]. If fails high, re-search with full window.
 - PV extracted by tracking best move at each depth level.
+
+### Deterministic search profiling
+
+`reversi-ai-search-profile` is a diagnostics-only binary that reads the
+versioned external-oracle JSON Lines corpus and writes one JSON object per
+input position. It runs every position with a fresh `SearchEngine`, strategic
+evaluator, supplied search configuration, a fixed node limit, and a generous
+time limit. Each record includes the source position id and board digest plus
+the selected outcome, score, PV, completed depth, nodes searched, exact flag,
+and elapsed time.
+
+The deterministic comparison projection excludes elapsed time and requires
+the same outcome, score, PV, completed depth, nodes searched, and exact flag
+for a repeated run in the same search context. Elapsed time is a supplemental
+same-host release-build measurement only. The profiler is neither game code
+nor an oracle candidate protocol and does not change the public move-only CLI.
 
 ### SearchEngine
 
