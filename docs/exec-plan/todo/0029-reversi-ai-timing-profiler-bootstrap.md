@@ -38,9 +38,12 @@ does not change the public move-only CLI.
 2. Add `--time-limit-ms` as the mutually exclusive full-depth mode. It needs a
    positive per-position timeout, must not set a node cap, and uses a fresh
    `SearchEngine` per corpus input.
-3. A time-mode record identifies its timeout and declares success only when
-   the configured phase depth completes with the expected exactness. A timeout,
-   cancellation, or partial depth emits a failed sample with a stable reason.
+3. A time-mode record identifies its timeout and declares heuristic success
+   only for `completed_depth == configured phase depth` with `exact = false`.
+   It declares exact success only for `completed_depth == remaining empty
+   squares` with `exact = true`; an exact solver does not use phase depth. A
+   timeout, cancellation, or partial depth emits a failed sample with a stable
+   reason.
 4. Tests use the existing 16-empty fixture for exact completion and avoid
    elapsed-speed assertions.
 
@@ -53,7 +56,7 @@ does not change the public move-only CLI.
   `a14eab2` contains both this implementation and later corpus work. Its
   implementation PR must extract only `docs/specs/reversi-ai.md` timing
   contract changes, `reversi-ai-search-profile.rs`, and
-  `tests/search_profile.rs`; it must not include oracle scripts, corpus data,
+  `tests/search_profile.rs` (including the distinct exact predicate); it must not include oracle scripts, corpus data,
   comparator code, or baseline evidence.
 
 ## Verification
