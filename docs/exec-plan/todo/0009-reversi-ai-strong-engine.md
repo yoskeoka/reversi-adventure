@@ -56,8 +56,11 @@ cost, and licensing/provenance over novelty.
   validation evidence reproducible before runtime integration.
 - `0014-reversi-ai-trained-evaluator-runtime.md` integrates only validated
   project-owned artifacts into the Rust evaluator and its TT identity.
-- Completed search acceleration improves conventional search from a fixed
-  baseline while preserving every budget and exactness guarantee.
+- Completed 0015 search acceleration established deterministic profiling and
+  one measured optimization. Parent `0020-reversi-ai-search-performance.md`
+  now owns the deeper benchmark and architecture-neutral experiment series;
+  only child changes that pass its frozen timing and correctness gates enter
+  the strong-engine candidate.
 - `0016-reversi-ai-exact-solver-16.md` separately proves the 16-empty-square
   exact-solver threshold or retains 12 with evidence.
 - `0017-reversi-ai-opening-book-policy.md` investigates book adoption early and

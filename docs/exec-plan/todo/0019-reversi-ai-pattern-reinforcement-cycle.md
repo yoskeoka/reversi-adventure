@@ -67,8 +67,12 @@ them, and then decides whether 0018 may freeze the candidate.
 ## Dependencies and sequencing
 
 - Depends on merged 0013/0014 and the 0011 calibration profile.
-- It may use completed 0015/0016/0017 changes when available, but freezes
-  whichever accepted candidate configuration exists at execution time.
+- Before the human-operated long run, 0021 and the nonselective performance
+  children 0022--0028 must have recorded accepted or rejected outcomes. The
+  manifest freezes only merged, accepted optimizations and their accumulated
+  benchmark report; it never runs against an experiment branch.
+- It may use completed 0017 changes when available, but freezes whichever
+  accepted candidate configuration exists at execution time.
 - 0018 depends on this plan's recorded selected artifact; it performs the
   separate 50%-win acceptance measurement and triggers a new calibration or
   reinforcement plan if the line is missed.
