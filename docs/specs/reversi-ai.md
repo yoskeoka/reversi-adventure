@@ -304,8 +304,8 @@ Low-level search implementation. Typically used via `SearchEngine` rather than d
 `reversi-ai-search-profile` is a diagnostics-only binary that reads the
 versioned external-oracle JSON Lines corpus and writes one JSON object per
 input position. It runs every position with a fresh `SearchEngine`, strategic
-evaluator, supplied search configuration, a fixed node limit, and a generous
-time limit. Each record includes the source position id and board digest plus
+evaluator, supplied search configuration, and a fixed node-only limit. Each
+record includes the source position id and board digest plus
 the selected outcome, score, PV, completed depth, nodes searched, exact flag,
 and elapsed time.
 
@@ -343,6 +343,9 @@ struct SearchBudget {
 
 - The deadline is monotonic and is the primary turn budget. `SearchBudget::with_time_limit` creates it from the current monotonic clock. A duration beyond the platform deadline range becomes an immediate deadline.
 - `node_limit` is an optional secondary, deterministic ceiling for tests, CI, corpus, and tuning runs. A fixed node limit must reproduce the result metadata, PV, and completed depth for the same search context.
+- `SearchBudget::with_node_limit_only` supplies that fixed ceiling without a
+  wall-clock deadline for diagnostics and tests. Product callers use a
+  monotonic deadline through `with_time_limit`.
 - `cancellation` is an optional, cloneable token owned by the caller. Another thread may set its `AtomicBool`; the search only reads it and owns no callback or worker.
 - Search polls all three limits during expansion. Reaching a deadline or node limit, or observing cancellation, interrupts the current iteration.
 

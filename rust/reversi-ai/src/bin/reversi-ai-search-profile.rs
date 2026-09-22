@@ -1,7 +1,3 @@
-use std::fs::File;
-use std::io::{self, BufRead};
-use std::time::Duration;
-
 use reversi_ai::config::AiConfig;
 use reversi_ai::eval::strategic::StrategicEvaluator;
 use reversi_ai::search::{SearchBudget, SearchEngine, SearchOutcome};
@@ -9,6 +5,8 @@ use reversi_engine::board::Board;
 use reversi_engine::types::{Color, Position};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::{self, BufRead};
 
 struct Args {
     corpus: String,
@@ -155,8 +153,7 @@ fn main() -> Result<(), String> {
             color,
             &evaluator,
             &args.config,
-            &SearchBudget::with_time_limit(Duration::from_secs(30))
-                .with_node_limit(args.node_limit),
+            &SearchBudget::with_node_limit_only(args.node_limit),
         );
         let board_digest = format!("{:x}", Sha256::digest(board_flat.as_bytes()));
         let pv = result.pv.into_iter().map(move_name).collect::<Vec<_>>();

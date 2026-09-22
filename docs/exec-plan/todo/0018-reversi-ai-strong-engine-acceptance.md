@@ -17,7 +17,6 @@ during the held-out run or claim parity with unrestricted world-class engines.
   profile, metric vocabulary, and fixture prerequisite.
 - `docs/exec-plan/todo/0014-reversi-ai-trained-evaluator-runtime.md:1-54`.
 - `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md:1-71`.
-- `docs/exec-plan/todo/0015-reversi-ai-search-acceleration.md:1-46`.
 - `docs/exec-plan/todo/0016-reversi-ai-exact-solver-16.md:1-40`.
 - `tools/reversi-ai-oracle/oracle.py:1161-1275` -- current match behavior.
 
