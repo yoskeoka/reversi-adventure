@@ -45,8 +45,8 @@ public move-only CLI, or make wall-clock assertions in CI.
 - (NEW) `tools/reversi-ai-benchmark/README.md` and comparison runner -- build,
   warm-up, alternating-run, environment, raw-sample, and summary contract.
 - (MODIFY) `rust/reversi-ai/src/bin/reversi-ai-search-profile.rs` and focused
-  integration tests -- retain fixed-node mode and add full configured-depth
-  completion for one or more selected suite positions.
+  integration tests -- retain fixed-node mode and add a mutually exclusive
+  time-only full-depth mode for one or more selected suite positions.
 - (NEW) `docs/references/reversi-ai-search-performance-v1.md` -- immutable
   current-main baseline commit, environment, raw report digest, and summary.
 
@@ -73,10 +73,15 @@ public move-only CLI, or make wall-clock assertions in CI.
    and store depth-12 midgame analysis as reference only; the benchmark
    measures the project strategic evaluator, not imitation.
 4. Define `midgame-depth-12` as `AiConfig(12,12,12)` with exact threshold zero,
-   and `exact-16` as the same depths with exact threshold 16. Each measured
-   invocation uses a fresh `SearchEngine`, completes the configured search
-   without a node truncation, and reports a timeout as failure rather than a
-   partial timing sample.
+   and `exact-16` as the same depths with exact threshold 16. Add an explicit
+   full-depth timing mode that rejects `--node-limit`, requires a per-position
+   monotonic timeout, and constructs a time-only `SearchBudget`; keep the old
+   required-node-limit mode unchanged for deterministic diagnostics. Each
+   measured invocation uses a fresh `SearchEngine`. A midgame sample succeeds
+   only with `completed_depth = 12` and `exact = false`; an exact sample
+   succeeds only with `completed_depth = 16` and `exact = true`. Timeout,
+   cancellation, or any incomplete configured depth emits a failed sample that
+   the comparator excludes from timing aggregates and treats as a failed run.
 5. The comparator accepts explicit baseline and candidate release binaries,
    alternates their order for each board, performs one warm-up and at least
    five measured repetitions, and emits canonical JSON with raw nanoseconds,
@@ -102,8 +107,9 @@ public move-only CLI, or make wall-clock assertions in CI.
   replay, pass/game-over, extraction counts, uniqueness including D4 symmetry,
   distinct self-play/reference profiles, depth-12 range enforcement,
   digest/profile mismatch, timeout, and byte-identical regeneration.
-- Rust integration tests for both workload configurations, exact metadata,
-  fresh-engine isolation, timeout failure, and unchanged fixed-node mode.
+- Rust integration tests for both workload configurations, mutually exclusive
+  budget modes, exact completion predicates, fresh-engine isolation, timeout
+  and partial-depth failure, and unchanged fixed-node mode.
 - Comparator tests with synthetic timings for alternation, medians, geometric
   means, thresholds, environment mismatch, and malformed/missing samples.
 - Generate twice and compare the eight-position corpus byte-for-byte; replay

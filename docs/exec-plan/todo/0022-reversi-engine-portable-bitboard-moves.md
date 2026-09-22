@@ -7,9 +7,10 @@
 Replace candidate-by-candidate board scanning with architecture-neutral `u64`
 bitboard propagation and carry each already computed flip mask into successor
 construction. Accept the implementation only if it preserves exhaustive move
-semantics and improves the combined 0021 benchmark according to parent 0020's
-gate. A candidate that is correct but does not clear the timing gate is removed
-and recorded as rejected.
+semantics and improves each of the midgame and exact 0021 workload classes by
+at least 5%. Evaluate the gate separately so a win in one class cannot hide a
+regression in the other. A candidate that is correct but misses either timing
+gate is removed and recorded as rejected.
 
 No SIMD, target-feature dispatch, unsafe code, mutable/unmake board API, public
 game-rule change, or search-tree pruning belongs to this plan.
@@ -59,7 +60,9 @@ game-rule change, or search-tree pruning belongs to this plan.
 4. Do not translate or copy GPL source. Document the algorithmic references
    and independently implement the project's board orientation and masks.
 5. Compare the immediate pre-change commit and candidate with the 0021 runner.
-   Accept only the shared-gate result; otherwise revert production changes and
+   Require at least 5% improvement in the geometric mean of per-position
+   medians independently for both `midgame-depth-12` and `exact-16`; neither
+   class may borrow the other's gain. Otherwise revert production changes and
    record the rejected report/digest.
 
 ## Dependencies and sequencing
