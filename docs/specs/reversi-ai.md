@@ -94,6 +94,46 @@ evaluator, or assign human-readable factors to a pattern score.
 Pattern scores have no human-factor attribution and must not be combined with
 the explanatory evaluator or its explanation path.
 
+### Pattern-evaluator training contract
+
+`tools/reversi-ai-training` is an offline, manifest-driven producer of a
+future pattern-weight artifact. It is not loaded by the game or GDExtension,
+and neither its datasets nor caches are runtime dependencies.
+
+- A version-1 input record is JSON Lines and states a record id, source id,
+  SPDX license, source digest, 64-character row-major `B`/`W`/`.` board,
+  side (`B` or `W`), final-disc-difference target for that side, and one of
+  `train`, `validation`, or `held_out`. Optional candidate positions state the
+  same board, side, and target fields and permit move-quality measurement.
+  Targets are finite integers in `-64..=64`; the only accepted target semantic
+  is `final_disc_difference_for_side`.
+- A versioned manifest pins each input pathname, SHA-256 digest, license,
+  trainer version, random seed, feature-contract digest, optimizer parameters,
+  and split names. The manifest digest is the SHA-256 of its canonical JSON
+  serialization. Records with a missing license, an input digest mismatch, an
+  invalid board/schema, non-finite number, or incompatible feature contract
+  are rejected.
+- The canonical absolute-color D4 board key, together with side to move,
+  identifies a position for split checking. A duplicate key anywhere in the
+  inputs, including a symmetry-equivalent position in another split, is a
+  leakage error. Calibration and acceptance corpora are held-out inputs and
+  are never training or optimizer-tuning inputs.
+- The trainer consumes the fixed 64 features and 60 discrete phases above and
+  emits a sparse JSON artifact plus a JSON validation report. The report uses
+  only `held_out` records (never `validation`) and records the manifest digest,
+  trainer version, seed, feature-contract digest, optimizer parameters, input
+  licenses, per-phase loss, and candidate top-target agreement. Its sparse
+  per-phase/per-feature tables use integer weights; each
+  feature's declared absolute bound is at most one and all 64 bounds sum to at
+  most 64, so every selected aggregate is representable on the required
+  `-64..=64` scale without overflow.
+- Artifact metadata includes a canonical weight digest and artifact digest.
+  Validation recomputes both, validates the feature contract, phase count,
+  score scale, provenance, bounds, and every feature-vector prediction. A
+  rerun with identical manifest and input bytes must produce identical declared
+  artifact and report digests. Corruption, NaN, overflow, or a contract-mismatched
+  artifact fails closed.
+
 ### StrategicEvaluator
 
 Hand-tuned weights based on known Othello strategy. Evaluates:

@@ -9,6 +9,10 @@ ORACLE_MATCH_TIMEOUT ?= 60
 ORACLE_MATCH_GAMES ?= 2
 ORACLE_REPORT ?= /tmp/reversi-adventure-oracle-report.jsonl
 ORACLE_MATCH_REPORT ?= /tmp/reversi-adventure-oracle-match.json
+PATTERN_TRAINER := tools/reversi-ai-training/training.py
+PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-manifest.json
+PATTERN_ARTIFACT ?= /tmp/reversi-adventure-pattern-artifact.json
+PATTERN_REPORT ?= /tmp/reversi-adventure-pattern-report.json
 AI_EVALUATOR ?= strategic
 AI_OPENING_DEPTH ?= 3
 AI_MIDGAME_DEPTH ?= 4
@@ -21,7 +25,14 @@ AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPEN
 AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH)
 AI_CALIBRATION_COMMAND := $(AI_BINARY) --evaluator strategic --profile strong-engine-hcap-v1
 
-.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration
+.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration pattern-training-test pattern-training-fixture
+
+pattern-training-test:
+	$(PYTHON) -m unittest discover -s tools/reversi-ai-training/tests -p 'test_*.py'
+
+pattern-training-fixture: pattern-training-test
+	$(PYTHON) $(PATTERN_TRAINER) train --manifest $(PATTERN_MANIFEST) --artifact $(PATTERN_ARTIFACT) --report $(PATTERN_REPORT)
+	$(PYTHON) $(PATTERN_TRAINER) validate --artifact $(PATTERN_ARTIFACT)
 
 oracle-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-oracle/tests -p 'test_*.py'
