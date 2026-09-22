@@ -315,6 +315,19 @@ for a repeated run in the same search context. Elapsed time is a supplemental
 same-host release-build measurement only. The profiler is neither game code
 nor an oracle candidate protocol and does not change the public move-only CLI.
 
+`--node-limit` remains the required, deterministic diagnostic mode. Its JSON
+record and deterministic projection remain unchanged. `--time-limit-ms` is a
+separate, positive, mutually exclusive full-depth timing mode: every input
+position receives a fresh `SearchEngine` and a time-only monotonic
+`SearchBudget`, never a node ceiling. A timing-mode record identifies its
+`time_limit_ms` and includes `timing_success` plus a null failure reason on
+success. A heuristic timing sample succeeds only when it completes the
+configured phase depth with `exact = false`. An exact timing sample succeeds
+only when it completes the board's remaining empty-square count with
+`exact = true`; the exact solver does not use phase depth. A timeout,
+cancellation, or incomplete search is a failed sample with a stable failure
+reason, and is not a completed timing measurement.
+
 ### SearchEngine
 
 Wrapper around `Negascout` managing the transposition table and Zobrist keys.

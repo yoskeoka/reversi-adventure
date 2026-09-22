@@ -7,15 +7,21 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{self, BufRead};
+use std::time::Duration;
+
+enum BudgetMode {
+    NodeLimit(u64),
+    TimeLimit(Duration),
+}
 
 struct Args {
     corpus: String,
-    node_limit: u64,
+    budget: BudgetMode,
     config: AiConfig,
 }
 
 fn usage() -> &'static str {
-    "usage: reversi-ai-search-profile --corpus PATH --node-limit N [--opening-depth N --midgame-depth N --endgame-depth N --exact-solver-empty-squares N]"
+    "usage: reversi-ai-search-profile --corpus PATH (--node-limit N | --time-limit-ms N) [--opening-depth N --midgame-depth N --endgame-depth N --exact-solver-empty-squares N]"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -43,6 +49,7 @@ fn parse_u64(value: &str, option: &str) -> Result<u64, String> {
 fn parse_args() -> Result<Args, String> {
     let mut corpus = None;
     let mut node_limit = None;
+    let mut time_limit_ms = None;
     let mut opening_depth = 8;
     let mut midgame_depth = 8;
     let mut endgame_depth = 8;
@@ -61,6 +68,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--corpus" => corpus = Some(value()?),
             "--node-limit" => node_limit = Some(parse_u64(&value()?, "--node-limit")?),
+            "--time-limit-ms" => time_limit_ms = Some(parse_u64(&value()?, "--time-limit-ms")?),
             "--opening-depth" => opening_depth = parse_u8(&value()?, "--opening-depth")?,
             "--midgame-depth" => midgame_depth = parse_u8(&value()?, "--midgame-depth")?,
             "--endgame-depth" => endgame_depth = parse_u8(&value()?, "--endgame-depth")?,
@@ -71,9 +79,26 @@ fn parse_args() -> Result<Args, String> {
         }
     }
 
+    let budget = match (node_limit, time_limit_ms) {
+        (Some(limit), None) => BudgetMode::NodeLimit(limit),
+        (None, Some(limit)) => BudgetMode::TimeLimit(Duration::from_millis(limit)),
+        (None, None) => {
+            return Err(format!(
+                "exactly one of --node-limit or --time-limit-ms is required\n{}",
+                usage()
+            ))
+        }
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "--node-limit and --time-limit-ms are mutually exclusive\n{}",
+                usage()
+            ))
+        }
+    };
+
     Ok(Args {
         corpus: corpus.ok_or_else(|| format!("--corpus is required\n{}", usage()))?,
-        node_limit: node_limit.ok_or_else(|| format!("--node-limit is required\n{}", usage()))?,
+        budget,
         config: AiConfig::new(opening_depth, midgame_depth, endgame_depth)
             .with_exact_solver_empty_squares(exact_solver_empty_squares),
     })
@@ -148,30 +173,50 @@ fn main() -> Result<(), String> {
         let color = parse_color(required_string(&record, "side_to_move", line_number)?)
             .map_err(|error| format!("corpus line {line_number}: {error}"))?;
         let mut engine = SearchEngine::new();
-        let result = engine.search_with_budget(
-            &board,
-            color,
-            &evaluator,
-            &args.config,
-            &SearchBudget::with_node_limit_only(args.node_limit),
-        );
+        let budget = match args.budget {
+            BudgetMode::NodeLimit(limit) => SearchBudget::with_node_limit_only(limit),
+            BudgetMode::TimeLimit(limit) => SearchBudget::with_time_limit(limit),
+        };
+        let result = engine.search_with_budget(&board, color, &evaluator, &args.config, &budget);
         let board_digest = format!("{:x}", Sha256::digest(board_flat.as_bytes()));
         let pv = result.pv.into_iter().map(move_name).collect::<Vec<_>>();
-        println!(
-            "{}",
-            json!({
-                "board_digest": board_digest,
-                "completed_depth": result.completed_depth,
-                "elapsed_ns": result.elapsed.as_nanos(),
-                "exact": result.exact,
-                "node_limit": args.node_limit,
-                "nodes_searched": result.nodes_searched,
-                "outcome": outcome_json(result.outcome),
-                "position_id": position_id,
-                "pv": pv,
-                "score": result.score,
-            })
-        );
+        let mut output = json!({
+            "board_digest": board_digest,
+            "completed_depth": result.completed_depth,
+            "elapsed_ns": result.elapsed.as_nanos(),
+            "exact": result.exact,
+            "nodes_searched": result.nodes_searched,
+            "outcome": outcome_json(result.outcome),
+            "position_id": position_id,
+            "pv": pv,
+            "score": result.score,
+        });
+        match args.budget {
+            BudgetMode::NodeLimit(limit) => output["node_limit"] = json!(limit),
+            BudgetMode::TimeLimit(limit) => {
+                let empty_squares = board.empty_cells().count_ones() as u8;
+                let expects_exact = args.config.exact_solver_empty_squares > 0
+                    && u32::from(empty_squares) <= args.config.exact_solver_empty_squares;
+                let expected_depth = if expects_exact {
+                    empty_squares
+                } else {
+                    args.config
+                        .depth_for_phase(board.count(Color::Black) + board.count(Color::White))
+                };
+                let success =
+                    result.completed_depth == expected_depth && result.exact == expects_exact;
+                output["time_limit_ms"] = json!(limit.as_millis());
+                output["timing_success"] = json!(success);
+                output["timing_failure_reason"] = if success {
+                    Value::Null
+                } else if result.completed_depth != expected_depth {
+                    json!("incomplete_depth")
+                } else {
+                    json!("unexpected_exactness")
+                };
+            }
+        }
+        println!("{output}");
     }
     Ok(())
 }
