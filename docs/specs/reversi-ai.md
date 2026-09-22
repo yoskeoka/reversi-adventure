@@ -196,7 +196,8 @@ struct AiConfig {
 decision position has at most this many empty squares, every evaluator is
 bypassed and the engine attempts a complete final-disc solve. It is not an
 endgame search depth. The default and the named `strong-engine-hcap-v1`
-candidate profile use `16`.
+candidate profile use `16`. The external-only `ci-smoke-v1` calibration keeps
+its recorded 12-empty threshold through an explicit candidate CLI option.
 
 - `AiConfig::depth_for_phase(stone_count: u32)` — Returns the appropriate depth based on stone count.
 

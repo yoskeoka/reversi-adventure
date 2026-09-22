@@ -17,12 +17,13 @@ AI_EVALUATOR ?= strategic
 AI_OPENING_DEPTH ?= 3
 AI_MIDGAME_DEPTH ?= 4
 AI_ENDGAME_DEPTH ?= 6
+AI_EXACT_SOLVER_EMPTY_SQUARES ?= 12
 AI_MATCH_OPENING_DEPTH ?= 1
 AI_MATCH_MIDGAME_DEPTH ?= 2
 AI_MATCH_ENDGAME_DEPTH ?= 3
 AI_BINARY ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR)/debug/reversi-ai-cli,target/debug/reversi-ai-cli)
-AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPENING_DEPTH) --midgame-depth $(AI_MIDGAME_DEPTH) --endgame-depth $(AI_ENDGAME_DEPTH)
-AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH)
+AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPENING_DEPTH) --midgame-depth $(AI_MIDGAME_DEPTH) --endgame-depth $(AI_ENDGAME_DEPTH) --exact-solver-empty-squares $(AI_EXACT_SOLVER_EMPTY_SQUARES)
+AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH) --exact-solver-empty-squares $(AI_EXACT_SOLVER_EMPTY_SQUARES)
 AI_CALIBRATION_COMMAND := $(AI_BINARY) --evaluator strategic --profile strong-engine-hcap-v1
 
 .PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration pattern-training-test pattern-training-fixture
