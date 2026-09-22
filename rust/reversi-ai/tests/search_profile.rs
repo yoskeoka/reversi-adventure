@@ -173,3 +173,28 @@ fn search_profile_reports_incomplete_time_mode_samples() {
     assert_eq!(records[0]["timing_success"], false);
     assert_eq!(records[0]["timing_failure_reason"], "incomplete_depth");
 }
+
+#[test]
+fn search_profile_treats_a_full_board_as_exact_at_zero_threshold() {
+    let path = std::env::temp_dir().join(format!(
+        "reversi-ai-search-profile-terminal-{}-{}.jsonl",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let corpus = format!(
+        "{{\"position_id\":\"game-over\",\"board\":\"{GAME_OVER}\",\"side_to_move\":\"B\"}}\n"
+    );
+    fs::write(&path, corpus).expect("failed to write temporary corpus");
+
+    let records = run_profile_with_args(
+        &path,
+        &["--time-limit-ms", "1", "--exact-solver-empty-squares", "0"],
+    );
+    fs::remove_file(&path).expect("failed to remove temporary corpus");
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["timing_success"], true);
+    assert_eq!(records[0]["timing_failure_reason"], Value::Null);
+    assert_eq!(records[0]["completed_depth"], 0);
+    assert_eq!(records[0]["exact"], true);
+}

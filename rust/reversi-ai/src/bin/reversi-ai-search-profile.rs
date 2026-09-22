@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{self, BufRead};
 use std::time::Duration;
 
+#[derive(Clone, Copy)]
 enum BudgetMode {
     NodeLimit(u64),
     TimeLimit(Duration),
@@ -195,8 +196,8 @@ fn main() -> Result<(), String> {
             BudgetMode::NodeLimit(limit) => output["node_limit"] = json!(limit),
             BudgetMode::TimeLimit(limit) => {
                 let empty_squares = board.empty_cells().count_ones() as u8;
-                let expects_exact = args.config.exact_solver_empty_squares > 0
-                    && u32::from(empty_squares) <= args.config.exact_solver_empty_squares;
+                let expects_exact =
+                    u32::from(empty_squares) <= args.config.exact_solver_empty_squares;
                 let expected_depth = if expects_exact {
                     empty_squares
                 } else {
