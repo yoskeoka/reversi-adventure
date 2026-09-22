@@ -16,6 +16,7 @@ during the held-out run or claim parity with unrestricted world-class engines.
 - `docs/exec-plan/todo/0011-reversi-ai-strength-calibration.md:83-97` --
   profile, metric vocabulary, and fixture prerequisite.
 - `docs/exec-plan/todo/0014-reversi-ai-trained-evaluator-runtime.md:1-54`.
+- `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md:1-71`.
 - `docs/exec-plan/todo/0015-reversi-ai-search-acceleration.md:1-46`.
 - `docs/exec-plan/todo/0016-reversi-ai-exact-solver-16.md:1-40`.
 - `tools/reversi-ai-oracle/oracle.py:1161-1275` -- current match behavior.
@@ -49,7 +50,7 @@ during the held-out run or claim parity with unrestricted world-class engines.
 5. If the target misses, preserve evidence and revise the profile only through
    a new calibration plan. Do not tune on the held-out fixtures.
 
-Depends on completed 0011, 0014, 0015, 0016, and the 0017 policy record. If
+Depends on completed 0011, 0014, 0015, 0016, 0017, and 0019. If
 0017 accepts a book, its dedicated integration child plan must also complete
 before this plan freezes the candidate.
 
