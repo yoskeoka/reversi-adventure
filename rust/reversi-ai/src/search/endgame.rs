@@ -353,9 +353,9 @@ mod tests {
 
     #[test]
     fn solves_oracle_checked_thirteen_to_sixteen_empty_fixtures() {
-        // Egaroucid v7.8.1 `-solve`, fixed depth 20, independently reports
-        // these root-side final disc differentials. The fixtures are legal
-        // positions from one deterministic game, not synthetic board shapes.
+        // Independent fixed-depth solving reports these root-side final disc
+        // differentials. The fixtures are legal positions from one
+        // deterministic game, not synthetic board shapes.
         let fixtures = [
             (
                 "..B.W.....BBW.WB.B.WWWBW.WWWBBWWB.WBBWWWWWWWWBW.WWBWBBB.BBBBBBB.",
