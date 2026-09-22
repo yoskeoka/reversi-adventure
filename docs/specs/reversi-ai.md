@@ -94,6 +94,27 @@ evaluator, or assign human-readable factors to a pattern score.
 Pattern scores have no human-factor attribution and must not be combined with
 the explanatory evaluator or its explanation path.
 
+### Trained evaluator runtime
+
+`TrainedEvaluator` loads only the canonical JSON artifact emitted by the
+project-owned training tool.  Loading validates the complete feature contract,
+safe non-empty provenance, all 64 feature bounds, the sparse 60-phase table
+shape and canonical decimal codes, every weight and aggregate score bound, and
+the SHA-256 `weight_digest` and `artifact_digest` identities.  A load or
+validation failure is a clear error; it never selects a fallback evaluator.
+
+The evaluator sums the 64 sparse entries selected by `extract_features()` for
+the board phase and requested color, returning a final-disc-difference score
+with default (empty) `EvalFactors`.  Its context fingerprint includes a
+trained-runtime version plus the artifact's immutable identity, so retained
+transposition-table entries cannot cross artifacts or feature contracts.
+
+The oracle candidate CLI selects this evaluator only with `--evaluator trained
+--trained-artifact PATH`.  It uses `SearchEngine` directly, remains bookless,
+and preserves all four `AiConfig` controls.  A named profile supplies all four
+controls and rejects any explicit control rather than ignoring it.  Trained
+mode neither constructs `AiPlayer` nor exposes explanation output.
+
 ### Pattern-evaluator training contract
 
 `tools/reversi-ai-training` is an offline, manifest-driven producer of a

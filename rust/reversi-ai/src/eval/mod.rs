@@ -1,6 +1,7 @@
 pub mod novice;
 pub mod pattern;
 pub mod strategic;
+pub mod trained;
 
 use reversi_engine::board::Board;
 use reversi_engine::types::Color;
