@@ -161,7 +161,7 @@ def extract_features(board: str, side: str) -> tuple[int, list[int]]:
 def validate_manifest(manifest: dict[str, Any], root: Path) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
     if manifest.get("schema_version") != FORMAT_VERSION or manifest.get("trainer_version") != TRAINER_VERSION:
         raise TrainingError("unsupported manifest schema or trainer version")
-    require_int(manifest.get("seed"), "manifest.seed", 0)
+    require_int(manifest.get("seed"), "manifest.seed", 0, 2**64 - 1)
     feature = manifest.get("feature_contract")
     if feature != {"format_version": FORMAT_VERSION, "catalog_digest": catalog_digest(), "phase_count": PHASE_COUNT, "score_scale": SCORE_SCALE}:
         raise TrainingError("manifest feature contract does not match the project contract")
@@ -276,7 +276,7 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
     manifest_digest = provenance.get("input_manifest_digest")
     if not isinstance(manifest_digest, str) or len(manifest_digest) != 64 or any(character not in "0123456789abcdef" for character in manifest_digest):
         raise TrainingError("artifact provenance has an invalid input manifest digest")
-    require_int(provenance.get("seed"), "artifact provenance seed", 0)
+    require_int(provenance.get("seed"), "artifact provenance seed", 0, 2**64 - 1)
     if provenance.get("optimizer") != {"name": "sparse_mean_v1", "normalization_divisor": FEATURE_COUNT}:
         raise TrainingError("artifact provenance has an unsupported optimizer")
     licenses = provenance.get("licenses")

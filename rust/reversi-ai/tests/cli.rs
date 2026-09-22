@@ -118,3 +118,37 @@ fn cli_rejects_zero_search_depth() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("positive"));
 }
+
+#[test]
+fn cli_rejects_invalid_trained_mode_configuration() {
+    let missing_artifact = run_cli_with_args("", ["--evaluator", "trained"]);
+    assert!(!missing_artifact.status.success());
+    assert!(String::from_utf8_lossy(&missing_artifact.stderr).contains("--trained-artifact"));
+
+    let misplaced_artifact = run_cli_with_args(
+        "",
+        [
+            "--evaluator",
+            "novice",
+            "--trained-artifact",
+            "/missing/artifact.json",
+        ],
+    );
+    assert!(!misplaced_artifact.status.success());
+    assert!(String::from_utf8_lossy(&misplaced_artifact.stderr)
+        .contains("requires --evaluator trained"));
+
+    let profile_conflict = run_cli_with_args(
+        "",
+        [
+            "--evaluator",
+            "novice",
+            "--profile",
+            "strong-engine-hcap-v1",
+            "--midgame-depth",
+            "1",
+        ],
+    );
+    assert!(!profile_conflict.status.success());
+    assert!(String::from_utf8_lossy(&profile_conflict.stderr).contains("conflicts"));
+}
