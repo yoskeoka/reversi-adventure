@@ -63,10 +63,15 @@ public move-only CLI, or make wall-clock assertions in CI.
    legal side-to-move metadata, source game/prefix/transcript digest, occupied
    count, phase, and suite schema/profile digest. Regeneration must reproduce
    identical canonical JSONL bytes.
-3. Analyze all exact positions with the pinned oracle at complete depth 16 and
-   store final root-side score and optimal move set as correctness metadata.
-   Store the oracle depth-12 analysis for midgame positions as reference only;
-   the benchmark measures the project strategic evaluator, not imitation.
+3. Define a separate versioned `search-performance-reference-v1` oracle
+   analysis profile: the same pinned source digest, one thread, hash level 25,
+   bookless/default evaluation, fixed 100%-probability depth 12 for every
+   midgame root, and complete depth 16 for the exact roots. Serialize the full
+   configuration and its digest in every report. This profile is not the
+   `strong-engine-hcap-v1` self-play profile, whose depth ranges remain
+   unchanged. Store final root-side score and optimal move set for exact roots,
+   and store depth-12 midgame analysis as reference only; the benchmark
+   measures the project strategic evaluator, not imitation.
 4. Define `midgame-depth-12` as `AiConfig(12,12,12)` with exact threshold zero,
    and `exact-16` as the same depths with exact threshold 16. Each measured
    invocation uses a fresh `SearchEngine`, completes the configured search
@@ -95,6 +100,7 @@ public move-only CLI, or make wall-clock assertions in CI.
 
 - Oracle-tool unit tests for two-session self-play, fixed prefixes, legal
   replay, pass/game-over, extraction counts, uniqueness including D4 symmetry,
+  distinct self-play/reference profiles, depth-12 range enforcement,
   digest/profile mismatch, timeout, and byte-identical regeneration.
 - Rust integration tests for both workload configurations, exact metadata,
   fresh-engine isolation, timeout failure, and unchanged fixed-node mode.

@@ -30,28 +30,34 @@ solver cache sharing, or prefetch/CPU-specific instructions.
 
 - (MODIFY) `docs/specs/reversi-ai.md` and performance evidence -- qualifying
   child-bound proof, probe counters, semantics identity, and result.
-- (MODIFY) `rust/reversi-ai/src/search/{negascout,ordering,tt}.rs` -- expose
-  verified child identity/depth data and perform the bounded ETC pass.
+- (MODIFY) `rust/reversi-ai/src/search/{negascout,ordering,tt}.rs` -- store and
+  verify complete board/side identity for all heuristic TT probes, expose child
+  depth/bound data, and perform the bounded ETC pass.
 - (MODIFY) `rust/reversi-ai/src/search/mod.rs` -- bump search semantics for an
   accepted traversal change.
 - (MODIFY) TT/search/profiler tests.
 
 ## Black-box contract and work
 
-1. At a configured minimum remaining depth, inspect each legal successor that
-   ordering already constructed. A child entry may cut off only when its full
-   hash/side/context identity, stored remaining depth, and bound prove the
-   parent null/full-window result after negation. A best-move hint alone is not
-   a cutoff.
-2. Probe in the existing deterministic move order. Count ETC probes, hits, and
+1. Extend each heuristic TT entry with the complete black bitboard, white
+   bitboard, and side to move. Every existing current-node probe and every new
+   child probe must compare that identity after indexing by Zobrist hash;
+   context remains protected by table invalidation. Hash equality alone is
+   never sufficient for a score, bound, or best-move hit.
+2. At a configured minimum remaining depth, inspect each legal successor that
+   ordering already constructed. A child entry may cut off only when its
+   collision-safe identity, stored remaining depth, and bound prove the parent
+   null/full-window result after negation. A best-move hint alone is not a
+   cutoff.
+3. Probe in the existing deterministic move order. Count ETC probes, hits, and
    cutoffs separately in diagnostics without changing public game APIs.
-3. If no child proves a cutoff, continue the existing PVS path unchanged. The
+4. If no child proves a cutoff, continue the existing PVS path unchanged. The
    plan may order a proven-best child first only when doing so preserves the
    established tie-break rule.
-4. Do not apply ETC to the exact solver in this experiment. Preserve context
+5. Do not apply ETC to the exact solver in this experiment. Preserve context
    invalidation, collision checks, interruption polling, and completed-
    iteration publication.
-5. Freeze the minimum-depth rule before performance measurement. Require
+6. Freeze the minimum-depth rule before performance measurement. Require
    identical 0021 completed outputs; node counts may decrease. Apply the
    midgame gate and shared exact-regression allowance.
 
@@ -65,7 +71,8 @@ solver cache sharing, or prefetch/CPU-specific instructions.
 
 - Construct exact/lower/upper child entries at shallower/equal/deeper depths
   and prove that only qualifying bounds cut off after correct sign/window
-  conversion.
+  conversion. Inject identical-hash entries for different boards/sides and
+  require misses in both legacy current-node probes and ETC child probes.
 - Collision, changed evaluator/config/search semantics, pass, cancellation,
   and no-hit tests must take the old path.
 - Differential full-depth search over the 0021 suite and deterministic random

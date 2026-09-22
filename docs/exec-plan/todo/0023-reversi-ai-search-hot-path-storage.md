@@ -10,7 +10,8 @@ preserves the complete public search output and clears parent 0020's timing
 gate; otherwise retain only the rejection evidence.
 
 This plan does not change move ordering, alpha-beta windows, evaluator calls,
-node counting, TT context identity, or the heuristic/exact cache boundary.
+TT context identity, or the heuristic/exact cache boundary. Exact PV
+reconstruction may add deterministic proof work, which is counted explicitly.
 
 ## Existing references
 
@@ -40,22 +41,33 @@ node counting, TT context identity, or the heuristic/exact cache boundary.
 
 ## Black-box contract and work
 
-1. Allocate bounded PV scratch storage once per root search, indexed by ply.
-   Recursive nodes return compact score/status data and update the caller's
-   line only when a new best move is accepted. Copy the completed root line
-   into the public `Vec` only once.
+1. Allocate bounded heuristic PV scratch storage once per root search, indexed
+   by ply. Recursive heuristic nodes return compact score/status data and
+   update the caller's line only when a new best move is accepted. Copy the
+   completed heuristic root line into the public `Vec` only once.
 2. Replace the solve-local `HashMap<u64, ExactEntry>` with a bounded,
    preallocated table. Each hit must verify complete board plus side-to-move
    identity (not hash alone); replacement is deterministic and prefers the
    more valuable remaining-depth/exact-bound entry.
-3. Exact cache entries retain score, bound, and best move only. The search-owned
-   PV table must still produce the full played-position line across passes;
-   bound cutoffs may not manufacture a partial line as completed output.
-4. Preserve the existing heuristic TT, evaluator/search-context invalidation,
-   solver-local lifetime, cache separation, node count definition, and budget
-   polling cadence. Memory use must be explicitly bounded and reported.
-5. Require identical 0021 outcomes, scores, PVs, depths, exact flags, and node
-   counts before considering the timing gate.
+3. Exact cache hits are score/bound evidence only and never supply a completed
+   PV from the current recursion scratch. After the root score is proven, run
+   a deterministic reconstruction pass from the root: at each node follow the
+   first move in the established order whose identity-checked child score
+   proves the parent score, recurse across passes without appending a sentinel,
+   and verify the terminal disc difference. Re-search a missing/evicted child
+   with cache cutoffs disabled as needed. The reconstruction uses the same
+   budget; if it is interrupted or cannot prove every ply, return the existing
+   non-exact fallback with no score/PV rather than a truncated exact line.
+4. Bound entries never manufacture a principal variation. Cache entries retain
+   score, bound, and best move only; reconstruction must not trust a best-move
+   chain without revalidating board identity, legality, and score consistency.
+5. Preserve the existing heuristic TT, evaluator/search-context invalidation,
+   solver-local lifetime, cache separation, and budget polling cadence. Public
+   `nodes_searched` includes proof plus reconstruction work; diagnostics split
+   the two counts. Memory use must be explicitly bounded and reported.
+6. Require identical 0021 outcomes, scores, PVs, depths, and exact flags before
+   considering the timing gate. Node counts must be deterministic and any
+   reconstruction delta must equal the separately reported count.
 
 ## Dependencies and sequencing
 
@@ -64,13 +76,15 @@ node counting, TT context identity, or the heuristic/exact cache boundary.
 
 ## Verification
 
-- Unit tests for maximum PV length, pass-without-placement, cache collisions,
-  deterministic replacement, and exact/heuristic cache isolation.
+- Unit tests for maximum PV length, pass-without-placement, exact-cache hits
+  from another branch, evicted reconstruction entries, score-inconsistent
+  best moves, cache collisions, deterministic replacement, and
+  exact/heuristic cache isolation.
 - Interruption at each representative ply must return only the old legal
   fallback or last wholly completed iteration, never scratch/PV residue.
 - Differential results against the pre-change engine on the 0021 suite and a
-  deterministic reachable-position corpus; require all non-time fields and
-  node counts to match.
+  deterministic reachable-position corpus; require semantic non-time fields
+  to match and reconcile every node-count delta to reconstruction work.
 - Apply the timing gate and report bounded peak storage; run Rust tests,
   Clippy, GDExtension build, workflow lint, and `git diff --check`.
 
