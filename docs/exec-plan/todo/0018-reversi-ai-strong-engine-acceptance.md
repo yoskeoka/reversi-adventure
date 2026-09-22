@@ -49,7 +49,9 @@ during the held-out run or claim parity with unrestricted world-class engines.
 5. If the target misses, preserve evidence and revise the profile only through
    a new calibration plan. Do not tune on the held-out fixtures.
 
-Depends on completed 0011, 0014, 0015, 0016, 0017, and 0019. If
+Depends on completed 0011, 0014, 0015, 0016, 0017, 0019, and the recorded
+accepted/rejected outcomes of performance plans 0021--0028. The frozen
+candidate may contain only merged optimizations with passing 0020 evidence. If
 0017 accepts a book, its dedicated integration child plan must also complete
 before this plan freezes the candidate.
 
