@@ -49,6 +49,12 @@ does not change the public move-only CLI.
 - This is the prerequisite split from 0021. Merge it before measuring the
   `main` baseline in the benchmark execution branch.
 - It depends only on the merged SearchBudget and exact-solver work.
+- The preserved remote branch `feat/reversi-ai-performance-benchmark` at
+  `a14eab2` contains both this implementation and later corpus work. Its
+  implementation PR must extract only `docs/specs/reversi-ai.md` timing
+  contract changes, `reversi-ai-search-profile.rs`, and
+  `tests/search_profile.rs`; it must not include oracle scripts, corpus data,
+  comparator code, or baseline evidence.
 
 ## Verification
 
