@@ -1,22 +1,23 @@
-# Child plan: complete the Reversi search performance benchmark
+# Child plan: finish the Reversi search performance benchmark
 
-> **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
+> **Execution**: Use `/execute-task` for this plan. After the work is complete,
+> use `/review-task` to prepare and create the PR.
 
 ## Objective and completion boundary
 
-Complete the performance evidence that remains after the merged profiler
-foundation (PR #195, merge commit `bc3ece052154f5fa591922870adedf50a69a7ee7`)
-and corpus foundation (PR #196, merge commit
-`f1255fe5d863f110029c75c87e631e780f98de36`).  The checked-in corpus is already
-the canonical sixteen-position set: four positions at 20, 40, 44, and 48
-occupied discs from each of four pinned self-play games.  Completion now means
-a separate reference-analysis profile and report, a same-host release
-comparator, a true-current-`main` baseline, CI schema/arithmetic coverage, and
-documentation that later optimization plans can use unchanged.
+Finish the work left after the profiler foundation in PR #195
+(`bc3ece052154f5fa591922870adedf50a69a7ee7`) and the corpus foundation in
+PR #196 (`f1255fe5d863f110029c75c87e631e780f98de36`).
 
-This plan measures performance; it does not optimize search, use benchmark
-positions for evaluator training or 0018 strength acceptance, change the
-public move-only CLI, or make wall-clock assertions in CI.
+The checked-in corpus has sixteen positions. Each of its four pinned self-play
+games supplies positions at 20, 40, 44, and 48 occupied discs. The remaining
+work is a reference-analysis profile and report, a same-host release
+comparator, a true-current-`main` baseline, CI schema and arithmetic coverage,
+and documentation that later optimization plans can use unchanged.
+
+This plan adds performance evidence only. Search optimization, evaluator
+training, 0018 strength acceptance, the public move-only CLI, and CI speed
+assertions stay unchanged.
 
 ## Existing references
 
@@ -59,7 +60,7 @@ public move-only CLI, or make wall-clock assertions in CI.
    `strong-engine-hcap-v1` self-play profile, whose depth ranges remain
    unchanged. Store final root-side score and optimal move set for exact roots,
    and store depth-12 midgame analysis as reference only; the benchmark
-   measures the project strategic evaluator, not imitation.
+   measures the project strategic evaluator directly.
 2. The comparator accepts explicit baseline and candidate release binaries,
    alternates their order for each board, performs one warm-up and at least
    five measured repetitions, and emits canonical JSON with raw nanoseconds,
