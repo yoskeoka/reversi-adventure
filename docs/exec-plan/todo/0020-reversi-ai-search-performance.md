@@ -7,9 +7,9 @@
 Reduce same-host release-build elapsed time for both project search workloads
 that dominate matches and reinforcement: strategic midgame search through
 depth 12 and evaluator-independent exact solving from 16 empty squares. Use a
-versioned suite of eight positions produced by pinned Egaroucid-versus-
-Egaroucid games, then try each architecture-neutral technique in a separate,
-rollbackable child plan.
+versioned suite of sixteen positions. Four pinned self-play games each supply
+positions at 20, 40, 44, and 48 occupied discs. Then try each
+architecture-neutral technique in a separate, rollbackable child plan.
 
 The series is complete only when all child experiments have an accepted or
 rejected report, the accumulated accepted changes reduce the geometric mean of
@@ -32,8 +32,8 @@ GDExtension, or release artifacts.
   20-empty fixture, oracle `+26` result, and current five-minute failure.
 - `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md:5-64`
   defines the self-play workload whose cycle cost this work must reduce.
-- `docs/specs/reversi-ai.md:302-316` defines the existing fixed-node search
-  profiler; it does not yet provide the required full-depth timing suite.
+- `docs/specs/reversi-ai.md` defines the completed fixed-node and full-depth
+  timing profiler plus the immutable sixteen-position corpus.
 - `rust/reversi-engine/src/moves.rs:17-105` currently scans every empty square
   and recomputes flips when applying a move.
 - `rust/reversi-ai/src/search/negascout.rs:18-291` and
@@ -62,9 +62,10 @@ GDExtension, or release artifacts.
 
 ## Child plans and sequencing
 
-1. `0021-reversi-ai-performance-benchmark.md` creates the eight-position
-   oracle-self-play suite, the depth-12/16-empty runner, and the immutable
-   baseline. No optimization starts before it merges.
+1. `0021-reversi-ai-performance-benchmark.md` completes the reference analysis,
+   release comparator, and immutable baseline using the existing sixteen-
+   position corpus and full-depth profiler. No optimization starts before it
+   merges.
 2. `0022-reversi-engine-portable-bitboard-moves.md` replaces per-empty-square
    move generation and carries computed flips into move application.
 3. `0023-reversi-ai-search-hot-path-storage.md` removes recursive heap-backed
