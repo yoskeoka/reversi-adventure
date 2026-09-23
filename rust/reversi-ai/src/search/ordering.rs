@@ -23,6 +23,7 @@ const CORNERS: [u8; 4] = [0, 7, 56, 63];
 #[derive(Clone, Copy)]
 pub(crate) struct OrderedMove {
     pub position: Position,
+    pub flips: u64,
     pub successor: Option<Board>,
 }
 
@@ -58,11 +59,9 @@ pub(crate) fn order_moves_with_successors(
     let mut scored_moves: Vec<(OrderedMove, i32)> =
         Vec::with_capacity(moves_mask.count_ones() as usize);
 
-    let mut bits = moves_mask;
-    while bits != 0 {
-        let index = bits.trailing_zeros() as u8;
-        let pos = Position::from_bit_index(index);
-        let bit = 1u64 << index;
+    for generated in moves::generated_moves(board, color) {
+        let pos = generated.position;
+        let index = pos.bit_index();
 
         let mut priority = 0i32;
 
@@ -81,7 +80,7 @@ pub(crate) fn order_moves_with_successors(
         // Opponent mobility after this move (fewer = better)
         // Only compute at depth >= 3 to avoid expensive make_move + legal_moves at leaf-adjacent nodes
         let successor = if depth >= 3 {
-            let new_board = moves::make_move(board, color, pos);
+            let new_board = moves::make_move_with_flips(board, color, pos, generated.flips);
             let opp_mobility = moves::legal_moves(&new_board, color.opponent()).count_ones() as i32;
             priority -= opp_mobility * 100;
             Some(new_board)
@@ -95,12 +94,11 @@ pub(crate) fn order_moves_with_successors(
         scored_moves.push((
             OrderedMove {
                 position: pos,
+                flips: generated.flips,
                 successor,
             },
             priority,
         ));
-
-        bits &= !bit;
     }
 
     // Sort descending by priority

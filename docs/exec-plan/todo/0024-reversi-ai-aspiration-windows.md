@@ -10,6 +10,9 @@ deterministically on fail-low or fail-high. Accept only if the final full-depth
 result is identical and the 0021 midgame timing gate passes. Exact solving is
 unchanged.
 
+Record both workload ratios, report digest, and the accepted/rejected outcome
+in parent 0020. Retain the change when either workload improves by at least 5%.
+
 ## Existing references
 
 - `rust/reversi-ai/src/search/negascout.rs:48-114` starts every iteration with

@@ -12,6 +12,9 @@ scores/PVs remain deterministic and the 0021 exact timing gate passes.
 This is an exhaustive, nonselective exact search. It does not add ProbCut,
 heuristic evaluation, approximate bounds, threshold changes, or parallelism.
 
+Record both workload ratios, report digest, and the accepted/rejected outcome
+in parent 0020. Retain the change when either workload improves by at least 5%.
+
 ## Existing references
 
 - `rust/reversi-ai/src/search/endgame.rs:108-210` currently searches every

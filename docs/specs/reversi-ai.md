@@ -275,6 +275,17 @@ Moves are ordered for maximum pruning efficiency:
   second time before recursive search. This implementation detail preserves
   the documented ordered positions and does not apply to exact endgame search.
 
+### Portable move primitives
+
+Internal move generation uses only stable, architecture-neutral `u64`
+operations with explicit board-edge masks. It produces the same canonical
+legal-move mask and, for each generated move, its exact flip mask. Search may
+apply that internal descriptor directly to construct a successor without
+recomputing flips. Public legality checks, `make_move`, `Game`, board
+orientation, coordinate notation, deterministic ordering, and pass/game-over
+semantics remain unchanged. The optimized implementation is continuously
+checked against an independent straightforward reference implementation.
+
 ### Negascout
 
 Negascout (Principal Variation Search) with iterative deepening.

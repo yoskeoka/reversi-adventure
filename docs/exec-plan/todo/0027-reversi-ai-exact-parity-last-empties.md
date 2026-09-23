@@ -12,6 +12,9 @@ and the 0021 exact timing gate passes.
 The implementation remains portable stable Rust. It may specialize by number
 of empty squares, not by CPU architecture or instruction set.
 
+Record both workload ratios, report digest, and the accepted/rejected outcome
+in parent 0020. Retain the change when either workload improves by at least 5%.
+
 ## Existing references
 
 - `rust/reversi-ai/src/search/endgame.rs:219-262` sorts every node by calling

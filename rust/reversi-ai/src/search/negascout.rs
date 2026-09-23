@@ -215,9 +215,9 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                 return Err(());
             }
             let pos = ordered_move.position;
-            let new_board = ordered_move
-                .successor
-                .unwrap_or_else(|| moves::make_move(board, color, pos));
+            let new_board = ordered_move.successor.unwrap_or_else(|| {
+                moves::make_move_with_flips(board, color, pos, ordered_move.flips)
+            });
 
             let child = if first {
                 // PV node: full window search

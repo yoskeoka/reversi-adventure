@@ -163,13 +163,18 @@ impl<'a> EndgameSolver<'a> {
 
         let original_alpha = alpha;
         let ordered = order_endgame_moves(board, color, legal, tt_move);
+        let generated = moves::generated_moves(board, color);
         let mut best_score = -65;
         let mut best_move = ordered[0];
         let mut best_pv = Vec::new();
 
         for position in ordered {
+            let generated_move = generated
+                .iter()
+                .find(|generated_move| generated_move.position == position)
+                .expect("ordered move must have a generated descriptor");
             let child = self.negamax(
-                &moves::make_move(board, color, position),
+                &moves::make_move_with_flips(board, color, position, generated_move.flips),
                 color.opponent(),
                 -beta,
                 -alpha,
