@@ -353,6 +353,42 @@ profile is distinct from and does not alter `strong-engine-hcap-v1`.
 `make benchmark-corpus-verify` validates the checked-in artifact without
 performing reference analysis or timing measurement.
 
+### Search performance evidence
+
+`search-performance-reference-v1` is a separate, versioned oracle-analysis
+profile. It pins the verified source digest, bookless default evaluation, one
+thread, hash level 25, and 100-percent depth 12 for the 20-, 40-, and
+44-occupied roots. Its 48-occupied roots require the complete remaining
+16-placement solve. It is distinct from both the corpus self-play profile and
+`strong-engine-hcap-v1`; neither profile's depth ranges change.
+
+The canonical reference JSON Lines report records the full profile object and
+its SHA-256 digest for every corpus position. A heuristic record is reference
+analysis only. An exact record additionally requires every root evaluation to
+be exact, the final root-side score, and the complete equal-value
+`optimal_moves` set. The reference validator rejects a noncanonical report,
+wrong corpus or profile digest, an incomplete root-move set, or exact metadata
+that does not satisfy the 16-empty contract.
+
+`reversi-ai-search-comparator-v1` accepts explicit, already-built release
+profiler binaries for a baseline and a candidate. It runs one unrecorded
+warm-up per binary and corpus board, then at least five measured repetitions,
+alternating binary order for every board. Every invocation uses the profiler's
+time-only mode with depth 12 and the 16-empty exact threshold. A failed timing
+sample fails the comparison; it is never silently excluded.
+
+Its canonical JSON report identifies both binary paths and SHA-256 digests,
+runner version, repetitions, time limit, Rust/build flags, OS, architecture,
+CPU model, every raw profiler sample, per-position baseline/candidate elapsed
+medians and candidate-to-baseline ratio, and geometric-mean ratios for the
+`heuristic-depth-12` (20/40/44 occupied) and `exact-16` (48 occupied)
+workloads. The raw sample retains nodes, outcome, score, PV, completed depth,
+and exactness so a human can review semantic equality independently of timing.
+CI tests validate report schema, digests, deterministic fields, ordering, and
+arithmetic with synthetic samples only. No CI assertion may require a wall
+clock speed, ratio, or threshold; a documented same-host release run is the
+only performance evidence.
+
 ### SearchEngine
 
 Wrapper around `Negascout` managing the transposition table and Zobrist keys.

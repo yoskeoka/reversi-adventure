@@ -10,6 +10,13 @@ ORACLE_MATCH_GAMES ?= 2
 ORACLE_REPORT ?= /tmp/reversi-adventure-oracle-report.jsonl
 ORACLE_MATCH_REPORT ?= /tmp/reversi-adventure-oracle-match.json
 BENCHMARK_CORPUS := tools/reversi-ai-benchmark/positions-v1.jsonl
+BENCHMARK_REFERENCE := tools/reversi-ai-benchmark/reference-v1.jsonl
+BENCHMARK_COMPARATOR := tools/reversi-ai-benchmark/compare.py
+BENCHMARK_BASELINE ?=
+BENCHMARK_CANDIDATE ?=
+BENCHMARK_REPORT ?= /tmp/reversi-adventure-search-comparison-v1.json
+BENCHMARK_REPETITIONS ?= 5
+BENCHMARK_TIME_LIMIT_MS ?= 300000
 PATTERN_TRAINER := tools/reversi-ai-training/training.py
 PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-manifest.json
 PATTERN_ARTIFACT ?= /tmp/reversi-adventure-pattern-artifact.json
@@ -27,7 +34,7 @@ AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPEN
 AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH) --exact-solver-empty-squares $(AI_EXACT_SOLVER_EMPTY_SQUARES)
 AI_CALIBRATION_COMMAND := $(AI_BINARY) --evaluator strategic --profile strong-engine-hcap-v1
 
-.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify pattern-training-test pattern-training-fixture
+.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify benchmark-reference benchmark-reference-verify benchmark-compare pattern-training-test pattern-training-fixture
 
 pattern-training-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-training/tests -p 'test_*.py'
@@ -73,3 +80,13 @@ benchmark-corpus:
 
 benchmark-corpus-verify:
 	$(PYTHON) $(ORACLE_TOOL) verify-benchmark-corpus --corpus $(BENCHMARK_CORPUS)
+
+benchmark-reference:
+	$(PYTHON) $(ORACLE_TOOL) generate-benchmark-reference --corpus $(BENCHMARK_CORPUS) --output $(BENCHMARK_REFERENCE) --timeout $(ORACLE_TIMEOUT)
+
+benchmark-reference-verify:
+	$(PYTHON) $(ORACLE_TOOL) verify-benchmark-reference --corpus $(BENCHMARK_CORPUS) --report $(BENCHMARK_REFERENCE)
+
+benchmark-compare:
+	@test -n "$(BENCHMARK_BASELINE)" && test -n "$(BENCHMARK_CANDIDATE)" || (echo "BENCHMARK_BASELINE and BENCHMARK_CANDIDATE must name explicit release profiler binaries" >&2; exit 2)
+	$(PYTHON) $(BENCHMARK_COMPARATOR) --baseline "$(BENCHMARK_BASELINE)" --candidate "$(BENCHMARK_CANDIDATE)" --corpus $(BENCHMARK_CORPUS) --output $(BENCHMARK_REPORT) --repetitions $(BENCHMARK_REPETITIONS) --time-limit-ms $(BENCHMARK_TIME_LIMIT_MS)

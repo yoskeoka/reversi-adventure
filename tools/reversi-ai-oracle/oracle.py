@@ -88,12 +88,23 @@ SEARCH_PERFORMANCE_SELF_PLAY_V1 = OracleProfile(
     candidate_exact_solver_empty_squares=0,
     legacy_level=6,
 )
+SEARCH_PERFORMANCE_REFERENCE_V1 = OracleProfile(
+    name="search-performance-reference-v1",
+    hash_level=25,
+    depth_ranges=(
+        DepthProbabilityRange(1, 41, 12, "100"),
+        DepthProbabilityRange(42, 60, 16, "100"),
+    ),
+    candidate_depth=12,
+    candidate_exact_solver_empty_squares=16,
+)
 PROFILES = {
     profile.name: profile
     for profile in (
         CI_SMOKE_V1,
         STRONG_ENGINE_HCAP_V1,
         SEARCH_PERFORMANCE_SELF_PLAY_V1,
+        SEARCH_PERFORMANCE_REFERENCE_V1,
     )
 }
 
@@ -566,6 +577,67 @@ def validate_benchmark_corpus(records: list[dict[str, object]]) -> None:
         key: canonical_json(value) for key, value in replayed.items()
     }:
         die("benchmark corpus records do not match their replayed transcripts")
+
+
+def records_digest(records: list[dict[str, object]]) -> str:
+    return hashlib.sha256(
+        "".join(canonical_json(record) + "\n" for record in records).encode("utf-8")
+    ).hexdigest()
+
+
+def profile_digest(profile: OracleProfile) -> str:
+    return hashlib.sha256(canonical_json(profile_metadata(profile)).encode("utf-8")).hexdigest()
+
+
+def benchmark_reference_reports(
+    corpus: list[dict[str, object]], reports: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    validate_benchmark_corpus(corpus)
+    profile = SEARCH_PERFORMANCE_REFERENCE_V1
+    if len(reports) != len(corpus):
+        die("reference report count does not match benchmark corpus")
+    corpus_sha256 = records_digest(corpus)
+    profile_data = profile_metadata(profile)
+    profile_sha256 = profile_digest(profile)
+    by_id = {str(report.get("position_id")): report for report in reports}
+    if len(by_id) != len(reports):
+        die("reference reports contain duplicate position ids")
+    result: list[dict[str, object]] = []
+    for record in corpus:
+        position_id = str(record["position_id"])
+        report = by_id.get(position_id)
+        if report is None or report.get("profile") != profile_data:
+            die(f"reference profile mismatch for {position_id!r}")
+        analysis = report.get("analysis")
+        if not isinstance(analysis, dict):
+            die(f"reference analysis is missing for {position_id!r}")
+        exact = record["stone_count"] == 48
+        evaluations = analysis.get("evaluations")
+        if not isinstance(evaluations, list) or len(evaluations) != len(record["legal_moves"]):
+            die(f"reference root-move set is incomplete for {position_id!r}")
+        if exact and (not all(item.get("exact") is True for item in evaluations if isinstance(item, dict)) or not isinstance(analysis.get("best_value"), int) or not isinstance(analysis.get("optimal_moves"), list)):
+            die(f"reference exact metadata is incomplete for {position_id!r}")
+        if not exact and not all(isinstance(item, dict) and item.get("completed_depth") == 12 for item in evaluations):
+            die(f"reference depth-12 metadata is incomplete for {position_id!r}")
+        result.append({
+            "schema_version": 1,
+            "position_id": position_id,
+            "board_sha256": hashlib.sha256(str(record["board"]).encode("ascii")).hexdigest(),
+            "corpus_sha256": corpus_sha256,
+            "profile": profile_data,
+            "profile_sha256": profile_sha256,
+            "workload": "exact-16" if exact else "heuristic-depth-12",
+            "analysis": analysis,
+        })
+    return result
+
+
+def validate_benchmark_reference_reports(
+    corpus: list[dict[str, object]], reports: list[dict[str, object]]
+) -> None:
+    canonical = benchmark_reference_reports(corpus, reports)
+    if [canonical_json(item) for item in reports] != [canonical_json(item) for item in canonical]:
+        die("benchmark reference report has an invalid schema or digest")
 
 
 def cache_root() -> Path:
@@ -1582,6 +1654,15 @@ def command_main(argv: list[str]) -> int:
     benchmark_verify = subparsers.add_parser("verify-benchmark-corpus")
     benchmark_verify.add_argument("--corpus", type=Path, required=True)
 
+    benchmark_reference = subparsers.add_parser("generate-benchmark-reference")
+    benchmark_reference.add_argument("--corpus", type=Path, required=True)
+    benchmark_reference.add_argument("--output", type=Path, required=True)
+    benchmark_reference.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+
+    benchmark_reference_verify = subparsers.add_parser("verify-benchmark-reference")
+    benchmark_reference_verify.add_argument("--corpus", type=Path, required=True)
+    benchmark_reference_verify.add_argument("--report", type=Path, required=True)
+
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("--corpus", type=Path, default=default_paths()[0])
     analyze.add_argument("--output", type=Path, required=True)
@@ -1646,6 +1727,27 @@ def command_main(argv: list[str]) -> int:
             validate_benchmark_corpus(records)
             write_jsonl(args.output, records)
             print(f"wrote {len(records)} benchmark positions to {args.output}")
+            return 0
+
+        if args.command == "generate-benchmark-reference":
+            validate_budget(1, args.timeout)
+            records = load_canonical_jsonl(args.corpus)
+            validate_benchmark_corpus(records)
+            binary, cwd = ensure_oracle(args.timeout)
+            analyses = analyze_records(
+                records, binary, cwd, SEARCH_PERFORMANCE_REFERENCE_V1, args.timeout, None
+            )
+            reports = benchmark_reference_reports(records, analyses)
+            write_jsonl(args.output, reports)
+            print(f"wrote {len(reports)} benchmark reference reports to {args.output}")
+            return 0
+
+        if args.command == "verify-benchmark-reference":
+            records = load_canonical_jsonl(args.corpus)
+            validate_benchmark_corpus(records)
+            reports = load_canonical_jsonl(args.report)
+            validate_benchmark_reference_reports(records, reports)
+            print(f"verified {len(reports)} benchmark reference reports")
             return 0
 
         if args.command == "verify":

@@ -398,6 +398,38 @@ class OracleHarnessTests(unittest.TestCase):
             with self.assertRaisesRegex(oracle.OracleError, "not canonical"):
                 oracle.load_canonical_jsonl(malformed)
 
+    def test_benchmark_reference_profile_and_report_are_pinned(self):
+        profile = oracle.SEARCH_PERFORMANCE_REFERENCE_V1
+        self.assertEqual(
+            oracle.oracle_argv(Path("oracle"), profile),
+            ["oracle", "-nobook", "-thread", "1", "-hash", "25",
+             "-depthprobrange", "1", "41", "12", "100",
+             "-depthprobrange", "42", "60", "16", "100"],
+        )
+        corpus = oracle.load_jsonl(
+            Path(__file__).resolve().parents[2] / "reversi-ai-benchmark" / "positions-v1.jsonl"
+        )
+        analyses = []
+        for record in corpus:
+            exact = record["stone_count"] == 48
+            evaluations = [{
+                "move": move, "value": 0,
+                "completed_depth": 16 if exact else 12,
+                "nodes": 1, "elapsed_ms": 1, "exact": exact,
+            } for move in record["legal_moves"]]
+            analyses.append({
+                "position_id": record["position_id"],
+                "profile": oracle.profile_metadata(profile),
+                "analysis": {"best_value": 0, "optimal_moves": list(record["legal_moves"]), "evaluations": evaluations},
+            })
+        reports = oracle.benchmark_reference_reports(corpus, analyses)
+        oracle.validate_benchmark_reference_reports(corpus, reports)
+        self.assertEqual({report["workload"] for report in reports}, {"heuristic-depth-12", "exact-16"})
+        malformed = copy.deepcopy(reports)
+        malformed[0]["profile_sha256"] = "0" * 64
+        with self.assertRaisesRegex(oracle.OracleError, "schema or digest"):
+            oracle.validate_benchmark_reference_reports(corpus, malformed)
+
 
 if __name__ == "__main__":
     unittest.main()
