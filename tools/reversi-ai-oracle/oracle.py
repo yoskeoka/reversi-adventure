@@ -40,6 +40,7 @@ MAX_PROTOCOL_LINE_BYTES = 64 * 1024
 MAX_GTP_RESPONSE_LINES = 1024
 COORDINATE_RE = re.compile(r"^[a-h][1-8]$")
 BOARD_RE = re.compile(r"^[BW.]{64}$")
+BENCHMARK_CORPUS_V1_SHA256 = "5831839527b433b4b92c314331b9f0e613d98e0f82b9b6edb725f8bd6cb97ff8"
 
 
 class OracleError(RuntimeError):
@@ -593,6 +594,8 @@ def benchmark_reference_reports(
     corpus: list[dict[str, object]], reports: list[dict[str, object]]
 ) -> list[dict[str, object]]:
     validate_benchmark_corpus(corpus)
+    if records_digest(corpus) != BENCHMARK_CORPUS_V1_SHA256:
+        die("benchmark reference requires the pinned positions-v1 corpus digest")
     profile = SEARCH_PERFORMANCE_REFERENCE_V1
     if len(reports) != len(corpus):
         die("reference report count does not match benchmark corpus")
@@ -615,7 +618,14 @@ def benchmark_reference_reports(
         evaluations = analysis.get("evaluations")
         if not isinstance(evaluations, list) or len(evaluations) != len(record["legal_moves"]):
             die(f"reference root-move set is incomplete for {position_id!r}")
-        if exact and (not all(item.get("exact") is True for item in evaluations if isinstance(item, dict)) or not isinstance(analysis.get("best_value"), int) or not isinstance(analysis.get("optimal_moves"), list)):
+        moves = [item.get("move") for item in evaluations if isinstance(item, dict)]
+        if len(moves) != len(evaluations) or sorted(moves) != record["legal_moves"] or not all(isinstance(item.get("value"), int) for item in evaluations if isinstance(item, dict)):
+            die(f"reference evaluations are malformed for {position_id!r}")
+        best_value = max(int(item["value"]) for item in evaluations)
+        optimal_moves = sorted(str(item["move"]) for item in evaluations if int(item["value"]) == best_value)
+        if analysis.get("best_value") != best_value or analysis.get("optimal_moves") != optimal_moves:
+            die(f"reference optimal-move metadata is invalid for {position_id!r}")
+        if exact and (not all(isinstance(item, dict) and item.get("exact") is True for item in evaluations) or not isinstance(analysis.get("best_value"), int) or not isinstance(analysis.get("optimal_moves"), list)):
             die(f"reference exact metadata is incomplete for {position_id!r}")
         if not exact and not all(isinstance(item, dict) and item.get("completed_depth") == 12 for item in evaluations):
             die(f"reference depth-12 metadata is incomplete for {position_id!r}")

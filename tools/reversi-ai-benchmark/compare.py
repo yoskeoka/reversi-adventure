@@ -21,6 +21,7 @@ from typing import Callable
 
 
 RUNNER_VERSION = "reversi-ai-search-comparator-v1"
+CORPUS_V1_SHA256 = "5831839527b433b4b92c314331b9f0e613d98e0f82b9b6edb725f8bd6cb97ff8"
 
 
 class ComparisonError(RuntimeError):
@@ -39,6 +40,8 @@ def load_corpus(path: Path) -> list[dict[str, object]]:
     if not path.is_file():
         raise ComparisonError(f"corpus is missing: {path}")
     text = path.read_text(encoding="utf-8")
+    if hashlib.sha256(text.encode("utf-8")).hexdigest() != CORPUS_V1_SHA256:
+        raise ComparisonError("comparison requires the pinned positions-v1 corpus digest")
     if not text.endswith("\n"):
         raise ComparisonError("corpus must end with a newline")
     records = []
@@ -177,6 +180,10 @@ def merge_fragments(fragments: list[dict[str, object]]) -> dict[str, object]:
         raise ComparisonError("comparison fragments do not contain 160 raw samples")
     positions = []
     for position_id in sorted({str(item["position_id"]) for item in raw}):
+        for item in (item for item in raw if item["position_id"] == position_id):
+            sample = item.get("sample")
+            if not isinstance(sample, dict) or type(sample.get("elapsed_ns")) is not int or sample["elapsed_ns"] <= 0 or sample.get("timing_success") is not True:
+                raise ComparisonError(f"comparison fragments have an invalid timing sample for {position_id}")
         samples = {label: [int(item["sample"]["elapsed_ns"]) for item in raw if item["position_id"] == position_id and item["binary"] == label] for label in ("baseline", "candidate")}
         if any(len(values) != 5 for values in samples.values()):
             raise ComparisonError(f"comparison fragments have missing samples for {position_id}")
