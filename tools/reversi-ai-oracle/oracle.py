@@ -80,7 +80,22 @@ STRONG_ENGINE_HCAP_V1 = OracleProfile(
     candidate_depth=12,
     candidate_exact_solver_empty_squares=16,
 )
-PROFILES = {profile.name: profile for profile in (CI_SMOKE_V1, STRONG_ENGINE_HCAP_V1)}
+SEARCH_PERFORMANCE_SELF_PLAY_V1 = OracleProfile(
+    name="search-performance-self-play-v1",
+    hash_level=25,
+    depth_ranges=(),
+    candidate_depth=6,
+    candidate_exact_solver_empty_squares=0,
+    legacy_level=6,
+)
+PROFILES = {
+    profile.name: profile
+    for profile in (
+        CI_SMOKE_V1,
+        STRONG_ENGINE_HCAP_V1,
+        SEARCH_PERFORMANCE_SELF_PLAY_V1,
+    )
+}
 
 
 def validate_profile(profile: OracleProfile) -> None:
@@ -473,6 +488,66 @@ def validate_corpus(records: list[dict[str, object]]) -> None:
         if position_id in ids:
             die(f"duplicate corpus position_id: {position_id!r}")
         ids.add(position_id)
+
+
+def d4_canonical(board: str) -> str:
+    """Return the lexicographically least of the eight square symmetries."""
+    rows = [board[index:index + 8] for index in range(0, 64, 8)]
+
+    def rotate(square: list[str]) -> list[str]:
+        return ["".join(square[7 - col][row] for col in range(8)) for row in range(8)]
+
+    def reflect(square: list[str]) -> list[str]:
+        return [row[::-1] for row in square]
+
+    variants: list[str] = []
+    square = rows
+    for _ in range(4):
+        variants.append("".join(square))
+        variants.append("".join(reflect(square)))
+        square = rotate(square)
+    return min(variants)
+
+
+def validate_benchmark_corpus(records: list[dict[str, object]]) -> None:
+    if len(records) != 16:
+        die("benchmark corpus must contain exactly sixteen records")
+    expected = {(game, stones) for game in range(1, 5) for stones in (20, 40, 44, 48)}
+    observed: set[tuple[int, int]] = set()
+    symmetries: set[str] = set()
+    transcripts: dict[int, str] = {}
+    for record in records:
+        validate_corpus_record(record)
+        provenance = record["provenance"]
+        if not isinstance(provenance, dict) or type(provenance.get("source_game")) is not int:
+            die("benchmark corpus provenance requires integer source_game")
+        identity = (provenance["source_game"], record["stone_count"])
+        if identity in observed:
+            die(f"duplicate benchmark root {identity!r}")
+        observed.add(identity)
+        transcript = provenance.get("transcript")
+        if not isinstance(transcript, str) or provenance.get("game_record") != transcript:
+            die(f"benchmark corpus has invalid transcript provenance: {record['position_id']!r}")
+        source_game = provenance["source_game"]
+        previous = transcripts.setdefault(source_game, transcript)
+        if previous != transcript:
+            die(f"benchmark corpus has inconsistent transcript provenance for game {source_game}")
+        symmetry = d4_canonical(str(record["board"]))
+        if symmetry in symmetries:
+            die(f"benchmark corpus has a D4-equivalent duplicate: {record['position_id']!r}")
+        symmetries.add(symmetry)
+    if observed != expected:
+        die(f"benchmark corpus roots differ from expected set: {sorted(observed)!r}")
+    replayed = {
+        (game, record["stone_count"]): record
+        for game, transcript in transcripts.items()
+        for record in benchmark_records_from_transcript(transcript, game)
+    }
+    actual = {(record["provenance"]["source_game"], record["stone_count"]): record for record in records}
+    if {key: canonical_json(value) for key, value in actual.items()} != {
+        key: canonical_json(value) for key, value in replayed.items()
+    }:
+        die("benchmark corpus records do not match their replayed transcripts")
 
 
 def cache_root() -> Path:
@@ -1177,6 +1252,92 @@ def golden_projection(reports: list[dict[str, object]]) -> list[dict[str, object
     return projected
 
 
+def initial_board() -> str:
+    cells = list("." * 64)
+    cells[27], cells[28], cells[35], cells[36] = "W", "B", "B", "W"
+    return "".join(cells)
+
+
+def replay_console_move(board: str, side: str, move: str) -> tuple[str, str]:
+    """Apply a coordinate while mirroring Console self-play's implicit pass."""
+    legal = legal_moves(board, side)
+    if move not in legal and not legal:
+        if not legal_moves(board, other(side)):
+            die("benchmark self-play transcript continues after game over")
+        side = other(side)
+    if move not in legal_moves(board, side):
+        die(f"benchmark self-play transcript has illegal move {move!r}")
+    return apply_move(board, side, move), other(side)
+
+
+def benchmark_records_from_transcript(transcript: str, game_index: int) -> list[dict[str, object]]:
+    """Replay one Console self-play transcript and retain the workload roots."""
+    board, side = initial_board(), "B"
+    records: list[dict[str, object]] = []
+    if len(transcript) % 2:
+        die(f"benchmark self-play transcript {game_index} has odd length")
+    for offset in range(0, len(transcript), 2):
+        move = transcript[offset:offset + 2].lower()
+        try:
+            board, side = replay_console_move(board, side, move)
+        except OracleError as exc:
+            die(f"benchmark self-play transcript {game_index}: {exc}")
+        stones = sum(cell != "." for cell in board)
+        if stones in (20, 40, 44, 48):
+            records.append(
+                {
+                    "schema_version": 1,
+                    "position_id": f"self-play-{game_index}-{stones}",
+                    "board": board,
+                    "side_to_move": side,
+                    "stone_count": stones,
+                    "phase": phase_for(board),
+                    "legal_moves": legal_moves(board, side),
+                    "outcome": outcome_for(board, side),
+                    "provenance": {
+                        "source": SEARCH_PERFORMANCE_SELF_PLAY_V1.name,
+                        "source_game": game_index,
+                        "game_record": transcript,
+                        "transcript": transcript,
+                        "generator": "tools/reversi-ai-oracle/oracle.py",
+                    },
+                }
+            )
+    if len(records) != 4:
+        die(
+            f"benchmark self-play transcript {game_index} did not reach all roots; "
+            f"captured {[record['stone_count'] for record in records]!r}"
+        )
+    return records
+
+
+def run_fast_self_play(binary: Path, cwd: Path, games: int, timeout: float) -> list[dict[str, object]]:
+    """Use Console's reproducible transcript mode, rather than the GTP game loop."""
+    profile = profile_from_name(SEARCH_PERFORMANCE_SELF_PLAY_V1.name)
+    command = oracle_argv(binary, profile) + ["-quiet", "-selfplay", str(games), "6"]
+    try:
+        completed = subprocess.run(command, cwd=cwd, text=True, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        die(f"benchmark self-play timed out after {timeout:g}s")
+    if completed.returncode:
+        die(f"benchmark self-play failed: {completed.stderr.strip()}")
+    transcripts = [
+        line.strip().upper()
+        for line in completed.stdout.splitlines()
+        if re.fullmatch(r"(?:[a-h][1-8])+", line.strip(), re.IGNORECASE)
+    ]
+    if len(transcripts) != games:
+        die(
+            f"benchmark self-play expected {games} transcripts, got {len(transcripts)}; "
+            f"stdout={completed.stdout[:500]!r}; stderr={completed.stderr[:500]!r}"
+        )
+    return [
+        record
+        for index, transcript in enumerate(transcripts, 1)
+        for record in benchmark_records_from_transcript(transcript, index)
+    ]
+
+
 class GtpSession:
     def __init__(self, binary: Path, cwd: Path, profile: OracleProfile, timeout: float) -> None:
         validate_profile(profile)
@@ -1391,6 +1552,16 @@ def command_main(argv: list[str]) -> int:
     generate = subparsers.add_parser("generate-corpus")
     generate.add_argument("--output", type=Path, default=default_paths()[0])
 
+    benchmark = subparsers.add_parser("generate-benchmark-corpus")
+    benchmark.add_argument("--output", type=Path, required=True)
+    benchmark.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+
+    setup = subparsers.add_parser("setup-oracle")
+    setup.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+
+    benchmark_verify = subparsers.add_parser("verify-benchmark-corpus")
+    benchmark_verify.add_argument("--corpus", type=Path, required=True)
+
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("--corpus", type=Path, default=default_paths()[0])
     analyze.add_argument("--output", type=Path, required=True)
@@ -1434,6 +1605,27 @@ def command_main(argv: list[str]) -> int:
             validate_corpus(records)
             write_jsonl(args.output, records)
             print(f"wrote {len(records)} corpus positions to {args.output}")
+            return 0
+
+        if args.command == "setup-oracle":
+            validate_budget(1, args.timeout)
+            binary, _ = ensure_oracle(args.timeout)
+            print(f"verified pinned Egaroucid v{ORACLE_VERSION}: {binary}")
+            return 0
+
+        if args.command == "verify-benchmark-corpus":
+            records = load_jsonl(args.corpus)
+            validate_benchmark_corpus(records)
+            print(f"verified {len(records)} benchmark positions")
+            return 0
+
+        if args.command == "generate-benchmark-corpus":
+            validate_budget(1, args.timeout)
+            binary, cwd = ensure_oracle(args.timeout)
+            records = run_fast_self_play(binary, cwd, 4, args.timeout)
+            validate_benchmark_corpus(records)
+            write_jsonl(args.output, records)
+            print(f"wrote {len(records)} benchmark positions to {args.output}")
             return 0
 
         if args.command == "verify":

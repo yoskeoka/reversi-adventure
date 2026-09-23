@@ -328,6 +328,31 @@ only when it completes the board's remaining empty-square count with
 cancellation, or incomplete search is a failed sample with a stable failure
 reason, and is not a completed timing measurement.
 
+### Search performance benchmark corpus
+
+The checked-in `positions-v1.jsonl` corpus contains exactly sixteen legal
+decision positions: four positions at 20, 40, 44, and 48 occupied discs from
+each of four pinned self-play games. Every record has the version-1 corpus
+schema, its legal moves and outcome, and replayable provenance including its
+source-game number and complete coordinate transcript. Records are canonical
+JSON Lines, have the expected game/count identity set, and must not duplicate
+one another directly or under an 8-by-8 D4 symmetry.
+
+The corpus generator starts each game from the initial board, uses the pinned,
+bookless, one-thread Console oracle at level 6, and randomizes only its first
+six plies. It replays every resulting transcript legally before publishing
+records. Console self-play's implicit passes are replayed as state
+transitions, even though they are absent from its coordinate transcript. The
+generator and validator fail closed for a malformed transcript, an illegal
+move or pass transition, an incomplete root set, malformed records,
+duplicates, D4-equivalent boards, or non-canonical output. This self-play
+profile is distinct from and does not alter `strong-engine-hcap-v1`.
+
+`make benchmark-oracle-setup` provisions the pinned external Console tool,
+`make benchmark-corpus` regenerates the corpus, and
+`make benchmark-corpus-verify` validates the checked-in artifact without
+performing reference analysis or timing measurement.
+
 ### SearchEngine
 
 Wrapper around `Negascout` managing the transposition table and Zobrist keys.
