@@ -63,7 +63,11 @@ CPU time と peak RSS も実測・報告し、増加する場合は採用前に�
   完全な exact PV を両立する二つの限定候補を試す。
 - (MODIFY) 必要な `rust/reversi-ai/src/search/` の focused tests と
   `tools/reversi-ai-benchmark/` -- 意味論検証と process-specific な
-  CPU time / peak RSS 計測。比較器の wall-clock 算術は維持する。
+  CPU time / peak RSS 計測、report schema と synthetic validation。
+  比較器の wall-clock 算術は維持する。
+- (MODIFY) `docs/exec-plan/todo/0018-reversi-ai-strong-engine-acceptance.md`
+  と `0019-reversi-ai-pattern-reinforcement-cycle.md` -- 0029 の結果を
+  候補 freeze と long-run manifest の前提に加える。
 - (NEW) `docs/references/` の候補別診断記録と最終 5 反復 report。
 - (MODIFY) `docs/exec-plan/todo/0020-reversi-ai-search-performance.md`
   -- 両 workload の比率、実測資源、原因の切り分け、report digest と
@@ -96,6 +100,32 @@ CPU time と peak RSS も実測・報告し、増加する場合は採用前に�
 6. 5 反復 report と process ごとの CPU time / peak RSS の実測を保存し、
    0020 の性能条件で判定する。局面・反復ごとの意味論が異なる、測定が
    失敗する、または CPU/RSS が未測定なら成功 report としない。
+
+## 資源計測と report schema
+
+- Linux の同一ホストで比較器が起動した各 profiler 子プロセスを個別に
+  `wait4` で回収し、その子の `rusage` を採取する。`RUSAGE_CHILDREN` の
+  累積値や複数の子の最大値を個別 sample に割り当てない。比較器は
+  `subprocess` の stdout/stderr を欠落・deadlock なく回収する。
+- report schema/runner version を更新し、各 measured
+  `raw_samples[]` に `resource_usage` を置く。値は非負の
+  `user_cpu_ns` と `system_cpu_ns`、正の `peak_rss_kib` とし、
+  `measurement_method: linux-wait4` を environment に記録する。
+  Linux `ru_maxrss` の KiB をそのまま記録し、曖昧な byte 換算をしない。
+  warm-up の値は report と集計から除く。
+- 局面ごとに baseline/candidate の 5 件の
+  `(user_cpu_ns + system_cpu_ns)` の median を算出する。workload ごとの
+  candidate/baseline CPU 比は局面比の幾何平均とする。peak RSS は
+  workload・binary ごとに全 measured sample の最大 KiB を報告する。
+  wall-clock の既存 median と幾何平均を変更せず、CPU/RSS を代替 gate
+  にしない。増加は数値とともに明示し、採用前の判断材料にする。
+- 子プロセスの異常終了、rusage 欠落、非整数・負値、RSS が 0、sample
+  数不足、baseline/candidate で計測方式・ホストが異なる場合は fail
+  closed とし、成功 report を書かない。Linux 以外で同じ方式が使えない
+  場合も欠測を推測せず、測定環境を整えてから実行する。
+- synthetic fixture で resource schema、CPU median/ratio、peak RSS の
+  算術、欠測・不一致による失敗を検証する。CI は wall-clock または
+  CPU/RSS の速度・使用量しきい値を assert しない。
 
 ## 検証と採用判断
 
