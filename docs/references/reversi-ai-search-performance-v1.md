@@ -35,3 +35,19 @@ Because both binaries have identical source and binary digests, these ratios
 are baseline measurement noise, not an optimization claim. Future candidate
 changes use the same corpus, reference report, runner, and five-repetition
 protocol for a comparable same-host result.
+
+## 0022 portable bitboard move experiment
+
+The 0022 candidate replaces empty-square ray scanning with portable scalar
+bitboard propagation and reuses each move's computed flip mask while building
+search successors. Its raw five-repetition report is
+`reversi-ai-search-performance-0022.json`, SHA-256
+`2e007112c292a7b51d31c79b2ad6fc0e385286586cb936e2c5b8a02d864a2372`.
+It measured a candidate/baseline geometric mean of `0.408183340291966` across
+the twelve depth-12 positions (about 59.2% lower median time), so the change
+is retained for the midgame workload. The exact-16 result was
+`0.9661088805116693` across four positions (about 3.4% lower); it is reported
+as supporting evidence rather than a separate exact-workload acceptance claim.
+This split is expected: depth-12 midgame repeatedly pays legal-move and
+successor-construction cost, while exact-16 is evaluator-independent exhaustive
+proof work where solver cache, parity, and terminal handling may dominate.

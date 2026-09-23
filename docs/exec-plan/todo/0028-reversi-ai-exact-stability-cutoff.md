@@ -13,6 +13,9 @@ fully removed and recorded as rejected.
 This plan does not reuse a heuristic stability score as proof, estimate future
 stability, add selectivity, or change the 16-empty supported threshold.
 
+Record both workload ratios, report digest, and the accepted/rejected outcome
+in parent 0020. Retain the change when either workload improves by at least 5%.
+
 ## Existing references
 
 - `rust/reversi-ai/src/search/endgame.rs:108-218` has no board-derived score

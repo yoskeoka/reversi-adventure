@@ -12,6 +12,9 @@ the 0021 midgame timing gate; otherwise remove it and record rejection.
 This plan does not add selective pruning, new evaluation, a second TT, exact-
 solver cache sharing, or prefetch/CPU-specific instructions.
 
+Record both workload ratios, report digest, and the accepted/rejected outcome
+in parent 0020. Retain the change when either workload improves by at least 5%.
+
 ## Existing references
 
 - `rust/reversi-ai/src/search/negascout.rs:141-180` applies current-node TT

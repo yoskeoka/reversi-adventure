@@ -1,36 +1,83 @@
 use crate::board::Board;
 use crate::types::{Color, Position};
 
-/// Direction shifts for the 8 cardinal/diagonal directions.
-/// Each tuple is (row_delta, col_delta) represented as shift amount and mask.
-const DIRECTIONS: [(i8, i8); 8] = [
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, -1),
-    (0, 1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
+const NOT_A_FILE: u64 = 0xfefefefefefefefe;
+const NOT_H_FILE: u64 = 0x7f7f7f7f7f7f7f7f;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GeneratedMove {
+    pub position: Position,
+    pub flips: u64,
+}
+fn shift_north(bits: u64) -> u64 {
+    bits >> 8
+}
+fn shift_south(bits: u64) -> u64 {
+    bits << 8
+}
+fn shift_east(bits: u64) -> u64 {
+    (bits & NOT_H_FILE) << 1
+}
+fn shift_west(bits: u64) -> u64 {
+    (bits & NOT_A_FILE) >> 1
+}
+fn shift_north_east(bits: u64) -> u64 {
+    (bits & NOT_H_FILE) >> 7
+}
+fn shift_north_west(bits: u64) -> u64 {
+    (bits & NOT_A_FILE) >> 9
+}
+fn shift_south_east(bits: u64) -> u64 {
+    (bits & NOT_H_FILE) << 9
+}
+fn shift_south_west(bits: u64) -> u64 {
+    (bits & NOT_A_FILE) << 7
+}
+fn propagate(own: u64, opp: u64, empty: u64, shift: fn(u64) -> u64) -> u64 {
+    let mut line = shift(own) & opp;
+    for _ in 0..5 {
+        line |= shift(line) & opp;
+    }
+    shift(line) & empty
+}
+fn flips_in_direction(place: u64, own: u64, opp: u64, shift: fn(u64) -> u64) -> u64 {
+    let mut line = shift(place) & opp;
+    for _ in 0..5 {
+        line |= shift(line) & opp;
+    }
+    if shift(line) & own != 0 {
+        line
+    } else {
+        0
+    }
+}
 
 /// Returns a bitmask of all legal move positions for the given color.
 pub fn legal_moves(board: &Board, color: Color) -> u64 {
-    let mut moves = 0u64;
+    let own = board.pieces(color);
+    let opp = board.pieces(color.opponent());
     let empty = board.empty_cells();
-
-    // Check each empty cell
-    let mut candidates = empty;
-    while candidates != 0 {
-        let bit = candidates.isolate_lowest_one();
-        let index = bit.trailing_zeros() as u8;
-        let pos = Position::from_bit_index(index);
-        if flipped_pieces(board, color, pos) != 0 {
-            moves |= bit;
-        }
-        candidates &= candidates - 1; // clear lowest set bit
+    propagate(own, opp, empty, shift_north)
+        | propagate(own, opp, empty, shift_south)
+        | propagate(own, opp, empty, shift_east)
+        | propagate(own, opp, empty, shift_west)
+        | propagate(own, opp, empty, shift_north_east)
+        | propagate(own, opp, empty, shift_north_west)
+        | propagate(own, opp, empty, shift_south_east)
+        | propagate(own, opp, empty, shift_south_west)
+}
+pub fn generated_moves(board: &Board, color: Color) -> Vec<GeneratedMove> {
+    let mut legal = legal_moves(board, color);
+    let mut result = Vec::with_capacity(legal.count_ones() as usize);
+    while legal != 0 {
+        let bit = legal.isolate_lowest_one();
+        let position = Position::from_bit_index(bit.trailing_zeros() as u8);
+        result.push(GeneratedMove {
+            position,
+            flips: flipped_pieces(board, color, position),
+        });
+        legal &= legal - 1;
     }
-    moves
+    result
 }
 
 /// Returns true if the given move is legal.
@@ -48,32 +95,15 @@ pub fn is_legal_move(board: &Board, color: Color, pos: Position) -> bool {
 pub fn flipped_pieces(board: &Board, color: Color, pos: Position) -> u64 {
     let own = board.pieces(color);
     let opp = board.pieces(color.opponent());
-    let mut flipped = 0u64;
-
-    for &(dr, dc) in &DIRECTIONS {
-        let mut line = 0u64;
-        let mut r = pos.row as i8 + dr;
-        let mut c = pos.col as i8 + dc;
-
-        // Walk in this direction, collecting opponent pieces
-        while (0..8).contains(&r) && (0..8).contains(&c) {
-            let bit = 1u64 << (r as u8 * 8 + c as u8);
-            if opp & bit != 0 {
-                line |= bit;
-            } else if own & bit != 0 {
-                // Found own piece — all collected opponent pieces are flipped
-                flipped |= line;
-                break;
-            } else {
-                // Empty cell — no flips in this direction
-                break;
-            }
-            r += dr;
-            c += dc;
-        }
-    }
-
-    flipped
+    let place = pos.bit_mask();
+    flips_in_direction(place, own, opp, shift_north)
+        | flips_in_direction(place, own, opp, shift_south)
+        | flips_in_direction(place, own, opp, shift_east)
+        | flips_in_direction(place, own, opp, shift_west)
+        | flips_in_direction(place, own, opp, shift_north_east)
+        | flips_in_direction(place, own, opp, shift_north_west)
+        | flips_in_direction(place, own, opp, shift_south_east)
+        | flips_in_direction(place, own, opp, shift_south_west)
 }
 
 /// Applies a move: places a piece and flips captured pieces.
@@ -82,6 +112,10 @@ pub fn make_move(board: &Board, color: Color, pos: Position) -> Board {
     let flips = flipped_pieces(board, color, pos);
     assert!(flips != 0, "Illegal move at ({}, {})", pos.row, pos.col);
 
+    make_move_with_flips(board, color, pos, flips)
+}
+pub fn make_move_with_flips(board: &Board, color: Color, pos: Position, flips: u64) -> Board {
+    assert!(flips != 0, "Illegal move at ({}, {})", pos.row, pos.col);
     let place = pos.bit_mask();
     let mut new_board = *board;
 

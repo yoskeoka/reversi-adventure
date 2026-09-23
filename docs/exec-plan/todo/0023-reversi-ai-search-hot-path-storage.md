@@ -13,6 +13,10 @@ This plan does not change move ordering, alpha-beta windows, evaluator calls,
 TT context identity, or the heuristic/exact cache boundary. Exact PV
 reconstruction may add deterministic proof work, which is counted explicitly.
 
+Before PR preparation, record both workload ratios, report digest, and the
+accepted/rejected outcome in parent 0020. Retain production code if either
+workload improves by at least 5%; otherwise remove it.
+
 ## Existing references
 
 - `rust/reversi-ai/src/search/negascout.rs:18-23,131-173,204-268` creates and

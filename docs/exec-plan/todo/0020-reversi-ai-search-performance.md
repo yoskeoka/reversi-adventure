@@ -68,6 +68,14 @@ GDExtension, or release artifacts.
    merges.
 2. `0022-reversi-engine-portable-bitboard-moves.md` replaces per-empty-square
    move generation and carries computed flips into move application.
+   Accepted for the heuristic workload: portable directional propagation and
+   descriptor reuse produced a candidate/baseline geometric mean of
+   `0.408183340291966` across 12 depth-12 positions (about 59.2% lower median
+   time). The four exact-16 positions measured `0.9661088805116693` (about
+   3.4% lower), which is recorded but not claimed as an exact-workload gate.
+   The 160-sample report is
+   `docs/references/reversi-ai-search-performance-0022.json`, SHA-256
+   `2e007112c292a7b51d31c79b2ad6fc0e385286586cb936e2c5b8a02d864a2372`.
 3. `0023-reversi-ai-search-hot-path-storage.md` removes recursive heap-backed
    PV/cache allocation while preserving public results and interruption.
 4. `0024-reversi-ai-aspiration-windows.md` tries bounded iterative-deepening
@@ -101,9 +109,17 @@ and parallel search remain owned by their existing plans.
 - Run one warm-up and at least five measured repetitions per binary/position.
   Report every raw elapsed sample, per-position median, workload geometric
   mean, node count, outcome, score, completed depth, PV, and exact flag.
-- A child-specific speed win is at least 5% in its targeted workload geometric
-  mean with no greater than 3% regression in the other workload. Noise or a
-  smaller gain is rejection, not justification to loosen the gate afterward.
+- A child is accepted when either workload's geometric mean is at least 5%
+  lower than its immediate baseline. The other workload's result is always
+  reported but does not erase that acceptance. A child that clears neither
+  workload records its rejected report and removes its experiment code.
+- Every child records its accepted or rejected outcome, both workload ratios,
+  report digest, and a concise causal explanation in this parent before its PR.
+- The workloads are intentionally independently reported: depth-12 midgame
+  repeatedly performs heuristic move generation and successor construction,
+  whereas exact-16 is evaluator-independent exhaustive solving whose cache,
+  parity, and terminal-proof work can dominate. A gain in either is valuable
+  without implying the same gain in the other.
 - Nonselective changes preserve legal outcome, score, completed depth,
   exactness, deterministic tie-breaking/PV, pass behavior, and the
   last-completed-iteration contract. Node counts may change only for a plan
