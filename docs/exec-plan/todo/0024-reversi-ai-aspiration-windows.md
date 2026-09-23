@@ -10,8 +10,9 @@ deterministically on fail-low or fail-high. Accept only if the final full-depth
 result is identical and the 0021 midgame timing gate passes. Exact solving is
 unchanged.
 
-Record both workload ratios, report digest, and the accepted/rejected outcome
-in parent 0020. Retain the change when either workload improves by at least 5%.
+Record both workload ratios and the report digest in parent 0020. The user
+decides whether to retain the experiment; CPU comparison is wall-clock based,
+with peak memory and the configured wall-clock deadline as resource limits.
 
 ## Existing references
 

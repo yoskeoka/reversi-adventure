@@ -115,6 +115,10 @@ and parallel search remain owned by their existing plans.
   workload records its rejected report and removes its experiment code.
 - Every child records its accepted or rejected outcome, both workload ratios,
   report digest, and a concise causal explanation in this parent before its PR.
+- CPU acceptance is based only on the same-host release timing ratios. Node
+  totals are diagnostic and must not act as a child acceptance, rejection, or
+  resource gate; required resource constraints are bounded peak memory and the
+  configured wall-clock budget.
 - The workloads are intentionally independently reported: depth-12 midgame
   repeatedly performs heuristic move generation and successor construction,
   whereas exact-16 is evaluator-independent exhaustive solving whose cache,

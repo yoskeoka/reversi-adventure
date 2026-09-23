@@ -13,12 +13,52 @@ pub struct Negascout<'a, E: BoardEvaluator + ?Sized> {
     tt: &'a mut TranspositionTable,
     zobrist: &'a ZobristKeys,
     nodes_searched: u64,
+    pv: PvScratch,
 }
 
-/// Internal search result for a single node.
+const MAX_SEARCH_PLIES: usize = 64;
+
+struct PvScratch {
+    positions: [[Option<Position>; MAX_SEARCH_PLIES]; MAX_SEARCH_PLIES + 1],
+    lengths: [u8; MAX_SEARCH_PLIES + 1],
+}
+
+impl PvScratch {
+    fn clear(&mut self, ply: usize) {
+        self.lengths[ply] = 0;
+    }
+    fn single(&mut self, ply: usize, position: Position) {
+        self.positions[ply][0] = Some(position);
+        self.lengths[ply] = 1;
+    }
+    fn copy_child(&mut self, ply: usize) {
+        let child = ply + 1;
+        let length = self.lengths[child] as usize;
+        for index in 0..length {
+            self.positions[ply][index] = self.positions[child][index];
+        }
+        self.lengths[ply] = length as u8;
+    }
+    fn prepend_child(&mut self, ply: usize, position: Position) {
+        let child = ply + 1;
+        let length = self.lengths[child] as usize;
+        for index in (0..length).rev() {
+            self.positions[ply][index + 1] = self.positions[child][index];
+        }
+        self.positions[ply][0] = Some(position);
+        self.lengths[ply] = (length + 1) as u8;
+    }
+    fn line(&self, ply: usize) -> Vec<Position> {
+        self.positions[ply][..self.lengths[ply] as usize]
+            .iter()
+            .map(|position| position.expect("PV entries are initialized"))
+            .collect()
+    }
+}
+
+/// Internal search result for a single node. Its PV remains in search-owned scratch.
 struct NodeResult {
     score: i32,
-    pv: Vec<Position>,
     leaf_eval: Option<EvalResult>,
 }
 
@@ -38,6 +78,10 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             tt,
             zobrist,
             nodes_searched: 0,
+            pv: PvScratch {
+                positions: [[None; MAX_SEARCH_PLIES]; MAX_SEARCH_PLIES + 1],
+                lengths: [0; MAX_SEARCH_PLIES + 1],
+            },
         }
     }
 
@@ -82,7 +126,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
 
         for depth in 1..=max_depth {
             let result =
-                match self.negascout(board, color, depth, i32::MIN + 1, i32::MAX - 1, budget) {
+                match self.negascout(board, color, depth, i32::MIN + 1, i32::MAX - 1, 0, budget) {
                     Ok(result) => result,
                     Err(()) => break,
                 };
@@ -90,10 +134,10 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                 break;
             }
 
-            if !result.pv.is_empty() {
-                best_move = result.pv[0];
+            if self.pv.lengths[0] != 0 {
+                best_move = self.pv.positions[0][0].expect("root PV starts with a move");
                 best_score = Some(result.score);
-                best_pv = result.pv;
+                best_pv = self.pv.line(0);
                 if let Some(leaf_eval) = result.leaf_eval {
                     best_leaf = Some(leaf_eval);
                 }
@@ -114,6 +158,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
     }
 
     /// Negascout (PVS) recursive search.
+    #[allow(clippy::too_many_arguments)]
     fn negascout(
         &mut self,
         board: &Board,
@@ -121,19 +166,20 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         depth: u8,
         mut alpha: i32,
         beta: i32,
+        ply: usize,
         budget: &SearchBudget,
     ) -> Result<NodeResult, ()> {
         if budget.interrupted(self.nodes_searched) {
             return Err(());
         }
         self.nodes_searched += 1;
+        self.pv.clear(ply);
 
         // Leaf node: evaluate
         if depth == 0 {
             let eval = self.evaluator.evaluate(board, color);
             return Ok(NodeResult {
                 score: eval.score,
-                pv: Vec::new(),
                 leaf_eval: Some(eval),
             });
         }
@@ -145,17 +191,21 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             if entry.depth >= depth {
                 match entry.bound {
                     Bound::Exact => {
+                        if let Some(position) = entry.best_move {
+                            self.pv.single(ply, position);
+                        }
                         return Ok(NodeResult {
                             score: entry.score,
-                            pv: entry.best_move.into_iter().collect(),
                             leaf_eval: None,
                         });
                     }
                     Bound::LowerBound => {
                         if entry.score >= beta {
+                            if let Some(position) = entry.best_move {
+                                self.pv.single(ply, position);
+                            }
                             return Ok(NodeResult {
                                 score: entry.score,
-                                pv: entry.best_move.into_iter().collect(),
                                 leaf_eval: None,
                             });
                         }
@@ -165,9 +215,11 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                     }
                     Bound::UpperBound => {
                         if entry.score <= alpha {
+                            if let Some(position) = entry.best_move {
+                                self.pv.single(ply, position);
+                            }
                             return Ok(NodeResult {
                                 score: entry.score,
-                                pv: entry.best_move.into_iter().collect(),
                                 leaf_eval: None,
                             });
                         }
@@ -188,15 +240,22 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                 let eval = self.evaluator.evaluate(board, color);
                 return Ok(NodeResult {
                     score: eval.score,
-                    pv: Vec::new(),
                     leaf_eval: Some(eval),
                 });
             }
             // Pass: search opponent's turn at same depth
-            let child = self.negascout(board, color.opponent(), depth, -beta, -alpha, budget)?;
+            let child = self.negascout(
+                board,
+                color.opponent(),
+                depth,
+                -beta,
+                -alpha,
+                ply + 1,
+                budget,
+            )?;
+            self.pv.copy_child(ply);
             return Ok(NodeResult {
                 score: -child.score,
-                pv: child.pv,
                 leaf_eval: child.leaf_eval,
             });
         }
@@ -205,7 +264,6 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
 
         let original_alpha = alpha;
         let mut best_score = i32::MIN;
-        let mut best_pv = Vec::new();
         let mut best_leaf = None;
         let mut best_move = ordered[0].position;
         let mut first = true;
@@ -228,6 +286,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                     depth - 1,
                     -beta,
                     -alpha,
+                    ply + 1,
                     budget,
                 )?
             } else {
@@ -238,6 +297,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                     depth - 1,
                     -alpha - 1,
                     -alpha,
+                    ply + 1,
                     budget,
                 )?;
                 if -nw.score > alpha && -nw.score < beta {
@@ -248,6 +308,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                         depth - 1,
                         -beta,
                         -alpha,
+                        ply + 1,
                         budget,
                     )?
                 } else {
@@ -261,10 +322,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                 best_score = score;
                 best_move = pos;
 
-                // Build PV: this move + child's PV
-                best_pv = Vec::with_capacity(1 + child.pv.len());
-                best_pv.push(pos);
-                best_pv.extend_from_slice(&child.pv);
+                self.pv.prepend_child(ply, pos);
                 best_leaf = child.leaf_eval;
             }
 
@@ -299,7 +357,6 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
 
         Ok(NodeResult {
             score: best_score,
-            pv: best_pv,
             leaf_eval: best_leaf,
         })
     }

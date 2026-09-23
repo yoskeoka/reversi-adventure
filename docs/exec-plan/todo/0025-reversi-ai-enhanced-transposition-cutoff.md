@@ -4,16 +4,17 @@
 
 ## Objective and completion boundary
 
-Reduce heuristic depth-12 node expansion by probing already generated child
-positions for sound transposition-table cutoffs before recursive search.
-Accept only an implementation that preserves the full-depth result and clears
-the 0021 midgame timing gate; otherwise remove it and record rejection.
+Reduce heuristic depth-12 CPU time by probing already generated child positions
+for sound transposition-table cutoffs before recursive search. Preserve the
+full-depth result, report the 0021 timing result, and leave retention to the
+user; node totals are diagnostic only.
 
 This plan does not add selective pruning, new evaluation, a second TT, exact-
 solver cache sharing, or prefetch/CPU-specific instructions.
 
-Record both workload ratios, report digest, and the accepted/rejected outcome
-in parent 0020. Retain the change when either workload improves by at least 5%.
+Record both workload ratios and the report digest in parent 0020. The user
+decides whether to retain the experiment; CPU comparison is wall-clock based,
+with peak memory and the configured wall-clock deadline as resource limits.
 
 ## Existing references
 

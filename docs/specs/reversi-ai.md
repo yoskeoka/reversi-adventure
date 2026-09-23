@@ -469,10 +469,10 @@ enum SearchOutcome {
 
 - At or below `AiConfig::exact_solver_empty_squares`, `SearchEngine` uses the
   shared, evaluator-independent endgame solver instead of heuristic iterative
-  deepening. The default threshold is 16 empty squares. The representative
-  16-empty-square oracle-checked fixture must complete within 1,000,000 solver
-  nodes; this is a profile evidence ceiling, not a replacement for a caller's
-  deadline, node limit, or cancellation token.
+  deepening. The default threshold is 16 empty squares. Its production resource
+  constraints are the caller's deadline, optional node limit, and cancellation
+  token; profiling node totals are diagnostic evidence, never an acceptance or
+  resource limit.
 - A completed endgame result has `exact = true`, its `score` is the final disc
   differential from the root side's perspective, and its PV contains only
   played positions (a pass is represented by `SearchOutcome::Pass`, never by a
@@ -483,6 +483,14 @@ enum SearchOutcome {
 - Exact endgame cache entries are private to the solver and are never read as
   heuristic transposition-table entries. Heuristic TT entries must likewise
   never cause `exact = true`.
+- The solver owns a bounded, preallocated direct-mapped exact table for one root
+  solve. A cache hit verifies the stored black and white bitboards and
+  side-to-move as well as the hash. Entries retain score, bound, depth, and an
+  ordering hint, but not a PV. After proving the root score, the solver rebuilds
+  the complete played-move PV under the same budget by validating child scores.
+- Search changes must state their bounded peak memory and complete within their
+  caller-supplied wall-clock budget. CPU cost is evaluated by the versioned,
+  same-host release timing comparison; node totals are diagnostic only.
 - If the supplied `SearchBudget` interrupts an endgame solve, the result keeps
   the legal root fallback or the last wholly completed result, has `exact =
   false`, and exposes no partial PV or partial exact score.

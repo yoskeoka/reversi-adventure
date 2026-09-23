@@ -12,8 +12,9 @@ and the 0021 exact timing gate passes.
 The implementation remains portable stable Rust. It may specialize by number
 of empty squares, not by CPU architecture or instruction set.
 
-Record both workload ratios, report digest, and the accepted/rejected outcome
-in parent 0020. Retain the change when either workload improves by at least 5%.
+Record both workload ratios and the report digest in parent 0020. The user
+decides whether to retain the experiment; CPU comparison is wall-clock based,
+with peak memory and the configured wall-clock deadline as resource limits.
 
 ## Existing references
 

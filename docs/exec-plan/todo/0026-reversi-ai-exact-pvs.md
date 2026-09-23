@@ -12,8 +12,9 @@ scores/PVs remain deterministic and the 0021 exact timing gate passes.
 This is an exhaustive, nonselective exact search. It does not add ProbCut,
 heuristic evaluation, approximate bounds, threshold changes, or parallelism.
 
-Record both workload ratios, report digest, and the accepted/rejected outcome
-in parent 0020. Retain the change when either workload improves by at least 5%.
+Record both workload ratios and the report digest in parent 0020. The user
+decides whether to retain the experiment; CPU comparison is wall-clock based,
+with peak memory and the configured wall-clock deadline as resource limits.
 
 ## Existing references
 

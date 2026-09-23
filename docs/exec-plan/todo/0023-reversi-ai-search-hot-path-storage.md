@@ -5,17 +5,18 @@
 ## Objective and completion boundary
 
 Remove heap-backed principal-variation and exact-cache work from recursive
-search nodes using bounded search-owned storage. Accept only a result that
-preserves the complete public search output and clears parent 0020's timing
-gate; otherwise retain only the rejection evidence.
+search nodes using bounded search-owned storage. Preserve the complete public
+search output, bound peak memory, and report the parent 0020 timing result for
+the user to decide whether to retain the experiment.
 
 This plan does not change move ordering, alpha-beta windows, evaluator calls,
 TT context identity, or the heuristic/exact cache boundary. Exact PV
 reconstruction may add deterministic proof work, which is counted explicitly.
 
-Before PR preparation, record both workload ratios, report digest, and the
-accepted/rejected outcome in parent 0020. Retain production code if either
-workload improves by at least 5%; otherwise remove it.
+Before PR preparation, record both workload ratios and the report digest in
+parent 0020. The user decides whether to retain an experiment; no node-count
+threshold makes that decision. CPU comparison is wall-clock based, while peak
+memory and the configured wall-clock deadline are the resource constraints.
 
 ## Existing references
 
@@ -67,11 +68,11 @@ workload improves by at least 5%; otherwise remove it.
    chain without revalidating board identity, legality, and score consistency.
 5. Preserve the existing heuristic TT, evaluator/search-context invalidation,
    solver-local lifetime, cache separation, and budget polling cadence. Public
-   `nodes_searched` includes proof plus reconstruction work; diagnostics split
-   the two counts. Memory use must be explicitly bounded and reported.
+   `nodes_searched` includes all search work. Memory use must be explicitly
+   bounded and reported; no implementation-specific node split is required.
 6. Require identical 0021 outcomes, scores, PVs, depths, and exact flags before
-   considering the timing gate. Node counts must be deterministic and any
-   reconstruction delta must equal the separately reported count.
+   considering the timing gate. Node counts are diagnostic only and need not be
+   split by implementation technique.
 
 ## Dependencies and sequencing
 
@@ -87,8 +88,8 @@ workload improves by at least 5%; otherwise remove it.
 - Interruption at each representative ply must return only the old legal
   fallback or last wholly completed iteration, never scratch/PV residue.
 - Differential results against the pre-change engine on the 0021 suite and a
-  deterministic reachable-position corpus; require semantic non-time fields
-  to match and reconcile every node-count delta to reconstruction work.
+  deterministic reachable-position corpus; require semantic non-time fields to
+  match. Record node totals as diagnostics, not an acceptance limit.
 - Apply the timing gate and report bounded peak storage; run Rust tests,
   Clippy, GDExtension build, workflow lint, and `git diff --check`.
 

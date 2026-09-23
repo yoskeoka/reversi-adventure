@@ -13,8 +13,9 @@ fully removed and recorded as rejected.
 This plan does not reuse a heuristic stability score as proof, estimate future
 stability, add selectivity, or change the 16-empty supported threshold.
 
-Record both workload ratios, report digest, and the accepted/rejected outcome
-in parent 0020. Retain the change when either workload improves by at least 5%.
+Record both workload ratios and the report digest in parent 0020. The user
+decides whether to retain the experiment; CPU comparison is wall-clock based,
+with peak memory and the configured wall-clock deadline as resource limits.
 
 ## Existing references
 

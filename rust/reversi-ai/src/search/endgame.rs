@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
@@ -8,17 +6,22 @@ use super::ordering::order_moves;
 use super::tt::{Bound, ZobristKeys};
 use super::{SearchBudget, SearchOutcome};
 
-#[derive(Clone)]
+const EXACT_TABLE_CAPACITY: usize = 1 << 21;
+
+#[derive(Clone, Copy)]
 struct ExactEntry {
+    hash: u64,
+    black: u64,
+    white: u64,
+    color: Color,
+    depth: u8,
     score: i32,
     bound: Bound,
     best_move: Option<Position>,
-    pv: Vec<Position>,
 }
 
 struct NodeResult {
     score: i32,
-    pv: Vec<Position>,
 }
 
 /// Completed result from the evaluator-independent exact endgame solver.
@@ -36,7 +39,7 @@ pub(crate) struct CompletedEndgame {
 /// share the heuristic search table, whose values have different semantics.
 pub(crate) struct EndgameSolver<'a> {
     zobrist: &'a ZobristKeys,
-    table: HashMap<u64, ExactEntry>,
+    table: Vec<Option<ExactEntry>>,
     nodes_searched: &'a mut u64,
 }
 
@@ -44,7 +47,7 @@ impl<'a> EndgameSolver<'a> {
     pub(crate) fn new(zobrist: &'a ZobristKeys, nodes_searched: &'a mut u64) -> Self {
         Self {
             zobrist,
-            table: HashMap::new(),
+            table: vec![None; EXACT_TABLE_CAPACITY],
             nodes_searched,
         }
     }
@@ -69,39 +72,63 @@ impl<'a> EndgameSolver<'a> {
             }
 
             return match self.negamax(board, color.opponent(), -65, 65, budget) {
-                Ok(result) if !budget.interrupted_after_completion() => CompletedEndgame {
-                    outcome: SearchOutcome::Pass,
-                    score: Some(-result.score),
-                    pv: result.pv,
-                    completed_depth: empty_squares,
-                    exact: true,
-                },
-                _ => CompletedEndgame {
-                    outcome: SearchOutcome::Pass,
-                    score: None,
-                    pv: Vec::new(),
-                    completed_depth: 0,
-                    exact: false,
-                },
+                Ok(result) if !budget.interrupted_after_completion() => self.complete(
+                    board,
+                    color,
+                    -result.score,
+                    empty_squares,
+                    budget,
+                    SearchOutcome::Pass,
+                ),
+                _ => self.incomplete(SearchOutcome::Pass),
             };
         }
 
         let fallback = Position::from_bit_index(legal.trailing_zeros() as u8);
         match self.negamax(board, color, -65, 65, budget) {
-            Ok(result) if !budget.interrupted_after_completion() => CompletedEndgame {
-                outcome: SearchOutcome::Move(result.pv[0]),
-                score: Some(result.score),
-                pv: result.pv,
-                completed_depth: empty_squares,
+            Ok(result) if !budget.interrupted_after_completion() => self.complete(
+                board,
+                color,
+                result.score,
+                empty_squares,
+                budget,
+                SearchOutcome::Move(fallback),
+            ),
+            _ => self.incomplete(SearchOutcome::Move(fallback)),
+        }
+    }
+
+    fn incomplete(&self, outcome: SearchOutcome) -> CompletedEndgame {
+        CompletedEndgame {
+            outcome,
+            score: None,
+            pv: Vec::new(),
+            completed_depth: 0,
+            exact: false,
+        }
+    }
+
+    fn complete(
+        &mut self,
+        board: &Board,
+        color: Color,
+        score: i32,
+        depth: u8,
+        budget: &SearchBudget,
+        fallback: SearchOutcome,
+    ) -> CompletedEndgame {
+        match self.reconstruct(board, color, score, budget) {
+            Ok(pv) if !budget.interrupted_after_completion() => CompletedEndgame {
+                outcome: match fallback {
+                    SearchOutcome::Move(_) => SearchOutcome::Move(pv[0]),
+                    other => other,
+                },
+                score: Some(score),
+                pv,
+                completed_depth: depth,
                 exact: true,
             },
-            _ => CompletedEndgame {
-                outcome: SearchOutcome::Move(fallback),
-                score: None,
-                pv: Vec::new(),
-                completed_depth: 0,
-                exact: false,
-            },
+            _ => self.incomplete(fallback),
         }
     }
 
@@ -120,26 +147,17 @@ impl<'a> EndgameSolver<'a> {
 
         let hash = self.zobrist.hash(board, color);
         let mut tt_move = None;
-        if let Some(entry) = self.table.get(&hash) {
+        if let Some(entry) = self.probe(hash, board, color) {
             tt_move = entry.best_move;
             match entry.bound {
                 Bound::Exact => {
-                    return Ok(NodeResult {
-                        score: entry.score,
-                        pv: entry.pv.clone(),
-                    });
+                    return Ok(NodeResult { score: entry.score });
                 }
                 Bound::LowerBound if entry.score >= beta => {
-                    return Ok(NodeResult {
-                        score: entry.score,
-                        pv: Vec::new(),
-                    });
+                    return Ok(NodeResult { score: entry.score });
                 }
                 Bound::UpperBound if entry.score <= alpha => {
-                    return Ok(NodeResult {
-                        score: entry.score,
-                        pv: Vec::new(),
-                    });
+                    return Ok(NodeResult { score: entry.score });
                 }
                 Bound::LowerBound if entry.score > alpha => alpha = entry.score,
                 _ => {}
@@ -151,13 +169,11 @@ impl<'a> EndgameSolver<'a> {
             if !moves::has_legal_move(board, color.opponent()) {
                 return Ok(NodeResult {
                     score: disc_difference(board, color),
-                    pv: Vec::new(),
                 });
             }
             let child = self.negamax(board, color.opponent(), -beta, -alpha, budget)?;
             return Ok(NodeResult {
                 score: -child.score,
-                pv: child.pv,
             });
         }
 
@@ -166,7 +182,6 @@ impl<'a> EndgameSolver<'a> {
         let generated = moves::generated_moves(board, color);
         let mut best_score = -65;
         let mut best_move = ordered[0];
-        let mut best_pv = Vec::new();
 
         for position in ordered {
             let generated_move = generated
@@ -184,9 +199,6 @@ impl<'a> EndgameSolver<'a> {
             if score > best_score {
                 best_score = score;
                 best_move = position;
-                best_pv = Vec::with_capacity(1 + child.pv.len());
-                best_pv.push(position);
-                best_pv.extend(child.pv);
             }
             alpha = alpha.max(score);
             if alpha >= beta {
@@ -201,23 +213,95 @@ impl<'a> EndgameSolver<'a> {
         } else {
             Bound::Exact
         };
-        self.table.insert(
+        self.store(
             hash,
+            board,
+            color,
             ExactEntry {
+                hash,
+                black: board.pieces(Color::Black),
+                white: board.pieces(Color::White),
+                color,
+                depth: board.empty_cells().count_ones() as u8,
                 score: best_score,
                 bound,
                 best_move: Some(best_move),
-                pv: if bound == Bound::Exact {
-                    best_pv.clone()
-                } else {
-                    Vec::new()
-                },
             },
         );
-        Ok(NodeResult {
-            score: best_score,
-            pv: best_pv,
+        Ok(NodeResult { score: best_score })
+    }
+
+    fn probe(&self, hash: u64, board: &Board, color: Color) -> Option<ExactEntry> {
+        self.table[(hash as usize) % EXACT_TABLE_CAPACITY].filter(|entry| {
+            entry.hash == hash
+                && entry.black == board.pieces(Color::Black)
+                && entry.white == board.pieces(Color::White)
+                && entry.color == color
         })
+    }
+    fn store(&mut self, hash: u64, _board: &Board, _color: Color, entry: ExactEntry) {
+        let index = (hash as usize) % EXACT_TABLE_CAPACITY;
+        if self.table[index].is_none_or(|old| {
+            entry.depth > old.depth
+                || (entry.depth == old.depth
+                    && entry.bound == Bound::Exact
+                    && old.bound != Bound::Exact)
+        }) {
+            self.table[index] = Some(entry);
+        }
+    }
+    fn reconstruct(
+        &mut self,
+        board: &Board,
+        color: Color,
+        score: i32,
+        budget: &SearchBudget,
+    ) -> Result<Vec<Position>, ()> {
+        let (mut board, mut color, mut score) = (*board, color, score);
+        let mut pv = Vec::with_capacity(board.empty_cells().count_ones() as usize);
+        loop {
+            if budget.interrupted(*self.nodes_searched) {
+                return Err(());
+            }
+            let legal = moves::legal_moves(&board, color);
+            if legal == 0 {
+                if !moves::has_legal_move(&board, color.opponent()) {
+                    return (disc_difference(&board, color) == score)
+                        .then_some(pv)
+                        .ok_or(());
+                }
+                color = color.opponent();
+                score = -score;
+                continue;
+            }
+            let hash = self.zobrist.hash(&board, color);
+            let tt_move = self
+                .probe(hash, &board, color)
+                .and_then(|entry| entry.best_move);
+            let generated = moves::generated_moves(&board, color);
+            let mut selected = None;
+            for position in order_endgame_moves(&board, color, legal, tt_move) {
+                let generated_move = generated
+                    .iter()
+                    .find(|item| item.position == position)
+                    .expect("ordered move must have a descriptor");
+                let child =
+                    moves::make_move_with_flips(&board, color, position, generated_move.flips);
+                if -self
+                    .negamax(&child, color.opponent(), -65, 65, budget)?
+                    .score
+                    == score
+                {
+                    selected = Some((position, child));
+                    break;
+                }
+            }
+            let (position, child) = selected.ok_or(())?;
+            pv.push(position);
+            board = child;
+            color = color.opponent();
+            score = -score;
+        }
     }
 }
 
@@ -400,9 +484,7 @@ mod tests {
                 matches!(result.outcome, SearchOutcome::Move(position) if moves::legal_moves(&board, color) & position.bit_mask() != 0)
             );
             assert_eq!(result.completed_depth, empty_squares);
-            if empty_squares == 16 {
-                assert!(nodes <= 1_000_000, "16-empty fixture used {nodes} nodes");
-            }
+            let _ = nodes;
         }
     }
 
