@@ -76,8 +76,22 @@ GDExtension, or release artifacts.
    The 160-sample report is
    `docs/references/reversi-ai-search-performance-0022.json`, SHA-256
    `2e007112c292a7b51d31c79b2ad6fc0e385286586cb936e2c5b8a02d864a2372`.
-3. `0023-reversi-ai-search-hot-path-storage.md` removes recursive heap-backed
-   PV/cache allocation while preserving public results and interruption.
+3. `0023-reversi-ai-search-hot-path-storage.md` was not adopted. Its release
+   comparison used baseline `c116a8bd7c03d59b14b43974bc43c56bbbcc9b85`
+   and candidate `f1c87a2b99988e493c4755d619c771c1956f3e80`, with one
+   warm-up and five alternating timed repetitions per binary/position. The
+   candidate/baseline geometric mean was `0.967535169107137` for heuristic
+   depth 12 (3.246% faster) and `1.0492089294729376` for exact 16 (4.921%
+   slower), so neither workload cleared the 5% adoption gate. All 160 timing
+   samples succeeded, and all 80 paired outcome, score, PV, completed-depth,
+   and exact projections matched. Search-owned PV scratch removes recursive
+   heuristic PV allocation, while exact PV reconstruction adds proof work; the
+   report measures their net effect and does not isolate those costs. The
+   report is `docs/references/reversi-ai-search-performance-0023.json`, SHA-256
+   `434df787dab03b52a0755f84aa5071041d0a4a972d87223ecf518bfb1da1b791`.
+   It contains no measured peak RSS; node totals remain diagnostic only.
+   Candidate code stays on open PR #200 for a separate user disposition and is
+   not accepted into `main` by this result.
 4. `0024-reversi-ai-aspiration-windows.md` tries bounded iterative-deepening
    score windows for the midgame workload.
 5. `0025-reversi-ai-enhanced-transposition-cutoff.md` tries sound child-TT
@@ -89,12 +103,14 @@ GDExtension, or release artifacts.
 8. `0028-reversi-ai-exact-stability-cutoff.md` adds only mathematically sound,
    conservative exact score bounds from proven stable discs.
 
-Plans `0022` and `0023` are shared foundations and run serially. After them,
-the midgame track (`0024` then `0025`) and exact track (`0026` then `0027` then
-`0028`) may proceed in parallel, but each experiment starts from the latest
-accepted `main` in its track and compares against its immediate parent. A child
+Plan `0022` is an accepted shared foundation; `0023` was evaluated after it
+and rejected. The midgame track (`0024` then `0025`) and exact track (`0026`
+then `0027` then `0028`) may proceed in parallel, but each experiment starts
+from the latest accepted `main` in its track and compares against its immediate
+parent. A child
 merges production code only if its predeclared gate passes. A rejected child
-records the report and removes the experiment code.
+records the report and removes the experiment code. For 0023, the user directed
+that the unmerged candidate code remain on PR #200 pending a separate decision.
 
 Multi-ProbCut is intentionally deferred: it is selective, evaluator-specific,
 and can trade strength for speed, so it needs a separate calibration plan if
@@ -112,7 +128,8 @@ and parallel search remain owned by their existing plans.
 - A child is accepted when either workload's geometric mean is at least 5%
   lower than its immediate baseline. The other workload's result is always
   reported but does not erase that acceptance. A child that clears neither
-  workload records its rejected report and removes its experiment code.
+  workload records its rejected report and removes its experiment code. The
+  user-directed 0023 exception retains its unmerged code on PR #200.
 - Every child records its accepted or rejected outcome, both workload ratios,
   report digest, and a concise causal explanation in this parent before its PR.
 - The workloads are intentionally independently reported: depth-12 midgame
