@@ -9,6 +9,7 @@ ORACLE_MATCH_TIMEOUT ?= 60
 ORACLE_MATCH_GAMES ?= 2
 ORACLE_REPORT ?= /tmp/reversi-adventure-oracle-report.jsonl
 ORACLE_MATCH_REPORT ?= /tmp/reversi-adventure-oracle-match.json
+BENCHMARK_CORPUS := tools/reversi-ai-benchmark/positions-v1.jsonl
 PATTERN_TRAINER := tools/reversi-ai-training/training.py
 PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-manifest.json
 PATTERN_ARTIFACT ?= /tmp/reversi-adventure-pattern-artifact.json
@@ -26,7 +27,7 @@ AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPEN
 AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH) --exact-solver-empty-squares $(AI_EXACT_SOLVER_EMPTY_SQUARES)
 AI_CALIBRATION_COMMAND := $(AI_BINARY) --evaluator strategic --profile strong-engine-hcap-v1
 
-.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration pattern-training-test pattern-training-fixture
+.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify pattern-training-test pattern-training-fixture
 
 pattern-training-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-training/tests -p 'test_*.py'
@@ -63,3 +64,12 @@ oracle-calibration:
 	$(CARGO) build -p reversi-ai --bin reversi-ai-cli
 	$(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output $(ORACLE_REPORT) --profile strong-engine-hcap-v1 --timeout $(ORACLE_TIMEOUT) --candidate-command "$(AI_CALIBRATION_COMMAND)"
 	$(PYTHON) $(ORACLE_TOOL) match --candidate-command "$(AI_CALIBRATION_COMMAND)" --games $(ORACLE_MATCH_GAMES) --profile strong-engine-hcap-v1 --timeout $(ORACLE_MATCH_TIMEOUT) --output $(ORACLE_MATCH_REPORT)
+
+benchmark-oracle-setup:
+	$(PYTHON) $(ORACLE_TOOL) setup-oracle --timeout $(ORACLE_TIMEOUT)
+
+benchmark-corpus:
+	$(PYTHON) $(ORACLE_TOOL) generate-benchmark-corpus --output $(BENCHMARK_CORPUS) --timeout $(ORACLE_TIMEOUT)
+
+benchmark-corpus-verify:
+	$(PYTHON) $(ORACLE_TOOL) verify-benchmark-corpus --corpus $(BENCHMARK_CORPUS)

@@ -329,6 +329,75 @@ class OracleHarnessTests(unittest.TestCase):
 
         self.assertEqual(references, [])
 
+    def test_benchmark_self_play_profile_runs_one_level_six_self_play_batch(self):
+        self.assertEqual(
+            oracle.oracle_argv(Path("oracle"), oracle.SEARCH_PERFORMANCE_SELF_PLAY_V1),
+            ["oracle", "-nobook", "-thread", "1", "-hash", "25", "-level", "6"],
+        )
+        corpus = Path(__file__).resolve().parents[2] / "reversi-ai-benchmark" / "positions-v1.jsonl"
+        records = oracle.load_jsonl(corpus)
+        transcripts = [
+            next(
+                record["provenance"]["transcript"]
+                for record in records
+                if record["provenance"]["source_game"] == game
+            )
+            for game in range(1, 5)
+        ]
+        completed = __import__("subprocess").CompletedProcess(
+            ["oracle"], 0, stdout="\n".join(transcripts), stderr=""
+        )
+        with patch.object(oracle.subprocess, "run", return_value=completed) as run:
+            generated = oracle.run_fast_self_play(Path("oracle"), Path.cwd(), 4, 1)
+
+        self.assertEqual(len(generated), 16)
+        self.assertEqual(run.call_args.args[0][-3:], ["-selfplay", "4", "6"])
+
+    def test_benchmark_transcript_replay_handles_console_implicit_passes(self):
+        record = next(
+            record for record in oracle.generate_corpus() if record["position_id"] == "forced-pass"
+        )
+        opponent = oracle.other(record["side_to_move"])
+        move = oracle.legal_moves(record["board"], opponent)[0]
+
+        board, side = oracle.replay_console_move(record["board"], record["side_to_move"], move)
+
+        self.assertEqual(side, record["side_to_move"])
+        self.assertEqual(board, oracle.apply_move(record["board"], opponent, move))
+
+    def test_benchmark_transcript_must_reach_game_over(self):
+        corpus = Path(__file__).resolve().parents[2] / "reversi-ai-benchmark" / "positions-v1.jsonl"
+        transcript = oracle.load_jsonl(corpus)[0]["provenance"]["transcript"]
+
+        with self.assertRaisesRegex(oracle.OracleError, "ends before game over"):
+            oracle.benchmark_records_from_transcript(transcript[:-2], 1)
+
+    def test_benchmark_validator_replays_records_and_rejects_d4_duplicates(self):
+        corpus = Path(__file__).resolve().parents[2] / "reversi-ai-benchmark" / "positions-v1.jsonl"
+        records = oracle.load_jsonl(corpus)
+        oracle.validate_benchmark_corpus(records)
+
+        duplicate = copy.deepcopy(records[0])
+        duplicate["position_id"] = "d4-duplicate"
+        duplicate["provenance"]["source_game"] = 5
+        duplicate["provenance"]["game_record"] = duplicate["provenance"]["transcript"]
+        malformed = records.copy()
+        malformed[1] = duplicate
+        with self.assertRaisesRegex(oracle.OracleError, "D4-equivalent"):
+            oracle.validate_benchmark_corpus(malformed)
+
+    def test_benchmark_corpus_file_must_be_canonical_json_lines(self):
+        corpus = Path(__file__).resolve().parents[2] / "reversi-ai-benchmark" / "positions-v1.jsonl"
+        records = oracle.load_jsonl(corpus)
+        with TemporaryDirectory() as temporary:
+            malformed = Path(temporary) / "positions.jsonl"
+            malformed.write_text(
+                "\n".join(__import__("json").dumps(record) for record in records) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(oracle.OracleError, "not canonical"):
+                oracle.load_canonical_jsonl(malformed)
+
 
 if __name__ == "__main__":
     unittest.main()
