@@ -430,6 +430,24 @@ def load_jsonl(path: Path) -> list[dict[str, object]]:
     return records
 
 
+def load_canonical_jsonl(path: Path) -> list[dict[str, object]]:
+    """Load JSON Lines only when its serialized representation is canonical."""
+    if not path.is_file():
+        die(f"file not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    if not text.endswith("\n"):
+        die(f"canonical JSON Lines file must end with a newline: {path}")
+    lines = text.splitlines()
+    if not lines or any(not line for line in lines):
+        die(f"canonical JSON Lines file must contain no blank records: {path}")
+    records = load_jsonl(path)
+    if len(records) != len(lines) or any(
+        line != canonical_json(record) for line, record in zip(lines, records)
+    ):
+        die(f"JSON Lines file is not canonical: {path}")
+    return records
+
+
 def validate_corpus_record(record: dict[str, object]) -> None:
     required = {
         "schema_version",
@@ -1303,6 +1321,8 @@ def benchmark_records_from_transcript(transcript: str, game_index: int) -> list[
                     },
                 }
             )
+    if legal_moves(board, side) or legal_moves(board, other(side)):
+        die(f"benchmark self-play transcript {game_index} ends before game over")
     if len(records) != 4:
         die(
             f"benchmark self-play transcript {game_index} did not reach all roots; "
@@ -1614,7 +1634,7 @@ def command_main(argv: list[str]) -> int:
             return 0
 
         if args.command == "verify-benchmark-corpus":
-            records = load_jsonl(args.corpus)
+            records = load_canonical_jsonl(args.corpus)
             validate_benchmark_corpus(records)
             print(f"verified {len(records)} benchmark positions")
             return 0

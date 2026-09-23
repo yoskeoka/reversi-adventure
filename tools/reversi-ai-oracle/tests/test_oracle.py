@@ -365,6 +365,13 @@ class OracleHarnessTests(unittest.TestCase):
         self.assertEqual(side, record["side_to_move"])
         self.assertEqual(board, oracle.apply_move(record["board"], opponent, move))
 
+    def test_benchmark_transcript_must_reach_game_over(self):
+        corpus = Path(__file__).resolve().parents[2] / "reversi-ai-benchmark" / "positions-v1.jsonl"
+        transcript = oracle.load_jsonl(corpus)[0]["provenance"]["transcript"]
+
+        with self.assertRaisesRegex(oracle.OracleError, "ends before game over"):
+            oracle.benchmark_records_from_transcript(transcript[:-2], 1)
+
     def test_benchmark_validator_replays_records_and_rejects_d4_duplicates(self):
         corpus = Path(__file__).resolve().parents[2] / "reversi-ai-benchmark" / "positions-v1.jsonl"
         records = oracle.load_jsonl(corpus)
@@ -374,8 +381,22 @@ class OracleHarnessTests(unittest.TestCase):
         duplicate["position_id"] = "d4-duplicate"
         duplicate["provenance"]["source_game"] = 5
         duplicate["provenance"]["game_record"] = duplicate["provenance"]["transcript"]
-        with self.assertRaises(oracle.OracleError):
-            oracle.validate_benchmark_corpus(records + [duplicate])
+        malformed = records.copy()
+        malformed[1] = duplicate
+        with self.assertRaisesRegex(oracle.OracleError, "D4-equivalent"):
+            oracle.validate_benchmark_corpus(malformed)
+
+    def test_benchmark_corpus_file_must_be_canonical_json_lines(self):
+        corpus = Path(__file__).resolve().parents[2] / "reversi-ai-benchmark" / "positions-v1.jsonl"
+        records = oracle.load_jsonl(corpus)
+        with TemporaryDirectory() as temporary:
+            malformed = Path(temporary) / "positions.jsonl"
+            malformed.write_text(
+                "\n".join(__import__("json").dumps(record) for record in records) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(oracle.OracleError, "not canonical"):
+                oracle.load_canonical_jsonl(malformed)
 
 
 if __name__ == "__main__":
