@@ -126,8 +126,8 @@ GDExtension, or release artifacts.
    `docs/references/reversi-ai-search-performance-0025.json`, SHA-256
    `c6b83f9898f7d4322d104d6fcc8c054a40c61e8565ae4604fc5fd45e4d1b6225`.
    This run did not measure peak RSS; node totals are diagnostic only.
-6. `0026-reversi-ai-exact-pvs.md` clears the exact-search adoption gate; final
-   adoption awaits human PR disposition. The same-host
+6. `0026-reversi-ai-exact-pvs.md` cleared the exact-search adoption gate and
+   merged through PR #208. The same-host
    Rust 1.98.1 release comparison against main `151d865868b2b3584b915b1358a3d124b3fc45ac`
    used one warm-up and five alternating measured repetitions per binary and
    position. Candidate/baseline geometric-mean time was `0.5215490814644784`
@@ -143,8 +143,23 @@ GDExtension, or release artifacts.
    This run did not measure peak RSS; node totals are diagnostic only. The
    separately bounded 20-empty issue fixture completed exactly with Black
    `+26` in 39.422 seconds and 16,744,258 nodes under the five-minute budget.
-7. `0027-reversi-ai-exact-parity-last-empties.md` removes generic collection
-   and region work from the final empties with maintained parity state.
+7. `0027-reversi-ai-exact-parity-last-empties.md` is accepted for exact search.
+   Against merged 0026 at `0cbb47b815342641e783af5a0541cab61132109a`,
+   the quiet same-host Rust 1.98.1 release comparison used one warm-up and five
+   alternating measured repetitions per binary and position. Candidate to
+   baseline geometric-mean time was `0.4134951126050867` for exact 16
+   (58.650% faster) and `1.0071248501041488` for heuristic depth 12
+   (0.712% slower). All 160 timed samples completed, and all 80 paired
+   outcome, score, PV, completed-depth, and exact projections matched. The
+   allocation-free component masks and move ordering, with scalar final-four
+   PVs, reduce exact elapsed time despite increasing exact diagnostic nodes
+   from 7,895,960 to 9,628,210 across 20 samples. Heuristic search does not
+   use this path, so its small timing difference is incidental. The report is
+   `docs/references/reversi-ai-search-performance-0027.json`, SHA-256
+   `4d4cce1dcfb8fb4d0de4929fb09efcb712ca566324838d5ca291747a29f66bdb`.
+   Peak RSS was not measured; node totals are diagnostic only. The 20-empty
+   issue fixture completed exactly with Black `+26` in 12.813 seconds and
+   20,694,346 nodes under the five-minute budget.
 8. `0028-reversi-ai-exact-stability-cutoff.md` adds only mathematically sound,
    conservative exact score bounds from proven stable discs.
 9. `0029-reversi-ai-search-storage-refinement.md` separately evaluates

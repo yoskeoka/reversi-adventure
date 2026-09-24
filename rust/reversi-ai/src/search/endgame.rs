@@ -4,9 +4,160 @@ use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
 
+#[cfg(test)]
 use super::ordering::order_moves;
 use super::tt::{Bound, ZobristKeys};
 use super::{SearchBudget, SearchOutcome};
+
+const NOT_A_FILE: u64 = 0xfefefefefefefefe;
+const NOT_H_FILE: u64 = 0x7f7f7f7f7f7f7f7f;
+
+// Keep in step with the secondary ordering in search/ordering.rs. The exact
+// solver needs its scores without allocating the heuristic move vector.
+#[rustfmt::skip]
+const POSITION_WEIGHTS: [i32; 64] = [
+    120, -20,  20,   5,   5,  20, -20, 120,
+    -20, -40,  -5,  -5,  -5,  -5, -40, -20,
+     20,  -5,  15,   3,   3,  15,  -5,  20,
+      5,  -5,   3,   3,   3,   3,  -5,   5,
+      5,  -5,   3,   3,   3,   3,  -5,   5,
+     20,  -5,  15,   3,   3,  15,  -5,  20,
+    -20, -40,  -5,  -5,  -5,  -5, -40, -20,
+    120, -20,  20,   5,   5,  20, -20, 120,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EmptyRegions {
+    empty: u64,
+    component: [u64; 64],
+}
+
+impl EmptyRegions {
+    fn new(empty: u64) -> Self {
+        let mut state = Self {
+            empty,
+            component: [0; 64],
+        };
+        let mut unseen = empty;
+        while unseen != 0 {
+            let region = flood(unseen.isolate_lowest_one(), empty);
+            state.assign(region);
+            unseen &= !region;
+        }
+        state
+    }
+
+    fn assign(&mut self, mut region: u64) {
+        let mask = region;
+        while region != 0 {
+            let index = region.trailing_zeros() as usize;
+            self.component[index] = mask;
+            region &= region - 1;
+        }
+    }
+
+    fn after_placement(mut self, position: Position) -> Self {
+        let bit = position.bit_mask();
+        let former = self.component[position.bit_index() as usize] & !bit;
+        self.empty &= !bit;
+        self.component[position.bit_index() as usize] = 0;
+        let mut remaining = former;
+        while remaining != 0 {
+            let region = flood(remaining.isolate_lowest_one(), former);
+            self.assign(region);
+            remaining &= !region;
+        }
+        self
+    }
+
+    fn is_odd(&self, position: Position) -> bool {
+        self.component[position.bit_index() as usize].count_ones() & 1 != 0
+    }
+}
+
+fn flood(seed: u64, allowed: u64) -> u64 {
+    let mut region = seed;
+    loop {
+        let adjacent = (region << 8)
+            | (region >> 8)
+            | ((region & NOT_H_FILE) << 1)
+            | ((region & NOT_A_FILE) >> 1);
+        let next = region | (adjacent & allowed);
+        if next == region {
+            return region;
+        }
+        region = next;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ExactMove {
+    position: Position,
+    successor: Board,
+    priority: i32,
+    odd: bool,
+}
+
+fn ordered_exact_moves<const CAP: usize>(
+    board: &Board,
+    color: Color,
+    legal: u64,
+    regions: &EmptyRegions,
+    tt_move: Option<Position>,
+) -> ([ExactMove; CAP], usize) {
+    let blank = ExactMove {
+        position: Position::new(0, 0),
+        successor: *board,
+        priority: 0,
+        odd: false,
+    };
+    let mut result = [blank; CAP];
+    let mut len = 0;
+    let mut remaining = legal;
+    while remaining != 0 {
+        let index = remaining.trailing_zeros() as u8;
+        remaining &= remaining - 1;
+        debug_assert!(len < CAP);
+        let position = Position::from_bit_index(index);
+        let flips = moves::flipped_pieces(board, color, position);
+        let successor = moves::make_move_with_flips(board, color, position, flips);
+        let priority = if CAP == 1 {
+            0
+        } else {
+            let mobility = moves::legal_moves(&successor, color.opponent()).count_ones() as i32;
+            (if tt_move == Some(position) { 10_000 } else { 0 })
+                + if [0, 7, 56, 63].contains(&index) {
+                    5_000
+                } else {
+                    0
+                }
+                - mobility * 100
+                + POSITION_WEIGHTS[index as usize]
+        };
+        let item = ExactMove {
+            position,
+            successor,
+            priority,
+            odd: regions.is_odd(position),
+        };
+        // Stable insertion: equal priorities retain ascending bit-index order.
+        let mut insertion = len;
+        while insertion > 0
+            && (tt_move == Some(item.position), item.odd, item.priority)
+                > (
+                    tt_move == Some(result[insertion - 1].position),
+                    result[insertion - 1].odd,
+                    result[insertion - 1].priority,
+                )
+        {
+            result[insertion] = result[insertion - 1];
+            insertion -= 1;
+        }
+        result[insertion] = item;
+        len += 1;
+    }
+    (result, len)
+}
 
 #[derive(Clone)]
 struct ExactEntry {
@@ -18,6 +169,38 @@ struct ExactEntry {
 struct NodeResult {
     score: i32,
     pv: Vec<Position>,
+}
+
+#[derive(Clone, Copy)]
+struct SmallResult {
+    score: i32,
+    pv: [Position; 4],
+    len: u8,
+}
+
+impl SmallResult {
+    fn empty(score: i32) -> Self {
+        Self {
+            score,
+            pv: [Position::new(0, 0); 4],
+            len: 0,
+        }
+    }
+
+    fn prepend(score: i32, position: Position, child: Self) -> Self {
+        let mut result = Self::empty(score);
+        result.pv[0] = position;
+        result.pv[1..1 + child.len as usize].copy_from_slice(&child.pv[..child.len as usize]);
+        result.len = child.len + 1;
+        result
+    }
+
+    fn into_node(self) -> NodeResult {
+        NodeResult {
+            score: self.score,
+            pv: self.pv[..self.len as usize].to_vec(),
+        }
+    }
 }
 
 /// Completed result from the evaluator-independent exact endgame solver.
@@ -122,10 +305,205 @@ impl<'a> EndgameSolver<'a> {
         &mut self,
         board: &Board,
         color: Color,
-        mut alpha: i32,
+        alpha: i32,
         beta: i32,
         budget: &SearchBudget,
     ) -> Result<NodeResult, ()> {
+        self.negamax_with_regions(
+            board,
+            color,
+            alpha,
+            beta,
+            budget,
+            EmptyRegions::new(board.empty_cells()),
+        )
+    }
+
+    fn negamax_with_regions(
+        &mut self,
+        board: &Board,
+        color: Color,
+        alpha: i32,
+        beta: i32,
+        budget: &SearchBudget,
+        regions: EmptyRegions,
+    ) -> Result<NodeResult, ()> {
+        // The four final placement counts enter distinct scalar paths. A pass
+        // preserves the count and the empty-region state.
+        match regions.empty.count_ones() {
+            1 => self.last_one(board, color, alpha, beta, budget, regions),
+            2 => self.last_two(board, color, alpha, beta, budget, regions),
+            3 => self.last_three(board, color, alpha, beta, budget, regions),
+            4 => self.last_four(board, color, alpha, beta, budget, regions),
+            5..=16 => self.search_node::<16>(board, color, alpha, beta, budget, regions),
+            17..=32 => self.search_node::<32>(board, color, alpha, beta, budget, regions),
+            _ => self.search_node::<64>(board, color, alpha, beta, budget, regions),
+        }
+    }
+
+    fn last_one(
+        &mut self,
+        board: &Board,
+        color: Color,
+        alpha: i32,
+        beta: i32,
+        budget: &SearchBudget,
+        regions: EmptyRegions,
+    ) -> Result<NodeResult, ()> {
+        self.search_small::<1>(board, color, alpha, beta, budget, regions)
+            .map(SmallResult::into_node)
+    }
+
+    fn last_two(
+        &mut self,
+        board: &Board,
+        color: Color,
+        alpha: i32,
+        beta: i32,
+        budget: &SearchBudget,
+        regions: EmptyRegions,
+    ) -> Result<NodeResult, ()> {
+        self.search_small::<2>(board, color, alpha, beta, budget, regions)
+            .map(SmallResult::into_node)
+    }
+
+    fn last_three(
+        &mut self,
+        board: &Board,
+        color: Color,
+        alpha: i32,
+        beta: i32,
+        budget: &SearchBudget,
+        regions: EmptyRegions,
+    ) -> Result<NodeResult, ()> {
+        self.search_small::<3>(board, color, alpha, beta, budget, regions)
+            .map(SmallResult::into_node)
+    }
+
+    fn last_four(
+        &mut self,
+        board: &Board,
+        color: Color,
+        alpha: i32,
+        beta: i32,
+        budget: &SearchBudget,
+        regions: EmptyRegions,
+    ) -> Result<NodeResult, ()> {
+        self.search_small::<4>(board, color, alpha, beta, budget, regions)
+            .map(SmallResult::into_node)
+    }
+
+    fn small_with_regions(
+        &mut self,
+        board: &Board,
+        color: Color,
+        alpha: i32,
+        beta: i32,
+        budget: &SearchBudget,
+        regions: EmptyRegions,
+    ) -> Result<SmallResult, ()> {
+        match regions.empty.count_ones() {
+            0 | 1 => self.search_small::<1>(board, color, alpha, beta, budget, regions),
+            2 => self.search_small::<2>(board, color, alpha, beta, budget, regions),
+            3 => self.search_small::<3>(board, color, alpha, beta, budget, regions),
+            4 => self.search_small::<4>(board, color, alpha, beta, budget, regions),
+            _ => unreachable!("small search has at most four empties"),
+        }
+    }
+
+    fn search_small<const CAP: usize>(
+        &mut self,
+        board: &Board,
+        color: Color,
+        mut alpha: i32,
+        beta: i32,
+        budget: &SearchBudget,
+        regions: EmptyRegions,
+    ) -> Result<SmallResult, ()> {
+        // Count every scalar invocation, including passes, probes, re-searches,
+        // and the terminal call. This is the same budget boundary as search_node.
+        if budget.interrupted(*self.nodes_searched) {
+            return Err(());
+        }
+        *self.nodes_searched += 1;
+
+        let legal = moves::legal_moves(board, color);
+        if legal == 0 {
+            if !moves::has_legal_move(board, color.opponent()) {
+                return Ok(SmallResult::empty(disc_difference(board, color)));
+            }
+            let child =
+                self.small_with_regions(board, color.opponent(), -beta, -alpha, budget, regions)?;
+            return Ok(SmallResult {
+                score: -child.score,
+                ..child
+            });
+        }
+
+        let (ordered, move_count) = ordered_exact_moves::<CAP>(board, color, legal, &regions, None);
+        let mut best = SmallResult::empty(-65);
+        for (index, item) in ordered[..move_count].iter().enumerate() {
+            let child_regions = regions.after_placement(item.position);
+            let child = if index == 0 {
+                self.small_with_regions(
+                    &item.successor,
+                    color.opponent(),
+                    -beta,
+                    -alpha,
+                    budget,
+                    child_regions,
+                )?
+            } else {
+                self.diagnostics.null_window_calls += 1;
+                let probe = self.small_with_regions(
+                    &item.successor,
+                    color.opponent(),
+                    -alpha - 1,
+                    -alpha,
+                    budget,
+                    child_regions,
+                )?;
+                let probe_score = -probe.score;
+                if probe_score > alpha {
+                    self.diagnostics.fail_highs += 1;
+                }
+                if probe_score > alpha && probe_score < beta {
+                    self.diagnostics.full_researches += 1;
+                    self.small_with_regions(
+                        &item.successor,
+                        color.opponent(),
+                        -beta,
+                        -alpha,
+                        budget,
+                        child_regions,
+                    )?
+                } else {
+                    probe
+                }
+            };
+            let score = -child.score;
+            if score > best.score {
+                best = SmallResult::prepend(score, item.position, child);
+            }
+            alpha = alpha.max(score);
+            if alpha >= beta {
+                break;
+            }
+        }
+        Ok(best)
+    }
+
+    fn search_node<const CAP: usize>(
+        &mut self,
+        board: &Board,
+        color: Color,
+        mut alpha: i32,
+        beta: i32,
+        budget: &SearchBudget,
+        regions: EmptyRegions,
+    ) -> Result<NodeResult, ()> {
+        // A node is one call, including TT hits, passes, null-window probes,
+        // and re-searches. Poll before counting it, including at the last ply.
         if budget.interrupted(*self.nodes_searched) {
             return Err(());
         }
@@ -165,7 +543,8 @@ impl<'a> EndgameSolver<'a> {
                     pv: Vec::new(),
                 });
             }
-            let child = self.negamax(board, color.opponent(), -beta, -alpha, budget)?;
+            let child =
+                self.negamax_with_regions(board, color.opponent(), -beta, -alpha, budget, regions)?;
             return Ok(NodeResult {
                 score: -child.score,
                 pv: child.pv,
@@ -175,31 +554,47 @@ impl<'a> EndgameSolver<'a> {
         let original_alpha = alpha;
         // Probe searches visit extra cache states. Keep equal-score move
         // selection independent of those states so the complete PV is stable.
-        let ordered = order_endgame_moves(board, color, legal, None);
-        let generated = moves::generated_moves(board, color);
+        let (ordered, move_count) = ordered_exact_moves::<CAP>(board, color, legal, &regions, None);
         let mut best_score = -65;
         let mut best_pv = Vec::new();
 
-        for (index, position) in ordered.into_iter().enumerate() {
-            let generated_move = generated
-                .iter()
-                .find(|generated_move| generated_move.position == position)
-                .expect("ordered move must have a generated descriptor");
-            let successor =
-                moves::make_move_with_flips(board, color, position, generated_move.flips);
+        for (index, ordered_move) in ordered[..move_count].iter().enumerate() {
+            let position = ordered_move.position;
+            let successor = &ordered_move.successor;
+            let child_regions = regions.after_placement(position);
             let child = if index == 0 {
-                self.negamax(&successor, color.opponent(), -beta, -alpha, budget)?
+                self.negamax_with_regions(
+                    successor,
+                    color.opponent(),
+                    -beta,
+                    -alpha,
+                    budget,
+                    child_regions,
+                )?
             } else {
                 self.diagnostics.null_window_calls += 1;
-                let probe =
-                    self.negamax(&successor, color.opponent(), -alpha - 1, -alpha, budget)?;
+                let probe = self.negamax_with_regions(
+                    successor,
+                    color.opponent(),
+                    -alpha - 1,
+                    -alpha,
+                    budget,
+                    child_regions,
+                )?;
                 let probe_score = -probe.score;
                 if probe_score > alpha {
                     self.diagnostics.fail_highs += 1;
                 }
                 if probe_score > alpha && probe_score < beta {
                     self.diagnostics.full_researches += 1;
-                    self.negamax(&successor, color.opponent(), -beta, -alpha, budget)?
+                    self.negamax_with_regions(
+                        successor,
+                        color.opponent(),
+                        -beta,
+                        -alpha,
+                        budget,
+                        child_regions,
+                    )?
                 } else {
                     probe
                 }
@@ -247,6 +642,7 @@ fn disc_difference(board: &Board, color: Color) -> i32 {
     board.count(color) as i32 - board.count(color.opponent()) as i32
 }
 
+#[cfg(test)]
 fn order_endgame_moves(
     board: &Board,
     color: Color,
@@ -262,6 +658,7 @@ fn order_endgame_moves(
     ordered
 }
 
+#[cfg(test)]
 fn region_size(empty: u64, start: Position) -> u32 {
     let mut visited = 0u64;
     let mut frontier = vec![start.bit_index()];
@@ -290,6 +687,68 @@ mod tests {
     use std::sync::{atomic::AtomicBool, Arc};
     use std::time::Duration;
     use std::time::Instant;
+
+    #[test]
+    fn removing_bridge_rebuilds_split_components_and_preserves_parent() {
+        let left = Position::new(3, 2);
+        let bridge = Position::new(3, 3);
+        let right = Position::new(3, 4);
+        let isolated = Position::new(7, 7);
+        let empty = left.bit_mask() | bridge.bit_mask() | right.bit_mask() | isolated.bit_mask();
+        let parent = EmptyRegions::new(empty);
+        assert_eq!(parent.component[left.bit_index() as usize].count_ones(), 3);
+        assert!(parent.is_odd(left));
+        let child = parent.after_placement(bridge);
+        assert_eq!(child.empty, empty & !bridge.bit_mask());
+        for position in [left, right, isolated] {
+            assert_eq!(
+                child.component[position.bit_index() as usize],
+                position.bit_mask()
+            );
+            assert!(child.is_odd(position));
+        }
+        assert_eq!(child.component[bridge.bit_index() as usize], 0);
+        assert_eq!(parent, EmptyRegions::new(empty));
+        assert_eq!(child, EmptyRegions::new(child.empty));
+        // A pass carries the exact same region state.
+        let passed = child;
+        assert_eq!(passed, child);
+    }
+
+    #[test]
+    fn fixed_order_matches_previous_stable_vec_order() {
+        for board in [Board::new(), sixteen_empty_board()] {
+            for color in [Color::Black, Color::White] {
+                let legal = moves::legal_moves(&board, color);
+                if legal == 0 {
+                    continue;
+                }
+                let regions = EmptyRegions::new(board.empty_cells());
+                let first = Some(Position::from_bit_index(legal.trailing_zeros() as u8));
+                for tt_move in [None, first] {
+                    let expected = order_endgame_moves(&board, color, legal, None);
+                    let (actual, len) =
+                        ordered_exact_moves::<64>(&board, color, legal, &regions, tt_move);
+                    let positions = actual[..len]
+                        .iter()
+                        .map(|entry| entry.position)
+                        .collect::<Vec<_>>();
+                    if let Some(first) = tt_move {
+                        assert_eq!(positions[0], first);
+                        assert_eq!(
+                            positions[1..],
+                            expected
+                                .into_iter()
+                                .filter(|p| *p != first)
+                                .collect::<Vec<_>>()
+                        );
+                    } else {
+                        assert_eq!(positions, expected);
+                    }
+                }
+            }
+        }
+    }
 
     fn solve(board: &Board, color: Color) -> (CompletedEndgame, u64) {
         let keys = ZobristKeys::new();
@@ -379,9 +838,19 @@ mod tests {
             color = color.opponent();
         }
 
-        fn check_all(board: Board, color: Color, seen: &mut HashSet<(Board, Color)>) {
+        fn check_all(
+            board: Board,
+            color: Color,
+            seen: &mut HashSet<(Board, Color)>,
+            counts: &mut [bool; 5],
+            outcomes: &mut [bool; 3],
+        ) {
             if !seen.insert((board, color)) {
                 return;
+            }
+            let empties = board.empty_cells().count_ones() as usize;
+            if empties <= 4 {
+                counts[empties] = true;
             }
             let reference = full_window_reference(&board, color);
             let (result, _) = solve(&board, color);
@@ -389,24 +858,71 @@ mod tests {
             assert_eq!(result.score, Some(reference.score));
             assert_eq!(result.pv, reference.pv);
             let legal = moves::legal_moves(&board, color);
+            let expected_outcome = if legal != 0 {
+                SearchOutcome::Move(reference.pv[0])
+            } else if moves::has_legal_move(&board, color.opponent()) {
+                SearchOutcome::Pass
+            } else {
+                SearchOutcome::GameOver
+            };
+            assert_eq!(result.outcome, expected_outcome);
+            outcomes[match expected_outcome {
+                SearchOutcome::Move(_) => 0,
+                SearchOutcome::Pass => 1,
+                SearchOutcome::GameOver => 2,
+            }] = true;
+            // Check both sides at every reached board, including forced passes.
+            check_all(board, color.opponent(), seen, counts, outcomes);
             if legal == 0 {
-                if moves::has_legal_move(&board, color.opponent()) {
-                    check_all(board, color.opponent(), seen);
-                }
+                return;
             } else {
                 for position in order_endgame_moves(&board, color, legal, None) {
                     check_all(
                         moves::make_move(&board, color, position),
                         color.opponent(),
                         seen,
+                        counts,
+                        outcomes,
                     );
                 }
             }
         }
 
         let mut seen = HashSet::new();
-        check_all(board, color, &mut seen);
+        let mut counts = [false; 5];
+        let mut outcomes = [false; 3];
+        check_all(board, color, &mut seen, &mut counts, &mut outcomes);
+        let forced_pass = Board::from_string(
+            "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBWB.",
+        )
+        .unwrap();
+        check_all(
+            forced_pass,
+            Color::Black,
+            &mut seen,
+            &mut counts,
+            &mut outcomes,
+        );
+        let early_terminal = Board::from_string(
+            "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBB.",
+        )
+        .unwrap();
+        check_all(
+            early_terminal,
+            Color::Black,
+            &mut seen,
+            &mut counts,
+            &mut outcomes,
+        );
         assert!(seen.len() > 10);
+        assert!(
+            counts[1..=4].iter().all(|seen| *seen),
+            "missing empty count: {counts:?}"
+        );
+        assert!(
+            outcomes.iter().all(|seen| *seen),
+            "missing outcome: {outcomes:?}"
+        );
     }
 
     #[test]
