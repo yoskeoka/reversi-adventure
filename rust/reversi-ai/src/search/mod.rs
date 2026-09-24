@@ -109,11 +109,12 @@ pub struct SearchEngine {
     context_fingerprint: Option<u64>,
 }
 
-const SEARCH_SEMANTICS_VERSION: u64 = 1;
+const SEARCH_SEMANTICS_VERSION: u64 = 2;
 
 fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(evaluator: &E, config: &AiConfig) -> u64 {
     stable_context_fingerprint(&[
         SEARCH_SEMANTICS_VERSION,
+        64, // Initial aspiration delta; each retry doubles it symmetrically.
         evaluator.context_fingerprint(),
         config.context_fingerprint(),
     ])

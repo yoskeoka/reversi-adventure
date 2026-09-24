@@ -305,7 +305,19 @@ Low-level search implementation. Typically used via `SearchEngine` rather than d
 - `Negascout::search(board: &Board, color: Color, max_depth: u8, budget: &SearchBudget)` — Internal budgeted iterative deepening search. Returns the root outcome and the last wholly completed iteration.
 - TT probes and stores use a Zobrist key that includes the current `color`, including when a pass keeps the board unchanged.
 - Internally runs depth 1, 2, ..., up to `max_depth`.
-- At each depth: Negascout with alpha-beta window.
+- Depth 1 uses the full integer score window. Each later heuristic depth starts
+  with a symmetric aspiration window around the last wholly completed score.
+  The initial score delta is 64 and doubles on a fail-low or fail-high, with
+  checked, clamped endpoints; retries stop only on a strictly in-window result
+  or after the full integer score window has been searched. The same fixed rule
+  applies to every position. Exact solving does not use aspiration windows.
+- Failed windows and retries count all visited nodes against the same deadline,
+  cancellation token, and node limit. A budget interruption during any retry
+  discards the entire current depth and returns the previous completed result;
+  a bound result is never published as a heuristic score. Retained TT entries
+  remain valid for their searched bounds, and the search-semantics fingerprint
+  identifies the aspiration rule.
+- At each search attempt: Negascout with its root alpha-beta window.
   - First move (PV node): search with full window [alpha, beta].
   - Remaining moves: null-window search [alpha, alpha+1]. If fails high, re-search with full window.
 - PV extracted by tracking best move at each depth level.
