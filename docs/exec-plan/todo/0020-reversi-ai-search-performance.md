@@ -94,8 +94,9 @@ GDExtension, or release artifacts.
    not accepted into `main` by this result.
 4. `0024-reversi-ai-aspiration-windows.md` was not adopted. Its fixed initial
    score delta of 64 widened symmetrically on fail-low/high, preserving all
-   160 paired outcome, score, PV, completed-depth, and exact projections. The
-   quiet same-host release comparison used baseline `375854c36723eb510a962c36cfa4fd5bf88a6812`
+   80 paired outcome, score, PV, completed-depth, and exact projections across
+   160 raw samples. The quiet same-host release comparison used baseline
+   `375854c36723eb510a962c36cfa4fd5bf88a6812`
    and candidate branch `feat/reversi-ai-aspiration-windows` (draft PR #203),
    with one warm-up and five alternating measured repetitions per binary and
    position. Candidate/baseline geometric-mean time was `0.985057117170627`
