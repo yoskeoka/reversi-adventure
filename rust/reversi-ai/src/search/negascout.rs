@@ -13,6 +13,9 @@ pub struct Negascout<'a, E: BoardEvaluator + ?Sized> {
     tt: &'a mut TranspositionTable,
     zobrist: &'a ZobristKeys,
     nodes_searched: u64,
+    etc_probes: u64,
+    etc_hits: u64,
+    etc_cutoffs: u64,
 }
 
 /// Internal search result for a single node.
@@ -38,11 +41,18 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             tt,
             zobrist,
             nodes_searched: 0,
+            etc_probes: 0,
+            etc_hits: 0,
+            etc_cutoffs: 0,
         }
     }
 
     pub fn nodes_searched(&self) -> u64 {
         self.nodes_searched
+    }
+
+    pub(crate) fn etc_counts(&self) -> (u64, u64, u64) {
+        (self.etc_probes, self.etc_hits, self.etc_cutoffs)
     }
 
     /// Run iterative deepening search up to max_depth within budget.
@@ -141,7 +151,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         let hash = self.zobrist.hash(board, color);
 
         // TT probe
-        let tt_move = if let Some(entry) = self.tt.probe(hash) {
+        let tt_move = if let Some(entry) = self.tt.probe(hash, board, color) {
             if entry.depth >= depth {
                 match entry.bound {
                     Bound::Exact => {
@@ -202,6 +212,42 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         }
 
         let ordered = order_moves_with_successors(board, color, legal, tt_move, depth);
+
+        // Full move ordering has already built every successor at this depth.
+        // Only an upper bound on the child can prove a lower bound on this node.
+        // Keep the established order and leave the usual PVS path untouched on a miss.
+        if depth >= 3 {
+            for ordered_move in &ordered {
+                if budget.interrupted(self.nodes_searched) {
+                    return Err(());
+                }
+                let successor = ordered_move
+                    .successor
+                    .expect("full ordering builds successors");
+                let child_color = color.opponent();
+                let child_hash = self.zobrist.hash_after_move(
+                    hash,
+                    color,
+                    ordered_move.position,
+                    ordered_move.flips,
+                );
+                self.etc_probes += 1;
+                if let Some(entry) = self.tt.probe(child_hash, &successor, child_color) {
+                    self.etc_hits += 1;
+                    if entry.depth >= depth - 1
+                        && matches!(entry.bound, Bound::Exact | Bound::UpperBound)
+                        && entry.score <= -beta
+                    {
+                        self.etc_cutoffs += 1;
+                        return Ok(NodeResult {
+                            score: -entry.score,
+                            pv: vec![ordered_move.position],
+                            leaf_eval: None,
+                        });
+                    }
+                }
+            }
+        }
 
         let original_alpha = alpha;
         let mut best_score = i32::MIN;
@@ -290,6 +336,9 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             hash,
             TtEntry {
                 hash,
+                black: board.pieces(Color::Black),
+                white: board.pieces(Color::White),
+                side_to_move: color,
                 depth,
                 score: best_score,
                 bound,
@@ -302,5 +351,139 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             pv: best_pv,
             leaf_eval: best_leaf,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::strategic::StrategicEvaluator;
+
+    #[test]
+    fn child_bounds_prove_only_sufficient_beta_cutoffs() {
+        let board = Board::new();
+        let child = order_moves_with_successors(
+            &board,
+            Color::Black,
+            moves::legal_moves(&board, Color::Black),
+            None,
+            3,
+        )[0];
+        let successor = child.successor.unwrap();
+        let keys = ZobristKeys::new();
+        let hash = keys.hash(&successor, Color::White);
+        let evaluator = StrategicEvaluator::new();
+        let budget = SearchBudget::with_node_limit_only(100_000);
+
+        for (bound, entry_depth, score, proves) in [
+            (Bound::Exact, 2, -10, true),
+            (Bound::UpperBound, 2, -10, true),
+            (Bound::LowerBound, 2, -10, false),
+            (Bound::Exact, 1, -10, false),
+            (Bound::UpperBound, 2, -9, false),
+        ] {
+            let mut tt = TranspositionTable::new(1024);
+            tt.store(
+                hash,
+                TtEntry {
+                    hash,
+                    black: successor.pieces(Color::Black),
+                    white: successor.pieces(Color::White),
+                    side_to_move: Color::White,
+                    depth: entry_depth,
+                    score,
+                    bound,
+                    best_move: None,
+                },
+            );
+            let mut search = Negascout::new(&evaluator, &mut tt, &keys);
+            let result = search
+                .negascout(&board, Color::Black, 3, -10, 10, &budget)
+                .unwrap();
+            assert_eq!(
+                search.etc_cutoffs > 0,
+                proves,
+                "{bound:?} depth {entry_depth} score {score}"
+            );
+            if proves {
+                assert_eq!(result.score, 10);
+                assert_eq!(result.pv, vec![child.position]);
+            }
+        }
+    }
+
+    #[test]
+    fn colliding_child_entry_is_not_a_cutoff() {
+        let board = Board::new();
+        let child = order_moves_with_successors(
+            &board,
+            Color::Black,
+            moves::legal_moves(&board, Color::Black),
+            None,
+            3,
+        )[0];
+        let successor = child.successor.unwrap();
+        let keys = ZobristKeys::new();
+        let hash = keys.hash(&successor, Color::White);
+        let evaluator = StrategicEvaluator::new();
+        let budget = SearchBudget::with_node_limit_only(100_000);
+        for side in [Color::Black, Color::White] {
+            let mut tt = TranspositionTable::new(1024);
+            tt.store(
+                hash,
+                TtEntry {
+                    hash,
+                    black: board.pieces(Color::Black),
+                    white: board.pieces(Color::White),
+                    side_to_move: side,
+                    depth: 2,
+                    score: -100_000,
+                    bound: Bound::UpperBound,
+                    best_move: None,
+                },
+            );
+            let mut search = Negascout::new(&evaluator, &mut tt, &keys);
+            search
+                .negascout(&board, Color::Black, 3, -10, 10, &budget)
+                .unwrap();
+            assert_eq!(search.etc_cutoffs, 0);
+        }
+    }
+
+    #[test]
+    fn colliding_current_node_entry_cannot_supply_score_or_move() {
+        let board = Board::new();
+        let keys = ZobristKeys::new();
+        let hash = keys.hash(&board, Color::Black);
+        let evaluator = StrategicEvaluator::new();
+        let budget = SearchBudget::with_node_limit_only(100_000);
+        let mut empty_tt = TranspositionTable::new(1024);
+        let expected = Negascout::new(&evaluator, &mut empty_tt, &keys)
+            .negascout(&board, Color::Black, 2, -100_000, 100_000, &budget)
+            .unwrap();
+        for (black, side_to_move) in [
+            (board.pieces(Color::Black) | 1, Color::Black),
+            (board.pieces(Color::Black), Color::White),
+        ] {
+            let mut tt = TranspositionTable::new(1024);
+            tt.store(
+                hash,
+                TtEntry {
+                    hash,
+                    black,
+                    white: board.pieces(Color::White),
+                    side_to_move,
+                    depth: 2,
+                    score: 100_000,
+                    bound: Bound::Exact,
+                    best_move: Some(Position::new(0, 0)),
+                },
+            );
+            let actual = Negascout::new(&evaluator, &mut tt, &keys)
+                .negascout(&board, Color::Black, 2, -100_000, 100_000, &budget)
+                .unwrap();
+            assert_eq!(actual.score, expected.score);
+            assert_eq!(actual.pv, expected.pv);
+        }
     }
 }

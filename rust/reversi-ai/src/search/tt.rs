@@ -13,6 +13,9 @@ pub enum Bound {
 #[derive(Debug, Clone, Copy)]
 pub struct TtEntry {
     pub hash: u64,
+    pub black: u64,
+    pub white: u64,
+    pub side_to_move: Color,
     pub depth: u8,
     pub score: i32,
     pub bound: Bound,
@@ -73,6 +76,30 @@ impl ZobristKeys {
             Color::White => 1,
         }]
     }
+
+    /// Hash a legal successor using its placed disc and already known flips.
+    pub(crate) fn hash_after_move(
+        &self,
+        parent_hash: u64,
+        color: Color,
+        position: Position,
+        mut flips: u64,
+    ) -> u64 {
+        let (current, opponent) = match color {
+            Color::Black => (0, 1),
+            Color::White => (1, 0),
+        };
+        let mut hash = parent_hash
+            ^ self.side_to_move[current]
+            ^ self.side_to_move[opponent]
+            ^ self.keys[current][position.bit_index() as usize];
+        while flips != 0 {
+            let square = flips.trailing_zeros() as usize;
+            hash ^= self.keys[current][square] ^ self.keys[opponent][square];
+            flips &= flips - 1;
+        }
+        hash
+    }
 }
 
 impl Default for ZobristKeys {
@@ -96,11 +123,14 @@ impl TranspositionTable {
     }
 
     /// Look up an entry by hash.
-    pub fn probe(&self, hash: u64) -> Option<&TtEntry> {
+    pub fn probe(&self, hash: u64, board: &Board, color: Color) -> Option<&TtEntry> {
         let index = (hash as usize) % self.capacity;
-        self.entries[index]
-            .as_ref()
-            .filter(|entry| entry.hash == hash)
+        self.entries[index].as_ref().filter(|entry| {
+            entry.hash == hash
+                && entry.black == board.pieces(Color::Black)
+                && entry.white == board.pieces(Color::White)
+                && entry.side_to_move == color
+        })
     }
 
     /// Store an entry. Replaces existing entry if new depth >= existing depth.
@@ -147,6 +177,30 @@ mod tests {
     }
 
     #[test]
+    fn successor_hash_matches_full_board_hash() {
+        let keys = ZobristKeys::new();
+        let board = Board::new();
+        let parent_hash = keys.hash(&board, Color::Black);
+        for generated in reversi_engine::moves::generated_moves(&board, Color::Black) {
+            let successor = reversi_engine::moves::make_move_with_flips(
+                &board,
+                Color::Black,
+                generated.position,
+                generated.flips,
+            );
+            assert_eq!(
+                keys.hash_after_move(
+                    parent_hash,
+                    Color::Black,
+                    generated.position,
+                    generated.flips
+                ),
+                keys.hash(&successor, Color::White),
+            );
+        }
+    }
+
+    #[test]
     fn test_zobrist_distinguishes_side_to_move_in_pass_position() {
         let keys = ZobristKeys::new();
         let mut board = Board::empty();
@@ -167,13 +221,16 @@ mod tests {
             black_hash,
             TtEntry {
                 hash: black_hash,
+                black: board.pieces(Color::Black),
+                white: board.pieces(Color::White),
+                side_to_move: Color::Black,
                 depth: 1,
                 score: 100,
                 bound: Bound::Exact,
                 best_move: None,
             },
         );
-        assert!(tt.probe(white_hash).is_none());
+        assert!(tt.probe(white_hash, &board, Color::White).is_none());
     }
 
     #[test]
@@ -181,13 +238,16 @@ mod tests {
         let mut tt = TranspositionTable::new(1024);
         let entry = TtEntry {
             hash: 42,
+            black: Board::new().pieces(Color::Black),
+            white: Board::new().pieces(Color::White),
+            side_to_move: Color::Black,
             depth: 5,
             score: 100,
             bound: Bound::Exact,
             best_move: Some(Position::new(2, 3)),
         };
         tt.store(42, entry);
-        let result = tt.probe(42).unwrap();
+        let result = tt.probe(42, &Board::new(), Color::Black).unwrap();
         assert_eq!(result.score, 100);
         assert_eq!(result.depth, 5);
     }
@@ -195,7 +255,7 @@ mod tests {
     #[test]
     fn test_tt_miss() {
         let tt = TranspositionTable::new(1024);
-        assert!(tt.probe(42).is_none());
+        assert!(tt.probe(42, &Board::new(), Color::Black).is_none());
     }
 
     #[test]
@@ -203,6 +263,9 @@ mod tests {
         let mut tt = TranspositionTable::new(1024);
         let entry1 = TtEntry {
             hash: 42,
+            black: Board::new().pieces(Color::Black),
+            white: Board::new().pieces(Color::White),
+            side_to_move: Color::Black,
             depth: 3,
             score: 50,
             bound: Bound::Exact,
@@ -210,6 +273,9 @@ mod tests {
         };
         let entry2 = TtEntry {
             hash: 42,
+            black: Board::new().pieces(Color::Black),
+            white: Board::new().pieces(Color::White),
+            side_to_move: Color::Black,
             depth: 5,
             score: 100,
             bound: Bound::Exact,
@@ -217,6 +283,33 @@ mod tests {
         };
         tt.store(42, entry1);
         tt.store(42, entry2);
-        assert_eq!(tt.probe(42).unwrap().score, 100);
+        assert_eq!(
+            tt.probe(42, &Board::new(), Color::Black).unwrap().score,
+            100
+        );
+    }
+
+    #[test]
+    fn identical_hash_requires_complete_position_identity() {
+        let board = Board::new();
+        let mut changed = board;
+        changed.set(Position::new(0, 0), Color::Black);
+        let mut tt = TranspositionTable::new(1);
+        tt.store(
+            42,
+            TtEntry {
+                hash: 42,
+                black: board.pieces(Color::Black),
+                white: board.pieces(Color::White),
+                side_to_move: Color::Black,
+                depth: 4,
+                score: 900,
+                bound: Bound::Exact,
+                best_move: Some(Position::new(2, 3)),
+            },
+        );
+        assert!(tt.probe(42, &board, Color::Black).is_some());
+        assert!(tt.probe(42, &changed, Color::Black).is_none());
+        assert!(tt.probe(42, &board, Color::White).is_none());
     }
 }
