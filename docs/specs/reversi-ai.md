@@ -217,6 +217,9 @@ Hash table storing previously evaluated positions.
 ```rust
 struct TtEntry {
     hash: u64,
+    black: u64,
+    white: u64,
+    side_to_move: Color,
     depth: u8,
     score: i32,
     bound: Bound,       // Exact, LowerBound, UpperBound
@@ -231,7 +234,11 @@ enum Bound {
 ```
 
 - `TranspositionTable::new(capacity: usize)` — Create with given capacity.
-- `TranspositionTable::probe(hash: u64)` — Look up entry. Returns `Option<&TtEntry>`.
+- `TranspositionTable::probe(hash: u64, board: &Board, color: Color)` — Look up
+  a heuristic entry for the full board and side identity.
+- A heuristic probe accepts an entry only when its hash, complete black and
+  white bitboards, and side to move match. A hash collision is a miss for its
+  score, bound, and move hint.
 - `TranspositionTable::store(hash: u64, entry: TtEntry)` — Store entry. Replaces if new depth >= existing depth.
 - `TranspositionTable::clear()` — Clear all entries.
 
@@ -259,6 +266,9 @@ Board and side-to-move hashing for transposition table lookup.
 - Hash computed incrementally: XOR in/out pieces as moves are made.
 - `ZobristKeys::new()` — Generate a new set of random Zobrist keys.
 - `ZobristKeys::hash(&self, board: &Board, color: Color) -> u64` — Compute hash from scratch for the given board position and side to move. The same discs with different sides to move produce different keys.
+- A child lookup may derive the same hash from its parent hash, placed square,
+  flip mask, and changed side to move; the full child board and side still
+  decide whether an indexed TT entry matches.
 
 ### Move Ordering
 
@@ -304,6 +314,13 @@ Low-level search implementation. Typically used via `SearchEngine` rather than d
 - `Negascout::nodes_searched(&self) -> u64` — Returns total node count from the last completed search.
 - `Negascout::search(board: &Board, color: Color, max_depth: u8, budget: &SearchBudget)` — Internal budgeted iterative deepening search. Returns the root outcome and the last wholly completed iteration.
 - TT probes and stores use a Zobrist key that includes the current `color`, including when a pass keeps the board unchanged.
+- From remaining depth 3 onward, search may inspect already constructed legal
+  successors in established move order. A matching child entry with at least
+  the requested remaining depth proves a parent beta cutoff only when the
+  child's exact or upper bound is at most the negated parent beta. A child
+  lower bound or move hint alone cannot prove it. This heuristic-only probe
+  does not reorder moves or affect exact solving. Diagnostics count child
+  probes, matching hits, and proven cutoffs separately.
 - Internally runs depth 1, 2, ..., up to `max_depth`.
 - At each depth: Negascout with alpha-beta window.
   - First move (PV node): search with full window [alpha, beta].
@@ -319,6 +336,8 @@ evaluator, supplied search configuration, and a fixed node-only limit. Each
 record includes the source position id and board digest plus
 the selected outcome, score, PV, completed depth, nodes searched, exact flag,
 and elapsed time.
+Heuristic diagnostics also report ETC probes, identity-matching hits, and
+proven cutoffs. These counts are zero for the exact solver.
 
 The deterministic comparison projection excludes elapsed time and requires
 the same outcome, score, PV, completed depth, nodes searched, and exact flag

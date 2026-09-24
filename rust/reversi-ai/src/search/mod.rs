@@ -107,9 +107,10 @@ pub struct SearchEngine {
     tt: TranspositionTable,
     zobrist: ZobristKeys,
     context_fingerprint: Option<u64>,
+    last_etc_counts: (u64, u64, u64),
 }
 
-const SEARCH_SEMANTICS_VERSION: u64 = 1;
+const SEARCH_SEMANTICS_VERSION: u64 = 2;
 
 fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(evaluator: &E, config: &AiConfig) -> u64 {
     stable_context_fingerprint(&[
@@ -125,6 +126,7 @@ impl SearchEngine {
             tt: TranspositionTable::new(1 << 20), // ~1M entries
             zobrist: ZobristKeys::new(),
             context_fingerprint: None,
+            last_etc_counts: (0, 0, 0),
         }
     }
 
@@ -138,6 +140,7 @@ impl SearchEngine {
         budget: &SearchBudget,
     ) -> SearchResult {
         let started = Instant::now();
+        self.last_etc_counts = (0, 0, 0);
         let context_fingerprint = search_context_fingerprint(evaluator, config);
         if self.context_fingerprint != Some(context_fingerprint) {
             self.tt.clear();
@@ -165,6 +168,7 @@ impl SearchEngine {
 
         let mut search = Negascout::new(evaluator, &mut self.tt, &self.zobrist);
         let completed = search.search(board, color, max_depth, budget);
+        self.last_etc_counts = search.etc_counts();
 
         SearchResult {
             outcome: completed.outcome,
@@ -198,6 +202,11 @@ impl SearchEngine {
     /// Clear the transposition table.
     pub fn clear_tt(&mut self) {
         self.tt.clear();
+    }
+
+    /// Diagnostic counts from the last heuristic search: probes, hits, cutoffs.
+    pub fn last_etc_counts(&self) -> (u64, u64, u64) {
+        self.last_etc_counts
     }
 }
 

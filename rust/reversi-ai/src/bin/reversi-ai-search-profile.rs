@@ -179,6 +179,7 @@ fn main() -> Result<(), String> {
             BudgetMode::TimeLimit(limit) => SearchBudget::with_time_limit(limit),
         };
         let result = engine.search_with_budget(&board, color, &evaluator, &args.config, &budget);
+        let (etc_probes, etc_hits, etc_cutoffs) = engine.last_etc_counts();
         let board_digest = format!("{:x}", Sha256::digest(board_flat.as_bytes()));
         let pv = result.pv.into_iter().map(move_name).collect::<Vec<_>>();
         let mut output = json!({
@@ -187,6 +188,9 @@ fn main() -> Result<(), String> {
             "elapsed_ns": result.elapsed.as_nanos(),
             "exact": result.exact,
             "nodes_searched": result.nodes_searched,
+            "etc_probes": etc_probes,
+            "etc_hits": etc_hits,
+            "etc_cutoffs": etc_cutoffs,
             "outcome": outcome_json(result.outcome),
             "position_id": position_id,
             "pv": pv,
