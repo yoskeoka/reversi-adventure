@@ -92,8 +92,22 @@ GDExtension, or release artifacts.
    It contains no measured peak RSS; node totals remain diagnostic only.
    Candidate code stays on open PR #200 for a separate user disposition and is
    not accepted into `main` by this result.
-4. `0024-reversi-ai-aspiration-windows.md` tries bounded iterative-deepening
-   score windows for the midgame workload.
+4. `0024-reversi-ai-aspiration-windows.md` was not adopted. Its fixed initial
+   score delta of 64 widened symmetrically on fail-low/high, preserving all
+   160 paired outcome, score, PV, completed-depth, and exact projections. The
+   quiet same-host release comparison used baseline `375854c36723eb510a962c36cfa4fd5bf88a6812`
+   and candidate branch `feat/reversi-ai-aspiration-windows` (draft PR #203),
+   with one warm-up and five alternating measured repetitions per binary and
+   position. Candidate/baseline geometric-mean time was `0.985057117170627`
+   for heuristic depth 12 (1.494% faster) and `1.0077264536193302` for exact
+   16 (0.773% slower); neither cleared the 5% adoption gate. The report is
+   `docs/references/reversi-ai-search-performance-0024.json`, SHA-256
+   `04006088940dcbc4497a1b93d468a39a8f4858ff0ec6f33e457a9e8024415d0e`.
+   Midgame nodes fell by a small amount, but failed windows required retries,
+   limiting the net timing gain. Exact solving bypasses this code, so its
+   small timing difference is incidental. The unmerged experiment remains on
+   PR #203 and its remote branch at the user's request; this outcome does not
+   accept the production code into `main`.
 5. `0025-reversi-ai-enhanced-transposition-cutoff.md` tries sound child-TT
    cutoffs using already generated successors.
 6. `0026-reversi-ai-exact-pvs.md` applies full-window-first/null-window exact
