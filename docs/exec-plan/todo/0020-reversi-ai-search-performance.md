@@ -48,7 +48,7 @@ GDExtension, or release artifacts.
 
 ## Change map
 
-- (NEW) detailed executable plans `0021` through `0028`.
+- (NEW) detailed executable plans `0021` through `0029`.
 - (MODIFY) `docs/exec-plan/todo/0009-reversi-ai-strong-engine.md`,
   `0018-reversi-ai-strong-engine-acceptance.md`, and
   `0019-reversi-ai-pattern-reinforcement-cycle.md` -- make the performance
@@ -102,10 +102,17 @@ GDExtension, or release artifacts.
    and region work from the final empties with maintained parity state.
 8. `0028-reversi-ai-exact-stability-cutoff.md` adds only mathematically sound,
    conservative exact score bounds from proven stable discs.
+9. `0029-reversi-ai-search-storage-refinement.md` separately evaluates
+   pass-safe heuristic PV scratch and compact exact storage after the rejected
+   0023 result. It compares an in-search complete PV path with selective
+   recovery of missing exact proof, and measures CPU time and peak RSS as well
+   as the existing release wall-clock gate. [PR #200](https://github.com/yoskeoka/reversi-adventure/pull/200)
+   remains a retained, unadopted reference candidate.
 
 Plan `0022` is an accepted shared foundation; `0023` was evaluated after it
-and rejected. The midgame track (`0024` then `0025`) and exact track (`0026`
-then `0027` then `0028`) may proceed in parallel, but each experiment starts
+and rejected. Plan `0029` revisits storage before later exact-track work when
+possible. The midgame track (`0024` then `0025`) and exact track (`0026` then
+`0027` then `0028`) may proceed in parallel, but each experiment starts
 from the latest accepted `main` in its track and compares against its immediate
 parent. A child
 merges production code only if its predeclared gate passes. A rejected child
