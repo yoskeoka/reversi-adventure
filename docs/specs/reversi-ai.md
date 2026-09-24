@@ -400,6 +400,20 @@ arithmetic with synthetic samples only. No CI assertion may require a wall
 clock speed, ratio, or threshold; a documented same-host release run is the
 only performance evidence.
 
+The exact solver searches the first ordered move with the full integer score
+window. It probes later moves with a one-point window and repeats a probe with
+the full window when the result can raise alpha without proving a cutoff.
+Only proven bounds may be reused from these probes; a bounded result never
+becomes a completed exact root score or a fabricated principal variation.
+Move ordering and strict greater-than tie breaking preserve the chosen move
+and complete principal variation; exact move ordering is independent of
+transposition hits so extra probes cannot change equal-score choices.
+Every probe and retry obeys the same search
+budget; interruption discards the whole exact attempt. Profiler diagnostics
+count exact null-window calls, fail-highs, and full re-searches separately
+from searched nodes. These counts are diagnostic and may change when the
+search tree changes.
+
 ### SearchEngine
 
 Wrapper around `Negascout` managing the transposition table and Zobrist keys.

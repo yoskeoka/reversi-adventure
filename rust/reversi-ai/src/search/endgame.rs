@@ -12,7 +12,6 @@ use super::{SearchBudget, SearchOutcome};
 struct ExactEntry {
     score: i32,
     bound: Bound,
-    best_move: Option<Position>,
     pv: Vec<Position>,
 }
 
@@ -38,6 +37,15 @@ pub(crate) struct EndgameSolver<'a> {
     zobrist: &'a ZobristKeys,
     table: HashMap<u64, ExactEntry>,
     nodes_searched: &'a mut u64,
+    diagnostics: ExactPvsDiagnostics,
+}
+
+/// Counters for exact null-window probes and their outcomes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExactPvsDiagnostics {
+    pub null_window_calls: u64,
+    pub fail_highs: u64,
+    pub full_researches: u64,
 }
 
 impl<'a> EndgameSolver<'a> {
@@ -46,7 +54,12 @@ impl<'a> EndgameSolver<'a> {
             zobrist,
             table: HashMap::new(),
             nodes_searched,
+            diagnostics: ExactPvsDiagnostics::default(),
         }
+    }
+
+    pub(crate) fn diagnostics(&self) -> ExactPvsDiagnostics {
+        self.diagnostics
     }
 
     pub(crate) fn solve(
@@ -119,9 +132,7 @@ impl<'a> EndgameSolver<'a> {
         *self.nodes_searched += 1;
 
         let hash = self.zobrist.hash(board, color);
-        let mut tt_move = None;
         if let Some(entry) = self.table.get(&hash) {
-            tt_move = entry.best_move;
             match entry.bound {
                 Bound::Exact => {
                     return Ok(NodeResult {
@@ -162,28 +173,40 @@ impl<'a> EndgameSolver<'a> {
         }
 
         let original_alpha = alpha;
-        let ordered = order_endgame_moves(board, color, legal, tt_move);
+        // Probe searches visit extra cache states. Keep equal-score move
+        // selection independent of those states so the complete PV is stable.
+        let ordered = order_endgame_moves(board, color, legal, None);
         let generated = moves::generated_moves(board, color);
         let mut best_score = -65;
-        let mut best_move = ordered[0];
         let mut best_pv = Vec::new();
 
-        for position in ordered {
+        for (index, position) in ordered.into_iter().enumerate() {
             let generated_move = generated
                 .iter()
                 .find(|generated_move| generated_move.position == position)
                 .expect("ordered move must have a generated descriptor");
-            let child = self.negamax(
-                &moves::make_move_with_flips(board, color, position, generated_move.flips),
-                color.opponent(),
-                -beta,
-                -alpha,
-                budget,
-            )?;
+            let successor =
+                moves::make_move_with_flips(board, color, position, generated_move.flips);
+            let child = if index == 0 {
+                self.negamax(&successor, color.opponent(), -beta, -alpha, budget)?
+            } else {
+                self.diagnostics.null_window_calls += 1;
+                let probe =
+                    self.negamax(&successor, color.opponent(), -alpha - 1, -alpha, budget)?;
+                let probe_score = -probe.score;
+                if probe_score > alpha {
+                    self.diagnostics.fail_highs += 1;
+                }
+                if probe_score > alpha && probe_score < beta {
+                    self.diagnostics.full_researches += 1;
+                    self.negamax(&successor, color.opponent(), -beta, -alpha, budget)?
+                } else {
+                    probe
+                }
+            };
             let score = -child.score;
             if score > best_score {
                 best_score = score;
-                best_move = position;
                 best_pv = Vec::with_capacity(1 + child.pv.len());
                 best_pv.push(position);
                 best_pv.extend(child.pv);
@@ -206,7 +229,6 @@ impl<'a> EndgameSolver<'a> {
             ExactEntry {
                 score: best_score,
                 bound,
-                best_move: Some(best_move),
                 pv: if bound == Bound::Exact {
                     best_pv.clone()
                 } else {
@@ -278,6 +300,171 @@ mod tests {
             &SearchBudget::with_time_limit(Duration::from_secs(30)),
         );
         (result, nodes)
+    }
+
+    fn full_window_reference(board: &Board, color: Color) -> NodeResult {
+        let legal = moves::legal_moves(board, color);
+        if legal == 0 {
+            if !moves::has_legal_move(board, color.opponent()) {
+                return NodeResult {
+                    score: disc_difference(board, color),
+                    pv: Vec::new(),
+                };
+            }
+            let child = full_window_reference(board, color.opponent());
+            return NodeResult {
+                score: -child.score,
+                pv: child.pv,
+            };
+        }
+        let mut best = NodeResult {
+            score: -65,
+            pv: Vec::new(),
+        };
+        for position in order_endgame_moves(board, color, legal, None) {
+            let child =
+                full_window_reference(&moves::make_move(board, color, position), color.opponent());
+            let score = -child.score;
+            if score > best.score {
+                best.score = score;
+                best.pv = vec![position];
+                best.pv.extend(child.pv);
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn pvs_matches_full_window_reference_on_reachable_endgames() {
+        let root = sixteen_empty_board();
+        for choice in [0usize, 1, 2, 3] {
+            let mut board = root;
+            let mut color = Color::Black;
+            while board.empty_cells().count_ones() > 6 {
+                let mut legal = moves::legal_moves(&board, color);
+                if legal == 0 {
+                    color = color.opponent();
+                    legal = moves::legal_moves(&board, color);
+                    if legal == 0 {
+                        break;
+                    }
+                }
+                let ordered = order_endgame_moves(&board, color, legal, None);
+                let position = ordered[choice % ordered.len()];
+                board = moves::make_move(&board, color, position);
+                color = color.opponent();
+            }
+            let reference = full_window_reference(&board, color);
+            let (result, _) = solve(&board, color);
+            assert!(result.exact);
+            assert_eq!(result.score, Some(reference.score), "choice {choice}");
+            assert_eq!(result.pv, reference.pv, "choice {choice}");
+        }
+    }
+
+    #[test]
+    fn pvs_matches_reference_for_every_reachable_four_empty_position() {
+        use std::collections::HashSet;
+
+        let mut board = sixteen_empty_board();
+        let mut color = Color::Black;
+        while board.empty_cells().count_ones() > 4 {
+            let legal = moves::legal_moves(&board, color);
+            if legal == 0 {
+                color = color.opponent();
+                continue;
+            }
+            let position = order_endgame_moves(&board, color, legal, None)[0];
+            board = moves::make_move(&board, color, position);
+            color = color.opponent();
+        }
+
+        fn check_all(board: Board, color: Color, seen: &mut HashSet<(Board, Color)>) {
+            if !seen.insert((board, color)) {
+                return;
+            }
+            let reference = full_window_reference(&board, color);
+            let (result, _) = solve(&board, color);
+            assert!(result.exact);
+            assert_eq!(result.score, Some(reference.score));
+            assert_eq!(result.pv, reference.pv);
+            let legal = moves::legal_moves(&board, color);
+            if legal == 0 {
+                if moves::has_legal_move(&board, color.opponent()) {
+                    check_all(board, color.opponent(), seen);
+                }
+            } else {
+                for position in order_endgame_moves(&board, color, legal, None) {
+                    check_all(
+                        moves::make_move(&board, color, position),
+                        color.opponent(),
+                        seen,
+                    );
+                }
+            }
+        }
+
+        let mut seen = HashSet::new();
+        check_all(board, color, &mut seen);
+        assert!(seen.len() > 10);
+    }
+
+    #[test]
+    fn null_window_diagnostics_include_research() {
+        let board = sixteen_empty_board();
+        let keys = ZobristKeys::new();
+        let mut nodes = 0;
+        let mut solver = EndgameSolver::new(&keys, &mut nodes);
+        let completed = solver.solve(
+            &board,
+            Color::Black,
+            &SearchBudget::with_time_limit(Duration::from_secs(30)),
+        );
+        let diagnostics = solver.diagnostics();
+        assert!(completed.exact);
+        assert!(diagnostics.null_window_calls > 0);
+        assert!(diagnostics.fail_highs >= diagnostics.full_researches);
+        assert!(diagnostics.full_researches > 0);
+    }
+
+    #[test]
+    fn interruption_after_research_started_discards_exact_attempt() {
+        let board = sixteen_empty_board();
+        let keys = ZobristKeys::new();
+        let mut nodes = 0;
+        let mut solver = EndgameSolver::new(&keys, &mut nodes);
+        let result = solver.solve(
+            &board,
+            Color::Black,
+            &SearchBudget::with_node_limit_only(10_000),
+        );
+        assert!(solver.diagnostics().full_researches > 0);
+        assert!(!result.exact);
+        assert_eq!(result.score, None);
+        assert!(result.pv.is_empty());
+    }
+
+    #[test]
+    fn null_window_cache_bound_is_safe_for_full_window_reuse() {
+        let board = Board::from_string(
+            "WWWWWWW.\nWWWWWWW.\nWWWWWWB.\nWWWWWB..\nWWWWWB..\nWWWWWB..\nWWWWWB..\nBBBBBBB.",
+        )
+        .unwrap();
+        let keys = ZobristKeys::new();
+        let mut nodes = 0;
+        let mut solver = EndgameSolver::new(&keys, &mut nodes);
+        let budget = SearchBudget::with_time_limit(Duration::from_secs(30));
+        solver
+            .negamax(&board, Color::Black, -1, 0, &budget)
+            .unwrap();
+        let entry = solver.table.get(&keys.hash(&board, Color::Black)).unwrap();
+        assert_ne!(entry.bound, Bound::Exact);
+        assert!(entry.pv.is_empty());
+        let complete = solver
+            .negamax(&board, Color::Black, -65, 65, &budget)
+            .unwrap();
+        assert_eq!(complete.score, -28);
+        assert_eq!(complete.pv.len(), 12);
     }
 
     #[test]
@@ -404,6 +591,69 @@ mod tests {
                 assert!(nodes <= 1_000_000, "16-empty fixture used {nodes} nodes");
             }
         }
+    }
+
+    #[test]
+    fn benchmark_exact_roots_match_checked_oracle_scores_and_optimal_moves() {
+        use serde_json::Value;
+
+        let corpus = include_str!("../../../../tools/reversi-ai-benchmark/positions-v1.jsonl");
+        let reference = include_str!("../../../../tools/reversi-ai-benchmark/reference-v1.jsonl");
+        let positions: Vec<Value> = corpus
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let reports: Vec<Value> = reference
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let baseline_pvs = [
+            "a6 f1 g2 a4 c1 d1 g1 b2 a1 b1 a2 h1 h2 a7 a8 b7",
+            "d1 c1 a6 a1 b1 b2 g2 e7 h1 b7 h8 h7 g8 f8 b8 a8",
+            "a8 c8 a7 h8 g7 h3 g3 g2 h1 h2 b1 b2 a2 a4 a1 a3",
+            "a3 a4 b3 e1 h8 a1 b7 a8 h7 b2 a2 g2 g1 h1 h2 f1",
+        ];
+        let mut checked = 0;
+        for (position, report) in positions.iter().zip(&reports) {
+            if report["workload"] != "exact-16" {
+                continue;
+            }
+            assert_eq!(position["position_id"], report["position_id"]);
+            let board =
+                Board::from_string(&format_board(position["board"].as_str().unwrap())).unwrap();
+            let color = if position["side_to_move"] == "B" {
+                Color::Black
+            } else {
+                Color::White
+            };
+            let (result, _) = solve(&board, color);
+            assert!(result.exact);
+            assert_eq!(result.completed_depth, 16);
+            assert_eq!(
+                result.score,
+                report["analysis"]["best_value"].as_i64().map(|v| v as i32)
+            );
+            let SearchOutcome::Move(best_move) = result.outcome else {
+                panic!("exact reference root must have a move");
+            };
+            let best_name = format!("{}{}", (b'a' + best_move.col) as char, best_move.row + 1);
+            assert!(report["analysis"]["optimal_moves"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name == &best_name));
+            let actual_pv = result
+                .pv
+                .iter()
+                .map(|move_| format!("{}{}", (b'a' + move_.col) as char, move_.row + 1))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_pv,
+                baseline_pvs[checked].split_whitespace().collect::<Vec<_>>()
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 4);
     }
 
     fn sixteen_empty_board() -> Board {

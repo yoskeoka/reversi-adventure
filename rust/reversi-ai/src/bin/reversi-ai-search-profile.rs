@@ -186,6 +186,11 @@ fn main() -> Result<(), String> {
             "completed_depth": result.completed_depth,
             "elapsed_ns": result.elapsed.as_nanos(),
             "exact": result.exact,
+            "exact_pvs": {
+                "null_window_calls": result.exact_pvs.null_window_calls,
+                "fail_highs": result.exact_pvs.fail_highs,
+                "full_researches": result.exact_pvs.full_researches,
+            },
             "nodes_searched": result.nodes_searched,
             "outcome": outcome_json(result.outcome),
             "position_id": position_id,
