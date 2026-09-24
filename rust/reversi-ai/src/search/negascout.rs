@@ -31,6 +31,18 @@ pub(crate) struct CompletedSearch {
     pub exact: bool,
 }
 
+const FULL_ALPHA: i32 = i32::MIN + 1;
+const FULL_BETA: i32 = i32::MAX - 1;
+const INITIAL_ASPIRATION_DELTA: i64 = 64;
+
+fn aspiration_window(center: i32, delta: i64) -> (i32, i32) {
+    let center = i64::from(center);
+    (
+        (center - delta).max(i64::from(FULL_ALPHA)) as i32,
+        (center + delta).min(i64::from(FULL_BETA)) as i32,
+    )
+}
+
 impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
     pub fn new(evaluator: &'a E, tt: &'a mut TranspositionTable, zobrist: &'a ZobristKeys) -> Self {
         Self {
@@ -53,6 +65,17 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         color: Color,
         max_depth: u8,
         budget: &SearchBudget,
+    ) -> CompletedSearch {
+        self.search_with_mode(board, color, max_depth, budget, true)
+    }
+
+    fn search_with_mode(
+        &mut self,
+        board: &Board,
+        color: Color,
+        max_depth: u8,
+        budget: &SearchBudget,
+        aspiration: bool,
     ) -> CompletedSearch {
         let mut best_pv = Vec::new();
 
@@ -81,11 +104,28 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
         let mut completed_depth = 0;
 
         for depth in 1..=max_depth {
-            let result =
-                match self.negascout(board, color, depth, i32::MIN + 1, i32::MAX - 1, budget) {
-                    Ok(result) => result,
-                    Err(()) => break,
+            let mut delta = INITIAL_ASPIRATION_DELTA;
+            let result = loop {
+                let (alpha, beta) = if aspiration && depth > 1 {
+                    aspiration_window(best_score.expect("previous depth completed"), delta)
+                } else {
+                    (FULL_ALPHA, FULL_BETA)
                 };
+                let result = match self.negascout(board, color, depth, alpha, beta, budget) {
+                    Ok(result) => result,
+                    Err(()) => break None,
+                };
+                if budget.interrupted_after_completion() {
+                    break None;
+                }
+                if (result.score > alpha && result.score < beta)
+                    || (alpha == FULL_ALPHA && beta == FULL_BETA)
+                {
+                    break Some(result);
+                }
+                delta = delta.saturating_mul(2);
+            };
+            let Some(result) = result else { break };
             if budget.interrupted_after_completion() {
                 break;
             }
@@ -302,5 +342,164 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             pv: best_pv,
             leaf_eval: best_leaf,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::{strategic::StrategicEvaluator, EvalFactors};
+
+    struct ConstantEvaluator;
+
+    impl BoardEvaluator for ConstantEvaluator {
+        fn evaluate(&self, _board: &Board, _color: Color) -> EvalResult {
+            EvalResult {
+                score: 1000,
+                factors: EvalFactors::default(),
+            }
+        }
+
+        fn name(&self) -> &str {
+            "constant"
+        }
+
+        fn context_fingerprint(&self) -> u64 {
+            1
+        }
+    }
+
+    fn run<E: BoardEvaluator>(
+        evaluator: &E,
+        depth: u8,
+        budget: &SearchBudget,
+        aspiration: bool,
+    ) -> (CompletedSearch, u64) {
+        run_on_board(
+            &Board::new(),
+            Color::Black,
+            evaluator,
+            depth,
+            budget,
+            aspiration,
+        )
+    }
+
+    fn run_on_board<E: BoardEvaluator>(
+        board: &Board,
+        color: Color,
+        evaluator: &E,
+        depth: u8,
+        budget: &SearchBudget,
+        aspiration: bool,
+    ) -> (CompletedSearch, u64) {
+        let mut tt = TranspositionTable::new(1 << 16);
+        let zobrist = ZobristKeys::new();
+        let mut search = Negascout::new(evaluator, &mut tt, &zobrist);
+        let result = search.search_with_mode(board, color, depth, budget, aspiration);
+        (result, search.nodes_searched())
+    }
+
+    #[test]
+    fn aspiration_window_clamps_at_both_score_limits() {
+        assert_eq!(aspiration_window(i32::MIN, 64), (FULL_ALPHA, i32::MIN + 64));
+        assert_eq!(aspiration_window(i32::MAX, 64), (i32::MAX - 64, FULL_BETA));
+        assert_eq!(aspiration_window(0, 1_i64 << 32), (FULL_ALPHA, FULL_BETA));
+    }
+
+    #[test]
+    fn retries_count_nodes_and_preserve_the_full_window_result() {
+        let budget = SearchBudget::with_node_limit_only(u64::MAX);
+        let (candidate, candidate_nodes) = run(&ConstantEvaluator, 3, &budget, true);
+        let (baseline, baseline_nodes) = run(&ConstantEvaluator, 3, &budget, false);
+        assert_eq!(candidate.score, baseline.score);
+        assert_eq!(candidate.pv, baseline.pv);
+        assert_eq!(candidate.completed_depth, 3);
+        assert!(candidate_nodes > baseline_nodes);
+    }
+
+    #[test]
+    fn failed_windows_store_their_proven_bounds() {
+        let board = Board::new();
+        let hash = ZobristKeys::new().hash(&board, Color::Black);
+        let budget = SearchBudget::with_node_limit_only(u64::MAX);
+        for (depth, center, expected) in
+            [(2, -1000, Bound::LowerBound), (3, 1000, Bound::UpperBound)]
+        {
+            let mut tt = TranspositionTable::new(1 << 16);
+            let zobrist = ZobristKeys::new();
+            let mut search = Negascout::new(&ConstantEvaluator, &mut tt, &zobrist);
+            let (alpha, beta) = aspiration_window(center, INITIAL_ASPIRATION_DELTA);
+            search
+                .negascout(&board, Color::Black, depth, alpha, beta, &budget)
+                .unwrap();
+            assert_eq!(tt.probe(hash).unwrap().bound, expected);
+        }
+    }
+
+    #[test]
+    fn interruption_in_retry_keeps_previous_depth() {
+        let budget = SearchBudget::with_node_limit_only(u64::MAX);
+        let (first, first_nodes) = run(&ConstantEvaluator, 1, &budget, true);
+        let (_, complete_nodes) = run(&ConstantEvaluator, 2, &budget, true);
+        assert!(complete_nodes > first_nodes + 1);
+        for limit in first_nodes..complete_nodes {
+            let (interrupted, nodes) = run(
+                &ConstantEvaluator,
+                2,
+                &SearchBudget::with_node_limit_only(limit),
+                true,
+            );
+            assert_eq!(interrupted.completed_depth, 1, "limit {limit}");
+            assert_eq!(interrupted.score, first.score, "limit {limit}");
+            assert_eq!(interrupted.pv, first.pv, "limit {limit}");
+            assert_eq!(nodes, limit);
+        }
+    }
+
+    #[test]
+    fn starting_position_matches_full_window_at_several_depths() {
+        let budget = SearchBudget::with_node_limit_only(u64::MAX);
+        for depth in 1..=6 {
+            let (candidate, _) = run(&StrategicEvaluator::new(), depth, &budget, true);
+            let (baseline, _) = run(&StrategicEvaluator::new(), depth, &budget, false);
+            assert_eq!(candidate.score, baseline.score, "depth {depth}");
+            assert_eq!(candidate.pv, baseline.pv, "depth {depth}");
+            assert_eq!(candidate.completed_depth, baseline.completed_depth);
+        }
+    }
+
+    #[test]
+    fn benchmark_positions_match_full_window_at_short_depth() {
+        let corpus = include_str!("../../../../tools/reversi-ai-benchmark/positions-v1.jsonl");
+        let evaluator = StrategicEvaluator::new();
+        let budget = SearchBudget::with_node_limit_only(u64::MAX);
+        for line in corpus.lines() {
+            let record: serde_json::Value = serde_json::from_str(line).unwrap();
+            let cells = record["board"].as_str().unwrap().as_bytes();
+            let mut board = Board::empty();
+            for (index, cell) in cells.iter().enumerate() {
+                let color = match cell {
+                    b'B' => Some(Color::Black),
+                    b'W' => Some(Color::White),
+                    _ => None,
+                };
+                if let Some(color) = color {
+                    board.set(Position::from_bit_index(index as u8), color);
+                }
+            }
+            let color = if record["side_to_move"] == "B" {
+                Color::Black
+            } else {
+                Color::White
+            };
+            let (candidate, _) = run_on_board(&board, color, &evaluator, 4, &budget, true);
+            let (baseline, _) = run_on_board(&board, color, &evaluator, 4, &budget, false);
+            let id = record["position_id"].as_str().unwrap();
+            assert_eq!(candidate.outcome, baseline.outcome, "{id}");
+            assert_eq!(candidate.score, baseline.score, "{id}");
+            assert_eq!(candidate.pv, baseline.pv, "{id}");
+            assert_eq!(candidate.completed_depth, baseline.completed_depth, "{id}");
+        }
     }
 }
