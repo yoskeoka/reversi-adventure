@@ -109,6 +109,13 @@ GDExtension, or release artifacts.
    as the existing release wall-clock gate. [PR #200](https://github.com/yoskeoka/reversi-adventure/pull/200)
    remains a retained, unadopted reference candidate.
 
+After this parent and all its children are complete,
+`0030-reversi-ai-rejected-search-reassessment.md` rechecks whether Rust
+implementation costs masked the benefit of rejected search methods. It
+covers 0024 and any rejected 0025--0028 result; 0029 already owns the 0023
+storage follow-up. Plan 0030 is a successor, not an additional completion
+condition for 0020.
+
 Plan `0022` is an accepted shared foundation; `0023` was evaluated after it
 and rejected. Plan `0029` revisits storage before later exact-track work when
 possible. The midgame track (`0024` then `0025`) and exact track (`0026` then
