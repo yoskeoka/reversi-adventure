@@ -11,7 +11,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use self::endgame::EndgameSolver;
+use self::endgame::{EndgameSolver, ExactPvsDiagnostics};
 use self::negascout::Negascout;
 use self::tt::{TranspositionTable, ZobristKeys};
 use crate::config::AiConfig;
@@ -28,6 +28,7 @@ pub struct SearchResult {
     pub nodes_searched: u64,
     pub elapsed: Duration,
     pub exact: bool,
+    pub exact_pvs: ExactPvsDiagnostics,
 }
 
 /// Root outcome selected by a bounded search.
@@ -149,8 +150,9 @@ impl SearchEngine {
 
         if board.empty_cells().count_ones() <= config.exact_solver_empty_squares {
             let mut nodes_searched = 0;
-            let completed =
-                EndgameSolver::new(&self.zobrist, &mut nodes_searched).solve(board, color, budget);
+            let mut solver = EndgameSolver::new(&self.zobrist, &mut nodes_searched);
+            let completed = solver.solve(board, color, budget);
+            let exact_pvs = solver.diagnostics();
             return SearchResult {
                 outcome: completed.outcome,
                 score: completed.score,
@@ -160,6 +162,7 @@ impl SearchEngine {
                 nodes_searched,
                 elapsed: started.elapsed(),
                 exact: completed.exact,
+                exact_pvs,
             };
         }
 
@@ -175,6 +178,7 @@ impl SearchEngine {
             nodes_searched: search.nodes_searched(),
             elapsed: started.elapsed(),
             exact: completed.exact,
+            exact_pvs: ExactPvsDiagnostics::default(),
         }
     }
 

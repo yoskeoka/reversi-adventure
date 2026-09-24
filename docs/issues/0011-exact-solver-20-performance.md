@@ -10,12 +10,18 @@ five-minute verification budget.
 ## Evidence
 
 - The deterministic legal position has Black to move and 20 empty squares.
+  Its row-major board is
+  `..B.W.....BBW.W....WWWWW..WWBBWWB.WBBWWW.BBWWBW.WWBWBBB.BBBBBBB.`.
 - Pinned Egaroucid v7.8.1 `-solve` at fixed depth 20 reports a final
   root-side score of `+26` for Black.
 - `EndgameSolver` with `SearchBudget::with_time_limit(Duration::from_secs(30))`
   returns the documented non-exact fallback.
 - Repeating the same solve with a five-minute budget also returns non-exact;
   it has no partial exact score or PV.
+- The 0026 exact-PVS candidate, which clears its timing gate, completes the
+  same board with Black `+26` in 39.422 seconds and 16,744,258 nodes under a
+  five-minute monotonic budget. The default threshold remains 16 while the
+  performance series continues.
 
 ## Effect
 

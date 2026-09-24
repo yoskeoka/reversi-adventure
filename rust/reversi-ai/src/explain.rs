@@ -168,6 +168,7 @@ mod tests {
             nodes_searched: 1,
             elapsed: std::time::Duration::ZERO,
             exact: true,
+            exact_pvs: Default::default(),
         };
 
         // Simulate forced move: legal_moves has exactly 1 bit set
@@ -194,6 +195,7 @@ mod tests {
             nodes_searched: 1,
             elapsed: std::time::Duration::ZERO,
             exact: true,
+            exact_pvs: Default::default(),
         };
         let explanation = generate_explanation(
             &board,

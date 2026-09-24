@@ -145,10 +145,18 @@ fn search_profile_reports_time_mode_completion_metadata() {
     assert_eq!(records[0]["timing_success"], true);
     assert_eq!(records[0]["timing_failure_reason"], Value::Null);
     assert_eq!(records[0]["exact"], false);
+    assert_eq!(records[0]["exact_pvs"]["null_window_calls"], 0);
     assert_eq!(records[1]["timing_success"], true);
     assert_eq!(records[1]["timing_failure_reason"], Value::Null);
     assert_eq!(records[1]["completed_depth"], 16);
     assert_eq!(records[1]["exact"], true);
+    assert!(
+        records[1]["exact_pvs"]["null_window_calls"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(records[1]["exact_pvs"]["full_researches"].as_u64().unwrap() > 0);
     assert!(records
         .iter()
         .all(|record| record.get("node_limit").is_none()));
