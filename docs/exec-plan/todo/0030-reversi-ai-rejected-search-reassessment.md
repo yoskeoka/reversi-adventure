@@ -50,8 +50,10 @@ issue の扱いが確定してから着手する。未完了の 0020 を本計�
   探索意味論に影響する差を先に記す。診断だけなら製品契約は変えない。
 - (MODIFY) 対象の `rust/reversi-ai/src/search/` 実装 -- 探索規則を固定した
   まま、計測で示した一時割当・コピー・初期化などの余分な仕事を減らす。
-- (MODIFY) 対象の focused tests と必要な診断用 tooling -- 変更前後の
-  探索結果、node 数、実装コストを独立に比較する。
+- (MODIFY) 対象の focused tests と診断用 tooling -- 変更前後の
+  探索結果、node 数、trace digest、実装コストを独立に比較する。
+  比較器に子プロセス単位の CPU time / peak RSS 計測がなければ、
+  0029 と同等の fail-closed な計測を加える。
 - (NEW) `docs/references/` の手法別診断、候補 commit/binary digest、
   full-depth release report。
 - (DELETE) この plan -- 検証と PR 準備後に削除する。
@@ -69,18 +71,23 @@ issue の扱いが確定してから着手する。未完了の 0020 を本計�
    実装が追加したコピー、table 操作、初期化などを対象にする。
    instrumentation は採用判定用の release binary から外す。
 4. 診断で根拠が得られた手法に限り、一手法につき一つの限定した実装
-   改善版を作る。元候補と改善版の完全な結果投影を比較し、node 数や
-   探索順が変わった場合は実装コストの効果と探索木の効果を混同しない。
-   変化を分離できなければ採用判断を保留せず不採用として記録する。
+   改善版を作る。元候補と改善版の node 数、TT hit/cutoff 数、探索順を
+   同一の診断入力で比較する。診断ビルドで局面・side・depth・window・
+   展開順の決定的な trace digest を取り、探索木の一致を要求する。
+   node accounting または trace が異なる版は、この実装コスト追試の
+   計時 gate に進めず不採用として記録する。trace 計測は release
+   計時 binary から外す。
 5. 元候補、改善版、最新 `main` を別々の commit と binary として凍結し、
    同一ホスト、同じ power policy と低い背景負荷で release 比較する。
    各 binary/局面に warm-up 1 回、交互の計時を最低 5 回行う。16 局面
    すべての full-depth timing sample が成功し、outcome、score、PV、
    completed depth、exact が一致することを要求する。node-only 反復は
    再現性診断に使い、時間 gate の代わりにしない。
-6. 各手法の両 workload 比、元候補からの差、CPU time と peak RSS
-   （その時点の比較器で取得可能な場合）、原因の説明と digest を報告する。
-   最新 `main` に対して gate を満たした改善版だけを別 PR で提案する。
+6. 各手法の両 workload 比、元候補からの差、子プロセスごとの CPU
+   time と peak RSS、原因の説明と digest を報告する。比較器がこれらの
+   資源値を採れない、または値が欠ける場合は採用 report を作らず、
+   比較器を整えて再計測する。最新 `main` に対して gate を満たした
+   改善版だけを別 PR で提案する。
    不採用版のコードは製品 `main` に入れず、検証可能な commit/report を
    残す。exact 側を採用する場合だけ 20-empty fixture を 5 分の単調
    deadline と独立 oracle score で再確認する。
@@ -102,6 +109,10 @@ issue の扱いが確定してから着手する。未完了の 0020 を本計�
   最終完了反復の focused tests と、決定的な到達可能局面での差分試験。
 - 0021 corpus の全 16 局面で、全反復の意味論一致を独立に検証する。
   固定ノード試験は同じ binary の結果投影・node 数が繰り返し一致すること。
+- 元候補と実装調整版は診断入力ごとに node accounting と探索 trace
+  digest が一致すること。異なる探索木を同じ手法の実装改善として採用しない。
+  release report には全 measured sample の CPU time と peak RSS を
+  含め、欠測や計測方法の不一致を失敗とする。
 - Rust 1.98.1 の対象 crate tests、workspace Clippy、GDExtension build、
   corpus verify、workflow lint、`git diff --check`。CI の速度しきい値は
   設けず、同一ホストの release report のみで採否を判断する。
