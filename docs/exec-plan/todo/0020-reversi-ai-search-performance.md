@@ -109,8 +109,23 @@ GDExtension, or release artifacts.
    small timing difference is incidental. The unmerged experiment remains on
    PR #203 and its remote branch at the user's request; this outcome does not
    accept the production code into `main`.
-5. `0025-reversi-ai-enhanced-transposition-cutoff.md` tries sound child-TT
-   cutoffs using already generated successors.
+5. `0025-reversi-ai-enhanced-transposition-cutoff.md` was not adopted by the
+   5% gate. Its collision-safe child-TT pass at remaining depth 3 or greater
+   reduced heuristic searched nodes to a paired geometric-mean ratio of
+   `0.869156374864136`, but the extra probes and identity checks outweighed
+   the saved search work. In a same-host release comparison against main
+   `12837725264eb9bf3ed3e587407a6a4decf37a3d`, one warm-up and five
+   alternating measured repetitions per binary/position produced a
+   candidate/baseline geometric-mean time ratio of `1.0200194685534094` for
+   heuristic depth 12 (2.002% slower) and `0.9900665354358802` for exact 16
+   (0.993% faster). Exact search bypasses ETC, so its timing difference is
+   incidental. All 160 timed samples completed and all 80 paired outcome,
+   score, PV, completed-depth, and exact projections matched. The candidate
+   recorded 77,624,905 ETC probes, 11,166,810 identity-matching hits, and
+   682,360 proven cutoffs across its 80 samples. The raw report is
+   `docs/references/reversi-ai-search-performance-0025.json`, SHA-256
+   `c6b83f9898f7d4322d104d6fcc8c054a40c61e8565ae4604fc5fd45e4d1b6225`.
+   This run did not measure peak RSS; node totals are diagnostic only.
 6. `0026-reversi-ai-exact-pvs.md` applies full-window-first/null-window exact
    search without selective pruning.
 7. `0027-reversi-ai-exact-parity-last-empties.md` removes generic collection
