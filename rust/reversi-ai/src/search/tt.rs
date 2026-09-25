@@ -97,6 +97,9 @@ impl TranspositionTable {
 
     /// Look up an entry by hash.
     pub fn probe(&self, hash: u64) -> Option<&TtEntry> {
+        if self.capacity == 0 {
+            return None;
+        }
         let index = (hash as usize) % self.capacity;
         self.entries[index]
             .as_ref()
@@ -105,6 +108,9 @@ impl TranspositionTable {
 
     #[cfg(feature = "cost-diagnostics")]
     pub fn diagnostic_slot_hash(&self, hash: u64) -> Option<u64> {
+        if self.capacity == 0 {
+            return None;
+        }
         self.entries[(hash as usize) % self.capacity]
             .as_ref()
             .map(|entry| entry.hash)
@@ -112,6 +118,9 @@ impl TranspositionTable {
 
     /// Store an entry. Replaces existing entry if new depth >= existing depth.
     pub fn store(&mut self, hash: u64, entry: TtEntry) {
+        if self.capacity == 0 {
+            return;
+        }
         let index = (hash as usize) % self.capacity;
         let should_replace = match &self.entries[index] {
             None => true,
@@ -131,6 +140,24 @@ impl TranspositionTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_tt_zero_capacity_is_disabled() {
+        let mut tt = TranspositionTable::new(0);
+        let entry = TtEntry {
+            hash: 42,
+            depth: 5,
+            score: 100,
+            bound: Bound::Exact,
+            best_move: None,
+        };
+        assert!(tt.probe(42).is_none());
+        tt.store(42, entry);
+        assert!(tt.probe(42).is_none());
+        tt.clear();
+        #[cfg(feature = "cost-diagnostics")]
+        assert!(tt.diagnostic_slot_hash(42).is_none());
+    }
 
     #[test]
     fn test_zobrist_deterministic() {
