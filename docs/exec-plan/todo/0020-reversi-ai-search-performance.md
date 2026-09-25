@@ -180,8 +180,11 @@ GDExtension, or release artifacts.
    `cf93fa5fe09b3362471c2ebe895fb81431d73fd93b2d94fd9fe03f2eb1c02d80`.
    Peak RSS was not measured; node totals are diagnostic only. The separate
    20-empty issue fixture completed exactly with Black `+26` in 12.932 seconds
-   and 20,693,729 nodes under the five-minute budget. The experiment is
-   preserved in this branch's commit history and removed from the final tree.
+   and 20,693,729 nodes under the five-minute budget. The discarded
+   implementation is preserved on [draft PR #211](https://github.com/yoskeoka/reversi-adventure/pull/211)
+   at commit `a0eb402a112affbdd7b384d5e323ac56479f8071`; the identical
+   original experiment is commit `4fa7980` in the outcome PR #210. It is
+   removed from this branch's final tree.
 9. `0029-reversi-ai-search-storage-refinement.md` separately evaluates
    pass-safe heuristic PV scratch and compact exact storage after the rejected
    0023 result. It compares an in-search complete PV path with selective
