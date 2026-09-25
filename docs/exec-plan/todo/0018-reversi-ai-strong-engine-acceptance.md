@@ -40,8 +40,8 @@ during the held-out run or claim parity with unrestricted world-class engines.
 2. Use legal, diverse opening prefixes; pair each with reversed colors and
    symmetry rotations where applicable. No opening or position used for 0019
    self-play tuning or artifact selection may enter this suite; check its
-   canonical board-and-side keys against the frozen 0019 report before the
-   first acceptance game.
+   canonical board-and-side keys against the frozen 0019 report's validation
+   keys and its replayed game positions before the first acceptance game.
 3. Define primary success as `candidate wins / all games >= 0.50`. Report draws
    and match points separately. Declare sample size and a one-sided confidence
    rule before execution; passing point estimate alone is insufficient.

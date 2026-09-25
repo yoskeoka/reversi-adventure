@@ -39,8 +39,8 @@ class ReinforcementTests(unittest.TestCase):
                 str(ROOT / "fixtures" / "reinforcement-validation-v1.jsonl"),
                 "--validation-source", "project-owned-reinforcement-fixture-v1",
                 "--seed", str(seed), "--game-count", "2", "--opening-plies", "2",
-                "--opening-depth", "1", "--midgame-depth", "1", "--endgame-depth", "1",
-                "--exact-solver-empty-squares", "12", "--time-limit-ms", "1000",
+                "--opening-depth", "12", "--midgame-depth", "12", "--endgame-depth", "12",
+                "--exact-solver-empty-squares", "16", "--time-limit-ms", "1000",
                 "--node-limit", "1000", "--decision-timeout-seconds", "5", "--max-decisions", "120"]
         self.assertEqual(reinforcement.main(argv), 0)
         return manifest
@@ -60,11 +60,14 @@ class ReinforcementTests(unittest.TestCase):
             self.assertEqual(report["game_count"], 2)
             self.assertEqual(report["pair_count"], 1)
             self.assertGreater(report["decisions"], 0)
+            self.assertEqual(report["validation_position_keys"],
+                             [training.canonical_position_key(reinforcement.INITIAL, "B")])
             selected = json.loads(outputs[0]["selected-artifact.json"])
             training.validate_artifact(selected)
             command = reinforcement.regret_command(manifest, root / "first")
             self.assertIn("--trained-artifact", command)
-            self.assertIn("--exact-solver-empty-squares 12", command)
+            self.assertIn("--exact-solver-empty-squares 16", command)
+            self.assertEqual(reinforcement.regret_timeout(manifest, root / "first"), 5)
 
     def test_seed_and_pair_generation(self):
         self.assertEqual(reinforcement.openings(11, 4, 3), reinforcement.openings(11, 4, 3))
@@ -115,6 +118,43 @@ class ReinforcementTests(unittest.TestCase):
             manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
             with self.assertRaisesRegex(training.TrainingError, "producer source digest mismatch"):
                 reinforcement.cycle(manifest_path)
+
+    def test_profile_and_timeout_are_frozen_and_consistent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.prepare_fixture(root)
+            original = training.read_json(manifest_path)
+            for change, error in ((lambda data: data["candidate"].update(opening_depth=11), "12/12/12"),
+                                  (lambda data: data["candidate"].update(exact_solver_empty_squares=12), "threshold 16"),
+                                  (lambda data: data.update(decision_timeout_seconds=1), "must exceed")):
+                data = json.loads(json.dumps(original))
+                change(data)
+                manifest_path.write_bytes(training.canonical_json(data) + b"\n")
+                with self.assertRaisesRegex(training.TrainingError, error):
+                    reinforcement.validate_manifest(manifest_path)
+
+    def test_validation_keys_are_verified_independently_of_source_label(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.prepare_fixture(root)
+            manifest = training.read_json(manifest_path)
+            manifest["validation"]["source"] = "0018-label-is-not-a-proof"
+            validation = root / "validation.jsonl"
+            record = training.read_jsonl(ROOT / "fixtures" / "reinforcement-validation-v1.jsonl")[0]
+            record["source"] = manifest["validation"]["source"]
+            validation.write_bytes(training.canonical_json(record) + b"\n")
+            manifest["validation"]["path"] = str(validation)
+            manifest["validation"]["sha256"] = reinforcement.sha(validation)
+            manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
+            directory = root / "out"
+            reinforcement.run(manifest_path, directory)
+            report_path = directory / "report.json"
+            report = training.read_json(report_path)
+            report["validation_position_keys"] = []
+            report["report_digest"] = training.digest({key: value for key, value in report.items() if key != "report_digest"})
+            report_path.write_bytes(training.canonical_json(report) + b"\n")
+            with self.assertRaisesRegex(training.TrainingError, "report metadata"):
+                reinforcement.verify(manifest_path, directory)
 
     def test_validation_split_leakage_fails(self):
         with tempfile.TemporaryDirectory() as temporary:

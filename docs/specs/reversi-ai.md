@@ -165,6 +165,10 @@ disabled book, seed, even game count, opening plies, D4 rotation and
 color-pairing policy, per-decision timeout, maximum decisions, update rule,
 and disjoint validation position input and digest.
 
+The `strong-engine-hcap-v1` candidate label requires all three depths to be
+12 and the exact-solver threshold to be 16. Its decision protocol timeout must
+exceed the candidate search time limit. Corpus regret uses that frozen timeout.
+
 The producer rejects changed inputs before any game. A human starts the
 production command in a separate terminal. An agent may prepare the manifest
 and validate completed files without running or monitoring that command.
@@ -181,7 +185,8 @@ and validate completed files without running or monitoring that command.
   resulting sparse artifact retains the existing 64-feature, 60-phase,
   `-64..=64` score and canonical digest contracts.
 - Validation positions have a canonical board-and-side key disjoint from every
-  tuning position and are never taken from the 0018 acceptance openings. The
+  tuning position. The report includes those keys so 0018 can compare its
+  opening suite against both validation and tuning positions before use. The
   baseline and updated artifact are both measured on the same validation
   records by mean squared error. The updated artifact is selected only on a
   strict improvement; ties and failed gates select the baseline. The immutable

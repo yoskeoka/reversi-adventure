@@ -37,8 +37,10 @@ accepted 12/12/12 depth and 16-empty exact threshold, disabled book, a
 five-minute per-move search limit, ten-million-node cap, 310-second protocol
 timeout, and 7,680 total decisions.
 
-Set resource variables explicitly if the host needs different caps. The
-resulting manifest is immutable.
+Set time and node caps explicitly if the host needs different limits. The
+profile still requires depths 12/12/12 and the 16-empty threshold. The
+protocol timeout must exceed the search time limit. The resulting manifest is
+immutable.
 
 ```sh
 make pattern-reinforcement-prepare \
@@ -66,6 +68,8 @@ After the human run finishes, a later task validates the immutable outputs and
 records the SHA-256 of the manifest, four output files, and regret report. The
 verifier replays every legal move, recomputes each game digest and the bounded
 update, checks the disjoint validation input, and recomputes selection metrics.
+The report includes validation position keys for 0018 to compare with its
+acceptance suite and the replayed self-play positions.
 
 Only a strictly lower validation mean squared error selects the candidate.
 The baseline wins a tie.
@@ -81,6 +85,7 @@ make pattern-reinforcement-regret \
 ```
 
 The regret command uses the frozen CLI and selected artifact with the frozen
-search controls under oracle profile `strong-engine-hcap-v1`. It reads the
+search controls and protocol timeout under oracle profile
+`strong-engine-hcap-v1`. It reads the
 existing oracle corpus only; the 0018 held-out openings stay unopened until
 their separate acceptance run.

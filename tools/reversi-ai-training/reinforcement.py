@@ -154,8 +154,10 @@ def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
     if candidate["evaluator"] != "trained" or candidate["profile"] != "strong-engine-hcap-v1" or candidate["book"] != "off":
         fail("candidate must use trained strong-engine profile with book off")
     for key in ("opening_depth", "midgame_depth", "endgame_depth"):
-        training.require_int(candidate[key], key, 1, 64)
-    training.require_int(candidate["exact_solver_empty_squares"], "exact threshold", 0, 16)
+        if training.require_int(candidate[key], key, 1, 64) != 12:
+            fail("strong-engine-hcap-v1 requires 12/12/12 search depths")
+    if training.require_int(candidate["exact_solver_empty_squares"], "exact threshold", 0, 16) != 16:
+        fail("strong-engine-hcap-v1 requires exact threshold 16")
     training.require_int(candidate["time_limit_ms"], "time limit", 1)
     training.require_int(candidate["node_limit"], "node limit", 1)
     training.require_int(manifest["seed"], "seed", 0, 2**64 - 1)
@@ -163,13 +165,15 @@ def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
     if games % 2 or games > 256:
         fail("game_count must be even and at most 256")
     training.require_int(manifest["opening_plies"], "opening_plies", 1, 20)
-    training.require_int(manifest["decision_timeout_seconds"], "decision_timeout_seconds", 1, 3600)
+    timeout = training.require_int(manifest["decision_timeout_seconds"], "decision_timeout_seconds", 1, 3600)
+    if timeout * 1000 <= candidate["time_limit_ms"]:
+        fail("decision timeout must exceed candidate time limit")
     training.require_int(manifest["max_decisions"], "max_decisions", 1, 256 * 120)
     if manifest["pairing"] != PAIRING or manifest["update_rule"] != {"name": "bounded_td_v1", "normalization_divisor": 64}:
         fail("unsupported pairing or update rule")
     validation_entry = require_keys(manifest["validation"], {"path", "sha256", "source"}, "validation")
-    if not isinstance(validation_entry["source"], str) or not validation_entry["source"] or "0018" in validation_entry["source"]:
-        fail("validation source must be named and separate from 0018")
+    if not isinstance(validation_entry["source"], str) or not validation_entry["source"]:
+        fail("validation source must be named")
     validation = checked_file(root, {key: validation_entry[key] for key in ("path", "sha256")}, "validation input")
     return manifest, baseline, executable, validation
 
@@ -303,6 +307,10 @@ def validate_positions(path: Path, tuning: list[dict], source: str) -> list[dict
     return validated
 
 
+def validation_keys(rows: list[dict]) -> list[str]:
+    return sorted(training.canonical_position_key(row["board"], row["side"]) for row in rows)
+
+
 def updated_artifact(baseline: dict, tuning: list[dict], manifest: dict) -> dict:
     sums = defaultdict(lambda: [0, 0])
     base = baseline["weights"]
@@ -375,6 +383,7 @@ def cycle(manifest_path: Path) -> dict[str, bytes]:
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": artifact["artifact_digest"],
               "selected_artifact_digest": selected["artifact_digest"], "selected": "candidate" if selected is artifact else "baseline",
               "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics},
+              "validation_position_keys": validation_keys(validation),
               "game_count": len(games), "pair_count": len(games) // 2, "game_digests": [game["game_digest"] for game in games],
               "decisions": manifest["max_decisions"] - remaining[0], "failures": [], "output_sha256": {}}
     partial = output_bytes(artifact, selected, games, report)
@@ -444,6 +453,7 @@ def verify(manifest_path: Path, directory: Path) -> None:
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": candidate["artifact_digest"],
               "selected_artifact_digest": selected["artifact_digest"], "selected": "candidate" if selected is candidate else "baseline",
               "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics}}
+    checks["validation_position_keys"] = validation_keys(validation)
     if any(report.get(key) != value for key, value in checks.items()):
         fail("report metadata or selection mismatch")
 
@@ -493,6 +503,12 @@ def regret_command(manifest_path: Path, directory: Path) -> str:
     return shlex.join(argv)
 
 
+def regret_timeout(manifest_path: Path, directory: Path) -> int:
+    verify(manifest_path, directory)
+    manifest = training.read_json(manifest_path)
+    return manifest["decision_timeout_seconds"]
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -502,7 +518,7 @@ def main(argv: list[str]) -> int:
     creation.add_argument("--validation-source", required=True)
     for option in ("seed", "game-count", "opening-plies", "opening-depth", "midgame-depth", "endgame-depth", "exact-solver-empty-squares", "time-limit-ms", "node-limit", "decision-timeout-seconds", "max-decisions"):
         creation.add_argument(f"--{option}", type=int, required=True)
-    for name in ("run", "verify", "regret-command"):
+    for name in ("run", "verify", "regret-command", "regret-timeout"):
         command = commands.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)
         command.add_argument("--output-dir", type=Path, required=True)
@@ -512,6 +528,8 @@ def main(argv: list[str]) -> int:
             prepare(args)
         elif args.command == "regret-command":
             print(regret_command(args.manifest, args.output_dir))
+        elif args.command == "regret-timeout":
+            print(regret_timeout(args.manifest, args.output_dir))
         else:
             (run if args.command == "run" else verify)(args.manifest, args.output_dir)
     except (training.TrainingError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as error:
