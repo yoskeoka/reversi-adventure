@@ -154,13 +154,28 @@ impl BoardEvaluator for TrainedEvaluator {
         let score = if board.empty_cells().count_ones() == 0 {
             board.count(color) as i32 - board.count(color.opponent()) as i32
         } else {
+            #[cfg(feature = "cost-diagnostics")]
+            let features = crate::cost_diagnostics::measure("trained_feature_extract", || {
+                extract_features(board, color).expect("non-terminal boards have a pattern phase")
+            });
+            #[cfg(not(feature = "cost-diagnostics"))]
             let features =
                 extract_features(board, color).expect("non-terminal boards have a pattern phase");
-            self.tables[usize::from(features.phase)]
+            #[cfg(feature = "cost-diagnostics")]
+            let score = crate::cost_diagnostics::measure("trained_lookup", || {
+                self.tables[usize::from(features.phase)]
+                    .iter()
+                    .zip(features.values)
+                    .map(|(table, code)| i32::from(*table.get(&code).unwrap_or(&0)))
+                    .sum()
+            });
+            #[cfg(not(feature = "cost-diagnostics"))]
+            let score = self.tables[usize::from(features.phase)]
                 .iter()
                 .zip(features.values)
                 .map(|(table, code)| i32::from(*table.get(&code).unwrap_or(&0)))
-                .sum()
+                .sum();
+            score
         };
         EvalResult {
             score,

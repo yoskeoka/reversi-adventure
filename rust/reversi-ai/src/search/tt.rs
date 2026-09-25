@@ -103,6 +103,13 @@ impl TranspositionTable {
             .filter(|entry| entry.hash == hash)
     }
 
+    #[cfg(feature = "cost-diagnostics")]
+    pub fn diagnostic_slot_hash(&self, hash: u64) -> Option<u64> {
+        self.entries[(hash as usize) % self.capacity]
+            .as_ref()
+            .map(|entry| entry.hash)
+    }
+
     /// Store an entry. Replaces existing entry if new depth >= existing depth.
     pub fn store(&mut self, hash: u64, entry: TtEntry) {
         let index = (hash as usize) % self.capacity;

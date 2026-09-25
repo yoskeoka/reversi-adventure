@@ -426,9 +426,27 @@ impl<'a> EndgameSolver<'a> {
             return Err(());
         }
         *self.nodes_searched += 1;
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            11,
+            &[
+                board.pieces(color),
+                board.pieces(color.opponent()),
+                alpha as u64,
+                beta as u64,
+                regions.empty,
+            ],
+        );
 
+        #[cfg(feature = "cost-diagnostics")]
+        let legal = crate::cost_diagnostics::measure("exact_small_legal", || {
+            moves::legal_moves(board, color)
+        });
+        #[cfg(not(feature = "cost-diagnostics"))]
         let legal = moves::legal_moves(board, color);
         if legal == 0 {
+            #[cfg(feature = "cost-diagnostics")]
+            crate::cost_diagnostics::event(13, &[]);
             if !moves::has_legal_move(board, color.opponent()) {
                 return Ok(SmallResult::empty(terminal_score(board, color)));
             }
@@ -440,9 +458,28 @@ impl<'a> EndgameSolver<'a> {
             });
         }
 
+        #[cfg(feature = "cost-diagnostics")]
+        let (ordered, move_count) =
+            crate::cost_diagnostics::measure("exact_small_ordering", || {
+                ordered_exact_moves::<CAP>(board, color, legal, &regions, None)
+            });
+        #[cfg(not(feature = "cost-diagnostics"))]
         let (ordered, move_count) = ordered_exact_moves::<CAP>(board, color, legal, &regions, None);
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            14,
+            &ordered[..move_count]
+                .iter()
+                .map(|item| u64::from(item.position.bit_index()))
+                .collect::<Vec<_>>(),
+        );
         let mut best = SmallResult::empty(-65);
         for (index, item) in ordered[..move_count].iter().enumerate() {
+            #[cfg(feature = "cost-diagnostics")]
+            let child_regions = crate::cost_diagnostics::measure("exact_region_update", || {
+                regions.after_placement(item.position)
+            });
+            #[cfg(not(feature = "cost-diagnostics"))]
             let child_regions = regions.after_placement(item.position);
             let child = if index == 0 {
                 self.small_with_regions(
@@ -468,6 +505,8 @@ impl<'a> EndgameSolver<'a> {
                     self.diagnostics.fail_highs += 1;
                 }
                 if probe_score > alpha && probe_score < beta {
+                    #[cfg(feature = "cost-diagnostics")]
+                    crate::cost_diagnostics::event(15, &[u64::from(item.position.bit_index())]);
                     self.diagnostics.full_researches += 1;
                     self.small_with_regions(
                         &item.successor,
@@ -487,6 +526,8 @@ impl<'a> EndgameSolver<'a> {
             }
             alpha = alpha.max(score);
             if alpha >= beta {
+                #[cfg(feature = "cost-diagnostics")]
+                crate::cost_diagnostics::event(16, &[u64::from(item.position.bit_index())]);
                 break;
             }
         }
@@ -508,9 +549,42 @@ impl<'a> EndgameSolver<'a> {
             return Err(());
         }
         *self.nodes_searched += 1;
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            12,
+            &[
+                board.pieces(color),
+                board.pieces(color.opponent()),
+                alpha as u64,
+                beta as u64,
+                regions.empty,
+            ],
+        );
 
+        #[cfg(feature = "cost-diagnostics")]
+        let hash =
+            crate::cost_diagnostics::measure("exact_hash", || self.zobrist.hash(board, color));
+        #[cfg(not(feature = "cost-diagnostics"))]
         let hash = self.zobrist.hash(board, color);
-        if let Some(entry) = self.table.get(&hash) {
+        #[cfg(feature = "cost-diagnostics")]
+        let entry = crate::cost_diagnostics::measure("exact_table_probe", || self.table.get(&hash));
+        #[cfg(not(feature = "cost-diagnostics"))]
+        let entry = self.table.get(&hash);
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            17,
+            &[
+                hash,
+                u64::from(entry.is_some()),
+                entry.map_or(0, |entry| entry.score as u64),
+                entry.map_or(0, |entry| match entry.bound {
+                    Bound::Exact => 1,
+                    Bound::LowerBound => 2,
+                    Bound::UpperBound => 3,
+                }),
+            ],
+        );
+        if let Some(entry) = entry {
             match entry.bound {
                 Bound::Exact => {
                     return Ok(NodeResult {
@@ -535,8 +609,14 @@ impl<'a> EndgameSolver<'a> {
             }
         }
 
+        #[cfg(feature = "cost-diagnostics")]
+        let legal =
+            crate::cost_diagnostics::measure("exact_legal", || moves::legal_moves(board, color));
+        #[cfg(not(feature = "cost-diagnostics"))]
         let legal = moves::legal_moves(board, color);
         if legal == 0 {
+            #[cfg(feature = "cost-diagnostics")]
+            crate::cost_diagnostics::event(13, &[]);
             if !moves::has_legal_move(board, color.opponent()) {
                 return Ok(NodeResult {
                     score: terminal_score(board, color),
@@ -554,13 +634,31 @@ impl<'a> EndgameSolver<'a> {
         let original_alpha = alpha;
         // Probe searches visit extra cache states. Keep equal-score move
         // selection independent of those states so the complete PV is stable.
+        #[cfg(feature = "cost-diagnostics")]
+        let (ordered, move_count) = crate::cost_diagnostics::measure("exact_ordering", || {
+            ordered_exact_moves::<CAP>(board, color, legal, &regions, None)
+        });
+        #[cfg(not(feature = "cost-diagnostics"))]
         let (ordered, move_count) = ordered_exact_moves::<CAP>(board, color, legal, &regions, None);
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            14,
+            &ordered[..move_count]
+                .iter()
+                .map(|item| u64::from(item.position.bit_index()))
+                .collect::<Vec<_>>(),
+        );
         let mut best_score = -65;
         let mut best_pv = Vec::new();
 
         for (index, ordered_move) in ordered[..move_count].iter().enumerate() {
             let position = ordered_move.position;
             let successor = &ordered_move.successor;
+            #[cfg(feature = "cost-diagnostics")]
+            let child_regions = crate::cost_diagnostics::measure("exact_region_update", || {
+                regions.after_placement(position)
+            });
+            #[cfg(not(feature = "cost-diagnostics"))]
             let child_regions = regions.after_placement(position);
             let child = if index == 0 {
                 self.negamax_with_regions(
@@ -586,6 +684,8 @@ impl<'a> EndgameSolver<'a> {
                     self.diagnostics.fail_highs += 1;
                 }
                 if probe_score > alpha && probe_score < beta {
+                    #[cfg(feature = "cost-diagnostics")]
+                    crate::cost_diagnostics::event(15, &[u64::from(position.bit_index())]);
                     self.diagnostics.full_researches += 1;
                     self.negamax_with_regions(
                         successor,
@@ -608,6 +708,8 @@ impl<'a> EndgameSolver<'a> {
             }
             alpha = alpha.max(score);
             if alpha >= beta {
+                #[cfg(feature = "cost-diagnostics")]
+                crate::cost_diagnostics::event(16, &[u64::from(position.bit_index())]);
                 break;
             }
         }
@@ -619,6 +721,27 @@ impl<'a> EndgameSolver<'a> {
         } else {
             Bound::Exact
         };
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            18,
+            &[hash, best_score as u64, u64::from(bound == Bound::Exact)],
+        );
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::measure("exact_table_store", || {
+            self.table.insert(
+                hash,
+                ExactEntry {
+                    score: best_score,
+                    bound,
+                    pv: if bound == Bound::Exact {
+                        best_pv.clone()
+                    } else {
+                        Vec::new()
+                    },
+                },
+            )
+        });
+        #[cfg(not(feature = "cost-diagnostics"))]
         self.table.insert(
             hash,
             ExactEntry {

@@ -15,17 +15,54 @@ import math
 import os
 import platform
 import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 
 
-RUNNER_VERSION = "reversi-ai-search-comparator-v1"
+RUNNER_VERSION = "reversi-ai-rust-cost-comparator-v1"
 CORPUS_V1_SHA256 = "5831839527b433b4b92c314331b9f0e613d98e0f82b9b6edb725f8bd6cb97ff8"
 
 
 class ComparisonError(RuntimeError):
     pass
+
+
+class MeasuredProcess(NamedTuple):
+    returncode: int
+    stdout: str
+    stderr: str
+    process_elapsed_ns: int
+    user_cpu_ns: int
+    system_cpu_ns: int
+    peak_rss_kib: int
+
+
+def run_measured(argv: list[str]) -> MeasuredProcess:
+    if sys.platform != "linux":
+        raise ComparisonError("per-child resource measurement requires Linux")
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stdout, tempfile.TemporaryFile(
+        mode="w+t", encoding="utf-8"
+    ) as stderr:
+        started = time.monotonic_ns()
+        process = subprocess.Popen(argv, stdout=stdout, stderr=stderr)
+        try:
+            _, status, usage = os.wait4(process.pid, 0)
+        except BaseException:
+            process.kill()
+            os.waitpid(process.pid, 0)
+            raise
+        elapsed = time.monotonic_ns() - started
+        process.returncode = os.waitstatus_to_exitcode(status)
+        stdout.seek(0)
+        stderr.seek(0)
+        return MeasuredProcess(
+            process.returncode, stdout.read(), stderr.read(), elapsed,
+            round(usage.ru_utime * 1_000_000_000),
+            round(usage.ru_stime * 1_000_000_000), usage.ru_maxrss,
+        )
 
 
 def canonical_json(value: object) -> str:
@@ -92,14 +129,16 @@ def environment() -> dict[str, str]:
     return {
         "architecture": platform.machine(),
         "cpu_model": cpu_model,
+        "host": platform.node(),
+        "measurement_method": "linux-wait4",
         "os": platform.platform(),
-        "rustc": subprocess.run(["rustc", "--version"], check=True, capture_output=True, text=True).stdout.strip(),
+        "rustc": subprocess.run(["rustc", "+1.98.1", "--version"], check=True, capture_output=True, text=True).stdout.strip(),
         "rustflags": os.environ.get("RUSTFLAGS", ""),
     }
 
 
 def invoke(binary: Path, record: dict[str, object], time_limit_ms: int,
-           run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, object]:
+           run: Callable[[list[str]], MeasuredProcess]) -> dict[str, object]:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", encoding="utf-8", delete=False) as corpus:
         corpus.write(canonical_json(record) + "\n")
         corpus_path = Path(corpus.name)
@@ -108,7 +147,6 @@ def invoke(binary: Path, record: dict[str, object], time_limit_ms: int,
             [str(binary), "--corpus", str(corpus_path), "--time-limit-ms", str(time_limit_ms),
              "--opening-depth", "12", "--midgame-depth", "12", "--endgame-depth", "12",
              "--exact-solver-empty-squares", "16"],
-            check=False, capture_output=True, text=True,
         )
     finally:
         corpus_path.unlink(missing_ok=True)
@@ -128,11 +166,106 @@ def invoke(binary: Path, record: dict[str, object], time_limit_ms: int,
         raise ComparisonError(f"{binary} returned an invalid profiler sample")
     if sample["timing_success"] is not True:
         raise ComparisonError(f"{binary} did not complete {record['position_id']}: {sample.get('timing_failure_reason')}")
+    resources = {
+        "process_elapsed_ns": result.process_elapsed_ns,
+        "user_cpu_ns": result.user_cpu_ns,
+        "system_cpu_ns": result.system_cpu_ns,
+        "peak_rss_kib": result.peak_rss_kib,
+    }
+    validate_resources(resources)
+    sample.update(resources)
     return sample
 
 
+def validate_resources(sample: dict[str, object]) -> None:
+    for key in ("process_elapsed_ns", "user_cpu_ns", "system_cpu_ns", "peak_rss_kib"):
+        value = sample.get(key)
+        if type(value) is not int or value < (1 if key in ("process_elapsed_ns", "peak_rss_kib") else 0):
+            raise ComparisonError(f"missing or invalid {key}")
+
+
+SEMANTIC_FIELDS = ("board_digest", "outcome", "score", "pv", "completed_depth", "exact", "nodes_searched")
+
+
+def aggregate(raw: list[dict[str, object]], records: list[dict[str, object]],
+              repetitions: list[int]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    expected = {(record["position_id"], repetition, label) for record in records
+                for repetition in repetitions for label in ("baseline", "candidate")}
+    actual = [(item.get("position_id"), item.get("repetition"), item.get("binary")) for item in raw]
+    if len(actual) != len(expected) or set(actual) != expected:
+        raise ComparisonError("comparison has missing or duplicate position/repetition/binary samples")
+    positions = []
+    for record in records:
+        position_id = record["position_id"]
+        if any(item.get("workload") != workload(record) for item in raw if item["position_id"] == position_id):
+            raise ComparisonError(f"workload mismatch for {position_id}")
+        by_key = {(item["repetition"], item["binary"]): item for item in raw
+                  if item["position_id"] == position_id}
+        for repetition in repetitions:
+            baseline = by_key[(repetition, "baseline")]["sample"]
+            candidate = by_key[(repetition, "candidate")]["sample"]
+            for label, sample in (("baseline", baseline), ("candidate", candidate)):
+                if not isinstance(sample, dict) or sample.get("position_id") != position_id or sample.get("timing_success") is not True:
+                    raise ComparisonError(f"invalid timing sample for {position_id} {repetition} {label}")
+                validate_resources(sample)
+                if type(sample.get("elapsed_ns")) is not int or sample["elapsed_ns"] <= 0:
+                    raise ComparisonError(f"invalid search elapsed for {position_id}")
+                if type(sample.get("nodes_searched")) is not int or sample["nodes_searched"] < 0:
+                    raise ComparisonError(f"invalid node count for {position_id}")
+                if not all(field in sample for field in SEMANTIC_FIELDS):
+                    raise ComparisonError(f"missing result field for {position_id}")
+                expected_exact = record["stone_count"] == 48
+                expected_depth = 16 if expected_exact else 12
+                if sample.get("exact") is not expected_exact or sample.get("completed_depth") != expected_depth:
+                    raise ComparisonError(f"incomplete or unexpected search for {position_id}")
+            if any(baseline.get(field) != candidate.get(field) for field in SEMANTIC_FIELDS):
+                raise ComparisonError(f"result or node mismatch for {position_id} repetition {repetition}")
+            if "cost_diagnostics" in baseline or "cost_diagnostics" in candidate:
+                left = baseline.get("cost_diagnostics", {}).get("trace_sha256")
+                right = candidate.get("cost_diagnostics", {}).get("trace_sha256")
+                if not left or left != right:
+                    raise ComparisonError(f"trace mismatch for {position_id} repetition {repetition}")
+        # Repetitions must also be deterministic within each binary.
+        reference = by_key[(repetitions[0], "baseline")]["sample"]
+        for item in by_key.values():
+            sample = item["sample"]
+            if any(reference.get(field) != sample.get(field) for field in SEMANTIC_FIELDS):
+                raise ComparisonError(f"result or node mismatch across repetitions for {position_id}")
+        samples = {label: [by_key[(repetition, label)]["sample"] for repetition in repetitions]
+                   for label in ("baseline", "candidate")}
+        medians = {}
+        for label in ("baseline", "candidate"):
+            medians[label] = {key: median([sample[key] for sample in samples[label]]) for key in
+                              ("elapsed_ns", "process_elapsed_ns", "user_cpu_ns", "system_cpu_ns")}
+            medians[label]["cpu_ns"] = median([sample["user_cpu_ns"] + sample["system_cpu_ns"]
+                                                for sample in samples[label]])
+            medians[label]["peak_rss_kib"] = max(sample["peak_rss_kib"] for sample in samples[label])
+        base, cand = medians["baseline"], medians["candidate"]
+        if base["cpu_ns"] <= 0 or cand["cpu_ns"] <= 0:
+            raise ComparisonError(f"CPU median is zero for {position_id}")
+        positions.append({"position_id": position_id, "workload": workload(record),
+                          "baseline_median_ns": base["elapsed_ns"],
+                          "candidate_median_ns": cand["elapsed_ns"],
+                          "ratio": cand["elapsed_ns"] / base["elapsed_ns"],
+                          "baseline": medians["baseline"], "candidate": medians["candidate"],
+                          "cpu_ratio": cand["cpu_ns"] / base["cpu_ns"],
+                          "process_elapsed_ratio": cand["process_elapsed_ns"] / base["process_elapsed_ns"]})
+    workloads = []
+    for name in ("heuristic-depth-12", "exact-16"):
+        subset = [item for item in positions if item["workload"] == name]
+        if not subset:
+            raise ComparisonError(f"missing workload {name}")
+        workloads.append({"name": name, "positions": len(subset),
+                          "geometric_mean_ratio": geometric_mean([item["ratio"] for item in subset]),
+                          "cpu_geometric_mean_ratio": geometric_mean([item["cpu_ratio"] for item in subset]),
+                          "process_elapsed_geometric_mean_ratio": geometric_mean([item["process_elapsed_ratio"] for item in subset]),
+                          "baseline_peak_rss_kib": max(item["baseline"]["peak_rss_kib"] for item in subset),
+                          "candidate_peak_rss_kib": max(item["candidate"]["peak_rss_kib"] for item in subset)})
+    return positions, workloads
+
+
 def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], repetitions: int,
-            time_limit_ms: int, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+            time_limit_ms: int, run: Callable[[list[str]], MeasuredProcess] = run_measured,
             start_repetition: int = 1, warmup: bool = True) -> dict[str, object]:
     if repetitions < 1 or start_repetition < 1:
         raise ComparisonError("repetitions and start repetition must be positive")
@@ -152,16 +285,8 @@ def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], r
             for label, binary in order:
                 sample = invoke(binary, record, time_limit_ms, run)
                 raw.append({"binary": label, "position_id": record["position_id"], "repetition": repetition, "workload": workload(record), "sample": sample})
-    positions = []
-    for record in records:
-        samples = {label: [int(item["sample"]["elapsed_ns"]) for item in raw if item["position_id"] == record["position_id"] and item["binary"] == label] for label in ("baseline", "candidate")}
-        baseline_median, candidate_median = median(samples["baseline"]), median(samples["candidate"])
-        positions.append({"position_id": record["position_id"], "workload": workload(record), "baseline_median_ns": baseline_median, "candidate_median_ns": candidate_median, "ratio": candidate_median / baseline_median})
-    workloads = []
-    for name in ("heuristic-depth-12", "exact-16"):
-        ratios = [float(item["ratio"]) for item in positions if item["workload"] == name]
-        workloads.append({"name": name, "positions": len(ratios), "geometric_mean_ratio": geometric_mean(ratios)})
-    return {"schema_version": 1, "runner_version": RUNNER_VERSION, "repetitions": repetitions, "start_repetition": start_repetition, "time_limit_ms": time_limit_ms, "binaries": {"baseline": {"path": str(baseline), "sha256": sha256_file(baseline)}, "candidate": {"path": str(candidate), "sha256": sha256_file(candidate)}}, "environment": environment(), "raw_samples": raw, "positions": positions, "workloads": workloads}
+    positions, workloads = aggregate(raw, records, list(range(start_repetition, start_repetition + repetitions)))
+    return {"schema_version": 2, "runner_version": RUNNER_VERSION, "repetitions": repetitions, "start_repetition": start_repetition, "time_limit_ms": time_limit_ms, "binaries": {"baseline": {"path": str(baseline), "sha256": sha256_file(baseline)}, "candidate": {"path": str(candidate), "sha256": sha256_file(candidate)}}, "environment": environment(), "raw_samples": raw, "positions": positions, "workloads": workloads}
 
 
 def merge_fragments(fragments: list[dict[str, object]]) -> dict[str, object]:
@@ -176,22 +301,9 @@ def merge_fragments(fragments: list[dict[str, object]]) -> dict[str, object]:
     if sorted(fragment.get("start_repetition") for fragment in fragments) != [1, 2, 3, 4, 5] or any(fragment.get("repetitions") != 1 for fragment in fragments):
         raise ComparisonError("comparison fragments must cover repetitions one through five exactly once")
     raw = [sample for fragment in fragments for sample in fragment.get("raw_samples", [])]
-    if len(raw) != 160:
-        raise ComparisonError("comparison fragments do not contain 160 raw samples")
-    positions = []
-    for position_id in sorted({str(item["position_id"]) for item in raw}):
-        for item in (item for item in raw if item["position_id"] == position_id):
-            sample = item.get("sample")
-            if not isinstance(sample, dict) or type(sample.get("elapsed_ns")) is not int or sample["elapsed_ns"] <= 0 or sample.get("timing_success") is not True:
-                raise ComparisonError(f"comparison fragments have an invalid timing sample for {position_id}")
-        samples = {label: [int(item["sample"]["elapsed_ns"]) for item in raw if item["position_id"] == position_id and item["binary"] == label] for label in ("baseline", "candidate")}
-        if any(len(values) != 5 for values in samples.values()):
-            raise ComparisonError(f"comparison fragments have missing samples for {position_id}")
-        source = next(item for item in raw if item["position_id"] == position_id)
-        baseline_median, candidate_median = median(samples["baseline"]), median(samples["candidate"])
-        positions.append({"position_id": position_id, "workload": source["workload"], "baseline_median_ns": baseline_median, "candidate_median_ns": candidate_median, "ratio": candidate_median / baseline_median})
-    workloads = [{"name": name, "positions": len(ratios), "geometric_mean_ratio": geometric_mean(ratios)} for name in ("heuristic-depth-12", "exact-16") for ratios in [[float(item["ratio"]) for item in positions if item["workload"] == name]]]
-    return {"schema_version": 1, "runner_version": RUNNER_VERSION, "repetitions": 5, "time_limit_ms": first["time_limit_ms"], "binaries": first["binaries"], "environment": first["environment"], "raw_samples": raw, "positions": positions, "workloads": workloads}
+    records = load_corpus(Path(__file__).with_name("positions-v1.jsonl"))
+    positions, workloads = aggregate(raw, records, [1, 2, 3, 4, 5])
+    return {"schema_version": 2, "runner_version": RUNNER_VERSION, "repetitions": 5, "time_limit_ms": first["time_limit_ms"], "binaries": first["binaries"], "environment": first["environment"], "raw_samples": raw, "positions": positions, "workloads": workloads}
 
 
 def main(argv: list[str] | None = None) -> int:

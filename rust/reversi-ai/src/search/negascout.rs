@@ -126,7 +126,23 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             return Err(());
         }
         self.nodes_searched += 1;
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            1,
+            &[
+                board.pieces(color),
+                board.pieces(color.opponent()),
+                u64::from(depth),
+                alpha as u64,
+                beta as u64,
+            ],
+        );
 
+        #[cfg(feature = "cost-diagnostics")]
+        let legal = crate::cost_diagnostics::measure("heuristic_legal", || {
+            moves::legal_moves(board, color)
+        });
+        #[cfg(not(feature = "cost-diagnostics"))]
         let legal = moves::legal_moves(board, color);
         if legal == 0 && !moves::has_legal_move(board, color.opponent()) {
             return Ok(NodeResult {
@@ -138,6 +154,11 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
 
         // Leaf node: evaluate
         if depth == 0 {
+            #[cfg(feature = "cost-diagnostics")]
+            let eval = crate::cost_diagnostics::measure("heuristic_leaf_eval", || {
+                self.evaluator.evaluate(board, color)
+            });
+            #[cfg(not(feature = "cost-diagnostics"))]
             let eval = self.evaluator.evaluate(board, color);
             return Ok(NodeResult {
                 score: eval.score,
@@ -146,10 +167,34 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             });
         }
 
+        #[cfg(feature = "cost-diagnostics")]
+        let hash =
+            crate::cost_diagnostics::measure("heuristic_hash", || self.zobrist.hash(board, color));
+        #[cfg(not(feature = "cost-diagnostics"))]
         let hash = self.zobrist.hash(board, color);
 
         // TT probe
-        let tt_move = if let Some(entry) = self.tt.probe(hash) {
+        #[cfg(feature = "cost-diagnostics")]
+        let probe = crate::cost_diagnostics::measure("heuristic_tt_probe", || self.tt.probe(hash));
+        #[cfg(not(feature = "cost-diagnostics"))]
+        let probe = self.tt.probe(hash);
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            2,
+            &[
+                hash,
+                self.tt.diagnostic_slot_hash(hash).unwrap_or(0),
+                u64::from(probe.is_some()),
+                probe.map_or(0, |entry| u64::from(entry.depth)),
+                probe.map_or(0, |entry| entry.score as u64),
+                probe.map_or(0, |entry| match entry.bound {
+                    Bound::Exact => 1,
+                    Bound::LowerBound => 2,
+                    Bound::UpperBound => 3,
+                }),
+            ],
+        );
+        let tt_move = if let Some(entry) = probe {
             if entry.depth >= depth {
                 match entry.bound {
                     Bound::Exact => {
@@ -189,6 +234,8 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
 
         // No legal moves: pass or game over
         if legal == 0 {
+            #[cfg(feature = "cost-diagnostics")]
+            crate::cost_diagnostics::event(3, &[]);
             // Pass: search opponent's turn at same depth
             let child = self.negascout(board, color.opponent(), depth, -beta, -alpha, budget)?;
             return Ok(NodeResult {
@@ -198,7 +245,20 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             });
         }
 
+        #[cfg(feature = "cost-diagnostics")]
+        let ordered = crate::cost_diagnostics::measure("heuristic_ordering", || {
+            order_moves_with_successors(board, color, legal, tt_move, depth)
+        });
+        #[cfg(not(feature = "cost-diagnostics"))]
         let ordered = order_moves_with_successors(board, color, legal, tt_move, depth);
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            4,
+            &ordered
+                .iter()
+                .map(|item| u64::from(item.position.bit_index()))
+                .collect::<Vec<_>>(),
+        );
 
         let original_alpha = alpha;
         let mut best_score = i32::MIN;
@@ -238,6 +298,8 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                     budget,
                 )?;
                 if -nw.score > alpha && -nw.score < beta {
+                    #[cfg(feature = "cost-diagnostics")]
+                    crate::cost_diagnostics::event(5, &[u64::from(pos.bit_index())]);
                     // Fail high: re-search with full window
                     self.negascout(
                         &new_board,
@@ -270,6 +332,8 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             }
 
             if alpha >= beta {
+                #[cfg(feature = "cost-diagnostics")]
+                crate::cost_diagnostics::event(6, &[u64::from(pos.bit_index())]);
                 break; // Beta cutoff
             }
         }
@@ -283,6 +347,30 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             Bound::Exact
         };
 
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::event(
+            7,
+            &[
+                hash,
+                u64::from(depth),
+                best_score as u64,
+                u64::from(best_move.bit_index()),
+            ],
+        );
+        #[cfg(feature = "cost-diagnostics")]
+        crate::cost_diagnostics::measure("heuristic_tt_store", || {
+            self.tt.store(
+                hash,
+                TtEntry {
+                    hash,
+                    depth,
+                    score: best_score,
+                    bound,
+                    best_move: Some(best_move),
+                },
+            )
+        });
+        #[cfg(not(feature = "cost-diagnostics"))]
         self.tt.store(
             hash,
             TtEntry {
