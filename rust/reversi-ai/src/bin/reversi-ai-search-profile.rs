@@ -235,11 +235,13 @@ fn main() -> Result<(), String> {
             "position_id": position_id,
             "pv": pv,
             "score": result.score,
-            "evaluator": args.evaluator,
-            "evaluator_context": evaluator.context_fingerprint(),
-            "artifact_sha256": artifact_digest,
-            "evaluator_load_ns": evaluator_load_ns,
         });
+        if args.trained_artifact.is_some() {
+            output["evaluator"] = json!(args.evaluator);
+            output["evaluator_context"] = json!(evaluator.context_fingerprint());
+            output["artifact_sha256"] = json!(artifact_digest);
+            output["evaluator_load_ns"] = json!(evaluator_load_ns);
+        }
         #[cfg(feature = "cost-diagnostics")]
         {
             output["cost_diagnostics"] = reversi_ai::cost_diagnostics::snapshot();

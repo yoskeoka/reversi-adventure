@@ -11,10 +11,10 @@
 - Candidate is the same source with the diagnostic harness and one change to
   `search/ordering.rs`: it iterates the already computed legal-move mask and
   computes flips directly, avoiding a second legal-move calculation and the
-  temporary `generated_moves` vector. Source checkpoint:
-  `f2de91929daad7deac20a95c9874a773d7a6a884`. Non-instrumented release profiler:
-  `/tmp/reversi-ai-0031-candidate`, SHA-256
-  `d79218439c5c144ae5a751b2b6b199ec2c1b052e44c6482c423b19d343787286`.
+  temporary `generated_moves` vector. Engine change checkpoint:
+  `f2de91929daad7deac20a95c9874a773d7a6a884`. Non-instrumented release profiler
+  after the fixed-node output correction: `/tmp/reversi-ai-0031-candidate-v2`,
+  SHA-256 `3f40c8941f9f419a24ae18137d3bafdb65957457ca910abff51e9f29c3cb416c`.
 - Corpus: `tools/reversi-ai-benchmark/positions-v1.jsonl`, SHA-256
   `5831839527b433b4b92c314331b9f0e613d98e0f82b9b6edb725f8bd6cb97ff8`.
   `make benchmark-corpus-verify` passed. The corpus was not regenerated.
@@ -86,7 +86,7 @@ power policy; keep the two `/tmp` binaries unchanged and check their SHA-256
 values above before starting. It writes 160 measured samples and 80 pairs.
 
 ```sh
-rtk python3 tools/reversi-ai-benchmark/compare.py --baseline /tmp/reversi-ai-0031-baseline --candidate /tmp/reversi-ai-0031-candidate --corpus tools/reversi-ai-benchmark/positions-v1.jsonl --output /tmp/reversi-ai-0031-comparison.json --repetitions 5 --time-limit-ms 300000
+rtk python3 tools/reversi-ai-benchmark/compare.py --baseline /tmp/reversi-ai-0031-baseline --candidate /tmp/reversi-ai-0031-candidate-v2 --corpus tools/reversi-ai-benchmark/positions-v1.jsonl --output /tmp/reversi-ai-0031-comparison.json --repetitions 5 --time-limit-ms 300000
 ```
 
 The completed immutable output is validated independently with:
