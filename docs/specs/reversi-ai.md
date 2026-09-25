@@ -447,6 +447,18 @@ mismatch rejects the comparison. The report presents both workloads and
 resource changes; a cost-only candidate requires at least a 5% search-time
 improvement in one workload before it is offered for adoption.
 
+An implementation-cost experiment, including one that uses `unsafe`, preserves
+the public outcome, evaluation score, search order, searched-node accounting,
+transposition-table capacity and replacement behavior, exact score, principal
+variation, and the last completed result on deadline or cancellation.
+
+A zero-capacity transposition table remains constructible. Probing it returns
+no entry, and storing into it has no effect.
+
+Performance decisions use the fixed corpus and measured elapsed time, CPU
+time, and peak RSS. CI verifies the report's structure and arithmetic without
+a speed threshold.
+
 The exact solver searches the first ordered move with the full integer score
 window. It probes later moves with a one-point window and repeats a probe with
 the full window when the result can raise alpha without proving a cutoff.

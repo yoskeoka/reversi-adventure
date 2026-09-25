@@ -97,14 +97,24 @@ impl TranspositionTable {
 
     /// Look up an entry by hash.
     pub fn probe(&self, hash: u64) -> Option<&TtEntry> {
+        if self.capacity == 0 {
+            return None;
+        }
         let index = (hash as usize) % self.capacity;
-        self.entries[index]
+        // SAFETY: new creates exactly capacity initialized entries; clear keeps
+        // the length, and no method resizes entries. The nonzero guard above
+        // makes index strictly less than capacity. This shared borrow stays
+        // within the lifetime of self and does not alias a mutable borrow.
+        unsafe { self.entries.get_unchecked(index) }
             .as_ref()
             .filter(|entry| entry.hash == hash)
     }
 
     #[cfg(feature = "cost-diagnostics")]
     pub fn diagnostic_slot_hash(&self, hash: u64) -> Option<u64> {
+        if self.capacity == 0 {
+            return None;
+        }
         self.entries[(hash as usize) % self.capacity]
             .as_ref()
             .map(|entry| entry.hash)
@@ -112,13 +122,21 @@ impl TranspositionTable {
 
     /// Store an entry. Replaces existing entry if new depth >= existing depth.
     pub fn store(&mut self, hash: u64, entry: TtEntry) {
+        if self.capacity == 0 {
+            return;
+        }
         let index = (hash as usize) % self.capacity;
-        let should_replace = match &self.entries[index] {
+        // SAFETY: new initializes capacity entries, clear preserves length,
+        // and index is below nonzero capacity. This borrow ends before the
+        // mutable access below, so the two references do not overlap.
+        let should_replace = match unsafe { self.entries.get_unchecked(index) } {
             None => true,
             Some(existing) => existing.hash != hash || entry.depth >= existing.depth,
         };
         if should_replace {
-            self.entries[index] = Some(entry);
+            // SAFETY: the same initialized slot is in bounds, and the shared
+            // reference used to decide replacement is no longer live.
+            *unsafe { self.entries.get_unchecked_mut(index) } = Some(entry);
         }
     }
 
@@ -131,6 +149,24 @@ impl TranspositionTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_tt_zero_capacity_is_disabled() {
+        let mut tt = TranspositionTable::new(0);
+        let entry = TtEntry {
+            hash: 42,
+            depth: 5,
+            score: 100,
+            bound: Bound::Exact,
+            best_move: None,
+        };
+        assert!(tt.probe(42).is_none());
+        tt.store(42, entry);
+        assert!(tt.probe(42).is_none());
+        tt.clear();
+        #[cfg(feature = "cost-diagnostics")]
+        assert!(tt.diagnostic_slot_hash(42).is_none());
+    }
 
     #[test]
     fn test_zobrist_deterministic() {
@@ -225,5 +261,28 @@ mod tests {
         tt.store(42, entry1);
         tt.store(42, entry2);
         assert_eq!(tt.probe(42).unwrap().score, 100);
+    }
+
+    #[test]
+    fn test_tt_collision_replaces_previous_hash() {
+        let mut tt = TranspositionTable::new(1);
+        let first = TtEntry {
+            hash: 42,
+            depth: 5,
+            score: 100,
+            bound: Bound::Exact,
+            best_move: None,
+        };
+        let second = TtEntry {
+            hash: u64::MAX,
+            depth: 1,
+            score: -50,
+            bound: Bound::LowerBound,
+            best_move: None,
+        };
+        tt.store(first.hash, first);
+        tt.store(second.hash, second);
+        assert!(tt.probe(first.hash).is_none());
+        assert_eq!(tt.probe(second.hash).unwrap().score, second.score);
     }
 }
