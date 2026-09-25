@@ -21,6 +21,23 @@ PATTERN_TRAINER := tools/reversi-ai-training/training.py
 PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-manifest.json
 PATTERN_ARTIFACT ?= /tmp/reversi-adventure-pattern-artifact.json
 PATTERN_REPORT ?= /tmp/reversi-adventure-pattern-report.json
+REINFORCEMENT_TOOL := tools/reversi-ai-training/reinforcement.py
+REINFORCEMENT_MANIFEST ?= /tmp/reversi-adventure-reinforcement-manifest.json
+REINFORCEMENT_OUTPUT_DIR ?= /tmp/reversi-adventure-reinforcement
+REINFORCEMENT_REGRET_REPORT ?= /tmp/reversi-adventure-reinforcement-regret.jsonl
+REINFORCEMENT_BASELINE_ARTIFACT ?=
+REINFORCEMENT_VALIDATION_INPUT ?=
+REINFORCEMENT_VALIDATION_SOURCE ?= project-owned-validation-v1
+REINFORCEMENT_CANDIDATE_EXECUTABLE ?=
+REINFORCEMENT_SEED ?= 20260926
+REINFORCEMENT_GAME_COUNT ?= 64
+REINFORCEMENT_OPENING_PLIES ?= 6
+REINFORCEMENT_DEPTH ?= 12
+REINFORCEMENT_EXACT_EMPTY ?= 16
+REINFORCEMENT_TIME_LIMIT_MS ?= 300000
+REINFORCEMENT_NODE_LIMIT ?= 10000000
+REINFORCEMENT_DECISION_TIMEOUT_SECONDS ?= 310
+REINFORCEMENT_MAX_DECISIONS ?= 7680
 AI_EVALUATOR ?= strategic
 AI_OPENING_DEPTH ?= 3
 AI_MIDGAME_DEPTH ?= 4
@@ -34,7 +51,7 @@ AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPEN
 AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH) --exact-solver-empty-squares $(AI_EXACT_SOLVER_EMPTY_SQUARES)
 AI_CALIBRATION_COMMAND := $(AI_BINARY) --evaluator strategic --profile strong-engine-hcap-v1
 
-.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify benchmark-reference benchmark-reference-verify benchmark-compare pattern-training-test pattern-training-fixture
+.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify benchmark-reference benchmark-reference-verify benchmark-compare pattern-training-test pattern-training-fixture pattern-reinforcement-prepare pattern-reinforcement-run pattern-reinforcement-verify pattern-reinforcement-regret
 
 pattern-training-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-training/tests -p 'test_*.py'
@@ -42,6 +59,20 @@ pattern-training-test:
 pattern-training-fixture: pattern-training-test
 	$(PYTHON) $(PATTERN_TRAINER) train --manifest $(PATTERN_MANIFEST) --artifact $(PATTERN_ARTIFACT) --report $(PATTERN_REPORT)
 	$(PYTHON) $(PATTERN_TRAINER) validate --artifact $(PATTERN_ARTIFACT)
+
+pattern-reinforcement-prepare:
+	@test -n "$(REINFORCEMENT_BASELINE_ARTIFACT)" && test -n "$(REINFORCEMENT_VALIDATION_INPUT)" && test -n "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" || (echo "Set REINFORCEMENT_BASELINE_ARTIFACT, REINFORCEMENT_VALIDATION_INPUT, and REINFORCEMENT_CANDIDATE_EXECUTABLE" >&2; exit 2)
+	$(PYTHON) $(REINFORCEMENT_TOOL) prepare --manifest "$(REINFORCEMENT_MANIFEST)" --baseline-artifact "$(REINFORCEMENT_BASELINE_ARTIFACT)" --candidate-executable "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" --validation-input "$(REINFORCEMENT_VALIDATION_INPUT)" --validation-source "$(REINFORCEMENT_VALIDATION_SOURCE)" --seed $(REINFORCEMENT_SEED) --game-count $(REINFORCEMENT_GAME_COUNT) --opening-plies $(REINFORCEMENT_OPENING_PLIES) --opening-depth $(REINFORCEMENT_DEPTH) --midgame-depth $(REINFORCEMENT_DEPTH) --endgame-depth $(REINFORCEMENT_DEPTH) --exact-solver-empty-squares $(REINFORCEMENT_EXACT_EMPTY) --time-limit-ms $(REINFORCEMENT_TIME_LIMIT_MS) --node-limit $(REINFORCEMENT_NODE_LIMIT) --decision-timeout-seconds $(REINFORCEMENT_DECISION_TIMEOUT_SECONDS) --max-decisions $(REINFORCEMENT_MAX_DECISIONS)
+
+# This is a human-operated long-running command; it is never a test prerequisite.
+pattern-reinforcement-run:
+	$(PYTHON) $(REINFORCEMENT_TOOL) run --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)"
+
+pattern-reinforcement-verify:
+	$(PYTHON) $(REINFORCEMENT_TOOL) verify --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)"
+
+pattern-reinforcement-regret: pattern-reinforcement-verify
+	@candidate_command="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-command --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; regret_timeout="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-timeout --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; $(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output "$(REINFORCEMENT_REGRET_REPORT)" --profile strong-engine-hcap-v1 --timeout "$$regret_timeout" --candidate-command "$$candidate_command"
 
 oracle-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-oracle/tests -p 'test_*.py'
