@@ -3,6 +3,9 @@ name = "reversi-ai"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+cost-diagnostics = []
+
 [dependencies]
 reversi-engine = { path = "../reversi-engine" }
 serde_json = "1"

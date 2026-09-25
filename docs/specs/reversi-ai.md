@@ -418,6 +418,35 @@ arithmetic with synthetic samples only. No CI assertion may require a wall
 clock speed, ratio, or threshold; a documented same-host release run is the
 only performance evidence.
 
+The Rust cost reassessment measures the same corpus as twelve
+`heuristic-depth-12` and four `exact-16` positions. A diagnostic profiler may
+select `strategic` or `trained`; trained mode requires a validated artifact and
+is reported separately from the strategic release comparison. Artifact loading
+is outside the search interval. Exact solving makes no evaluator calls.
+
+Diagnostic instrumentation records ordered search decisions and resource costs
+but is disabled in release timing. For a cost-only change, original and tuned
+node-only runs must have matching ordered trace digests, node counts, outcome,
+score, PV, depth, and exactness, including pass, collision, interruption, and
+cancellation cases.
+
+On Linux each measured profiler invocation has a sibling `resource_usage`
+object with positive process elapsed time, nonnegative user and system CPU
+time, and positive peak RSS from that child's `wait4` result. The report
+identifies the measurement method, host, binary digests, and build flags.
+Process metrics cover startup through exit. Profiler elapsed time covers search
+after evaluator construction. Warm-ups are excluded from the aggregates.
+
+For each position the report gives binary medians of
+search elapsed and CPU time and candidate-to-baseline ratios. Each workload
+gives geometric means of those ratios and maximum peak RSS for each binary.
+
+Missing or invalid resources, incomplete positions or repetitions, mismatched
+measurement context, unfinished depth, or any result, node, or required trace
+mismatch rejects the comparison. The report presents both workloads and
+resource changes; a cost-only candidate requires at least a 5% search-time
+improvement in one workload before it is offered for adoption.
+
 The exact solver searches the first ordered move with the full integer score
 window. It probes later moves with a one-point window and repeats a probe with
 the full window when the result can raise alpha without proving a cutoff.

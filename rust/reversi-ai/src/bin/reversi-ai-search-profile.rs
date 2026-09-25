@@ -1,5 +1,7 @@
 use reversi_ai::config::AiConfig;
 use reversi_ai::eval::strategic::StrategicEvaluator;
+use reversi_ai::eval::trained::TrainedEvaluator;
+use reversi_ai::eval::BoardEvaluator;
 use reversi_ai::search::{SearchBudget, SearchEngine, SearchOutcome};
 use reversi_engine::board::Board;
 use reversi_engine::types::{Color, Position};
@@ -7,7 +9,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{self, BufRead};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 enum BudgetMode {
@@ -19,10 +21,12 @@ struct Args {
     corpus: String,
     budget: BudgetMode,
     config: AiConfig,
+    evaluator: String,
+    trained_artifact: Option<String>,
 }
 
 fn usage() -> &'static str {
-    "usage: reversi-ai-search-profile --corpus PATH (--node-limit N | --time-limit-ms N) [--opening-depth N --midgame-depth N --endgame-depth N --exact-solver-empty-squares N]"
+    "usage: reversi-ai-search-profile --corpus PATH (--node-limit N | --time-limit-ms N) [--evaluator strategic|trained] [--trained-artifact PATH] [--opening-depth N --midgame-depth N --endgame-depth N --exact-solver-empty-squares N]"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -55,6 +59,8 @@ fn parse_args() -> Result<Args, String> {
     let mut midgame_depth = 8;
     let mut endgame_depth = 8;
     let mut exact_solver_empty_squares = AiConfig::DEFAULT_EXACT_SOLVER_EMPTY_SQUARES;
+    let mut evaluator = String::from("strategic");
+    let mut trained_artifact = None;
     let mut args = std::env::args().skip(1);
 
     while let Some(option) = args.next() {
@@ -68,6 +74,8 @@ fn parse_args() -> Result<Args, String> {
                 std::process::exit(0);
             }
             "--corpus" => corpus = Some(value()?),
+            "--evaluator" => evaluator = value()?,
+            "--trained-artifact" => trained_artifact = Some(value()?),
             "--node-limit" => node_limit = Some(parse_u64(&value()?, "--node-limit")?),
             "--time-limit-ms" => time_limit_ms = Some(parse_u64(&value()?, "--time-limit-ms")?),
             "--opening-depth" => opening_depth = parse_u8(&value()?, "--opening-depth")?,
@@ -97,11 +105,23 @@ fn parse_args() -> Result<Args, String> {
         }
     };
 
+    if !matches!(evaluator.as_str(), "strategic" | "trained") {
+        return Err(format!("unknown evaluator {evaluator:?}"));
+    }
+    if evaluator == "trained" && trained_artifact.is_none() {
+        return Err("--evaluator trained requires --trained-artifact PATH".to_string());
+    }
+    if evaluator != "trained" && trained_artifact.is_some() {
+        return Err("--trained-artifact requires --evaluator trained".to_string());
+    }
+
     Ok(Args {
         corpus: corpus.ok_or_else(|| format!("--corpus is required\n{}", usage()))?,
         budget,
         config: AiConfig::new(opening_depth, midgame_depth, endgame_depth)
             .with_exact_solver_empty_squares(exact_solver_empty_squares),
+        evaluator,
+        trained_artifact,
     })
 }
 
@@ -157,7 +177,23 @@ fn main() -> Result<(), String> {
             File::open(&args.corpus).map_err(|error| format!("{}: {error}", args.corpus))?,
         ))
     };
-    let evaluator = StrategicEvaluator::new();
+    let load_started = Instant::now();
+    let evaluator: Box<dyn BoardEvaluator> = match &args.trained_artifact {
+        Some(path) => {
+            Box::new(TrainedEvaluator::from_path(path).map_err(|error| error.to_string())?)
+        }
+        None => Box::new(StrategicEvaluator::new()),
+    };
+    let evaluator_load_ns = load_started.elapsed().as_nanos();
+    let artifact_digest = args
+        .trained_artifact
+        .as_ref()
+        .map(|path| {
+            std::fs::read(path)
+                .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+                .map_err(|error| format!("{path}: {error}"))
+        })
+        .transpose()?;
 
     for (line_index, line) in reader.lines().enumerate() {
         let line_number = line_index + 1;
@@ -174,11 +210,14 @@ fn main() -> Result<(), String> {
         let color = parse_color(required_string(&record, "side_to_move", line_number)?)
             .map_err(|error| format!("corpus line {line_number}: {error}"))?;
         let mut engine = SearchEngine::new();
+        #[cfg(feature = "cost-diagnostics")]
+        reversi_ai::cost_diagnostics::reset();
         let budget = match args.budget {
             BudgetMode::NodeLimit(limit) => SearchBudget::with_node_limit_only(limit),
             BudgetMode::TimeLimit(limit) => SearchBudget::with_time_limit(limit),
         };
-        let result = engine.search_with_budget(&board, color, &evaluator, &args.config, &budget);
+        let result =
+            engine.search_with_budget(&board, color, evaluator.as_ref(), &args.config, &budget);
         let board_digest = format!("{:x}", Sha256::digest(board_flat.as_bytes()));
         let pv = result.pv.into_iter().map(move_name).collect::<Vec<_>>();
         let mut output = json!({
@@ -197,6 +236,16 @@ fn main() -> Result<(), String> {
             "pv": pv,
             "score": result.score,
         });
+        if args.trained_artifact.is_some() {
+            output["evaluator"] = json!(args.evaluator);
+            output["evaluator_context"] = json!(evaluator.context_fingerprint());
+            output["artifact_sha256"] = json!(artifact_digest);
+            output["evaluator_load_ns"] = json!(evaluator_load_ns);
+        }
+        #[cfg(feature = "cost-diagnostics")]
+        {
+            output["cost_diagnostics"] = reversi_ai::cost_diagnostics::snapshot();
+        }
         match args.budget {
             BudgetMode::NodeLimit(limit) => output["node_limit"] = json!(limit),
             BudgetMode::TimeLimit(limit) => {
