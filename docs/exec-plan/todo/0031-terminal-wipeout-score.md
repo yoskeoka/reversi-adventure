@@ -23,7 +23,8 @@ heuristic search と exact search が終局を検知し、評価器の推定値�
 - `rust/reversi-ai/src/search/negascout.rs:57-72` は heuristic の
   root `GameOver` を `score: None` として返す。同ファイル `:134-142`
   は終局判定より先に深さ 0 で評価器を呼び、`:189-200` も途中終局で
-  評価器を呼ぶ。
+  評価器を呼ぶ。また `:93-99` は後の完了反復に `leaf_eval` がない場合も
+  前の反復の値を保持し、確定した終局スコアに古い評価を添える可能性がある。
 - `rust/reversi-ai/src/search/endgame.rs:253-265` と `:640-643` は
   exact 終局時に盤上の石数差を返す。同ファイル `:902-919` に
   1 マス空きの全滅盤面があるが、同じ計算を使う参照探索との比較のみ。
@@ -37,7 +38,8 @@ heuristic search と exact search が終局を検知し、評価器の推定値�
   関係なく ±64、その他の終局なら実石数差という規則、root と探索内の
   終局、深さ 0 の優先順、`leaf_eval` の扱いを明記する。
 - (MODIFY) `rust/reversi-ai/src/search/negascout.rs` -- 終局で評価器を
-  呼ばずに実石数差を返す。深さ 0 の終局判定を評価より前に行う。
+  呼ばずに確定スコアを返す。深さ 0 の終局判定を評価より前に行い、
+  各完了反復の `leaf_eval` を `None` も含めて入れ替える。
 - (MODIFY) `rust/reversi-ai/src/search/mod.rs` -- 公開経路から heuristic と
   exact の途中全滅を検証する単体テストを追加し、既存の無着手テストを
   新しい終局スコア契約に合わせる。
@@ -55,6 +57,8 @@ heuristic search と exact search が終局を検知し、評価器の推定値�
    黒白双方の合法手が 0 であること、実石数、期待 ±64 を直接検証する。
    heuristic 経路は exact 閾値より空きが多い盤面とし、深さ 0 の
    終局を通る着手も含める。評価器に終局盤面を渡さないことを確認する。
+   深さ 1 で通常の `leaf_eval` が出た後、深さ 2 で終局に到達する
+   局面を置き、後者の結果に古い `leaf_eval` が残らないことを検証する。
 3. `Negascout` の root と再帰の終局処理を修正する。パスは終局と
    区別し、予算中断時の既存 fallback と exact フラグを維持する。
 4. exact の途中全滅に固定期待値を追加し、通常終局の実石数差と
