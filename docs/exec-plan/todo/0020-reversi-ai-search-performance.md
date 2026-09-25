@@ -62,10 +62,10 @@ GDExtension, or release artifacts.
 
 ## Child plans and sequencing
 
-1. `0021-reversi-ai-performance-benchmark.md` completes the reference analysis,
-   release comparator, and immutable baseline using the existing sixteen-
-   position corpus and full-depth profiler. No optimization starts before it
-   merges.
+1. `0021-reversi-ai-performance-benchmark.md` completed the reference analysis,
+   release comparator, and immutable baseline in merged PR #198. Its resolved
+   plan was removed after verification; the baseline remains in
+   `docs/references/reversi-ai-search-performance-v1.md`.
 2. `0022-reversi-engine-portable-bitboard-moves.md` replaces per-empty-square
    move generation and carries computed flips into move application.
    Accepted for the heuristic workload: portable directional propagation and
@@ -185,7 +185,7 @@ GDExtension, or release artifacts.
    at commit `a0eb402a112affbdd7b384d5e323ac56479f8071`; the identical
    original experiment is commit `4fa7980` in the outcome PR #210. It is
    removed from this branch's final tree.
-9. `0029-reversi-ai-search-storage-refinement.md` separately evaluates
+9. `0029-reversi-ai-search-storage-refinement.md` remains to be executed. It separately evaluates
    pass-safe heuristic PV scratch and compact exact storage after the rejected
    0023 result. It compares an in-search complete PV path with selective
    recovery of missing exact proof, and measures CPU time and peak RSS as well
@@ -244,8 +244,12 @@ and parallel search remain owned by their existing plans.
 
 ## Verification
 
-N/A - detail is owned by the executable children. Parent closeout verifies the
-checked-in reports and recomputes the accumulated before/after summary.
+N/A - detail is owned by the executable children. After 0029 records its
+outcome, parent closeout verifies the checked-in reports and runs a direct,
+same-host release comparison of the frozen 0021 baseline against the final
+accepted engine. It checks semantic equality and computes the sixteen-position
+per-workload geometric means against the 20% completion gate. Adjacent child
+ratios alone are not the accumulated before/after report.
 
 ## Addresses
 

@@ -1,4 +1,4 @@
-# Exact solver does not complete the 20-empty fixture within the verification budget
+# Exact solver 20-empty performance follow-up
 
 ## What happened
 
@@ -26,18 +26,22 @@ five-minute verification budget.
 ## Effect
 
 The 16-empty default remains the supported exact-solver boundary. The
-20-empty position is evidence that the present search speed is insufficient to
-raise that threshold safely.
+20-empty fixture now completes within the five-minute verification budget
+after the accepted exact-search changes. This result alone does not establish
+a supported 20-empty threshold across other positions.
 
 ## Next
 
 - Write a dedicated execution plan before changing the threshold beyond 16.
-- Profile the solver on legal 17--20-empty positions and identify sound
-  ordering, cache, parity, or stability improvements.
+- Finish parent plan 0020, including child 0029 and its final accumulated
+  benchmark. Close this local issue with that plan once its completion
+  conditions are verified.
+- Use a separate plan and profiling across legal 17--20-empty positions before
+  considering a higher supported threshold.
 - Keep exhaustive final-disc correctness and the existing interruption result
   contract. Re-check candidate positions against the external oracle.
 
 ## Priority
 
-Medium. This is a strength and responsiveness follow-up, not a correctness
-regression in the supported 16-empty profile.
+The original five-minute fixture failure is resolved. A higher supported
+threshold remains separate work.
