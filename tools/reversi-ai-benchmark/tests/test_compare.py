@@ -42,8 +42,15 @@ class ComparatorTests(unittest.TestCase):
                 })
                 return compare.MeasuredProcess(0, output + "\n", "", 200, 100, 10, 1024)
 
-            with patch.object(compare, "environment", return_value={"os": "test"}):
+            with patch.object(compare, "environment", return_value={"os": "test", "host": "test",
+                                                                   "cpu_model": "test",
+                                                                   "measurement_method": "linux-wait4"}):
                 report = compare.compare(baseline, candidate, records, 5, 1, fake_run)
+            compare.verify_report(report, records)
+            report["workloads"][0]["geometric_mean_ratio"] = 0.9
+            with self.assertRaisesRegex(compare.ComparisonError, "aggregates do not match"):
+                compare.verify_report(report, records)
+            report["workloads"][0]["geometric_mean_ratio"] = 0.8
 
         self.assertEqual(len(report["raw_samples"]), 160)
         self.assertEqual(report["positions"][0]["baseline_median_ns"], 100)
@@ -83,16 +90,17 @@ class ComparatorTests(unittest.TestCase):
             "nodes_searched": 100, "outcome": {"kind": "move", "move": "a1"},
             "score": 1, "pv": ["a1"], "completed_depth": 12,
             "exact": False, "timing_success": True,
-            "process_elapsed_ns": 200, "user_cpu_ns": 100,
-            "system_cpu_ns": 20, "peak_rss_kib": 1000,
         }
+        resources = {"process_elapsed_ns": 200, "user_cpu_ns": 100,
+                     "system_cpu_ns": 20, "peak_rss_kib": 1000}
         raw = [{"binary": label, "position_id": record["position_id"],
-                "repetition": 1, "workload": compare.workload(record), "sample": dict(sample)}
+                "repetition": 1, "workload": compare.workload(record),
+                "sample": dict(sample), "resource_usage": dict(resources)}
                for label in ("baseline", "candidate")]
         with self.assertRaisesRegex(compare.ComparisonError, "missing or invalid peak_rss_kib"):
-            raw[1]["sample"]["peak_rss_kib"] = 0
+            raw[1]["resource_usage"]["peak_rss_kib"] = 0
             compare.aggregate(raw, [record], [1])
-        raw[1]["sample"]["peak_rss_kib"] = 1000
+        raw[1]["resource_usage"]["peak_rss_kib"] = 1000
         raw[1]["sample"]["nodes_searched"] = 99
         with self.assertRaisesRegex(compare.ComparisonError, "result or node mismatch"):
             compare.aggregate(raw, [record], [1])

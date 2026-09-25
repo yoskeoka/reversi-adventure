@@ -11,7 +11,8 @@
 - Candidate is the same source with the diagnostic harness and one change to
   `search/ordering.rs`: it iterates the already computed legal-move mask and
   computes flips directly, avoiding a second legal-move calculation and the
-  temporary `generated_moves` vector. Non-instrumented release profiler:
+  temporary `generated_moves` vector. Source checkpoint:
+  `f2de91929daad7deac20a95c9874a773d7a6a884`. Non-instrumented release profiler:
   `/tmp/reversi-ai-0031-candidate`, SHA-256
   `d79218439c5c144ae5a751b2b6b199ec2c1b052e44c6482c423b19d343787286`.
 - Corpus: `tools/reversi-ai-benchmark/positions-v1.jsonl`, SHA-256
@@ -86,6 +87,12 @@ values above before starting. It writes 160 measured samples and 80 pairs.
 
 ```sh
 rtk python3 tools/reversi-ai-benchmark/compare.py --baseline /tmp/reversi-ai-0031-baseline --candidate /tmp/reversi-ai-0031-candidate --corpus tools/reversi-ai-benchmark/positions-v1.jsonl --output /tmp/reversi-ai-0031-comparison.json --repetitions 5 --time-limit-ms 300000
+```
+
+The completed immutable output is validated independently with:
+
+```sh
+rtk python3 tools/reversi-ai-benchmark/compare.py --verify-report /tmp/reversi-ai-0031-comparison.json --corpus tools/reversi-ai-benchmark/positions-v1.jsonl
 ```
 
 The report must show all samples complete and equal for outcome, score, PV,

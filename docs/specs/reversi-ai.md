@@ -429,9 +429,10 @@ node-only runs must have matching ordered trace digests, node counts, outcome,
 score, PV, depth, and exactness, including pass, collision, interruption, and
 cancellation cases.
 
-On Linux each measured profiler invocation reports positive process elapsed
-time, nonnegative user and system CPU time, and positive peak RSS from that
-child's `wait4` result. The report identifies the measurement method, host,
+On Linux each measured profiler invocation has a sibling `resource_usage`
+object with positive process elapsed time, nonnegative user and system CPU
+time, and positive peak RSS from that child's `wait4` result. The report
+identifies the measurement method, host,
 binary digests, and build flags. Process metrics cover startup through exit;
 profiler elapsed time covers search after evaluator construction. Warm-ups do
 not enter the aggregates. For each position the report gives binary medians of

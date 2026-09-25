@@ -205,9 +205,12 @@ def aggregate(raw: list[dict[str, object]], records: list[dict[str, object]],
             baseline = by_key[(repetition, "baseline")]["sample"]
             candidate = by_key[(repetition, "candidate")]["sample"]
             for label, sample in (("baseline", baseline), ("candidate", candidate)):
+                item = by_key[(repetition, label)]
                 if not isinstance(sample, dict) or sample.get("position_id") != position_id or sample.get("timing_success") is not True:
                     raise ComparisonError(f"invalid timing sample for {position_id} {repetition} {label}")
-                validate_resources(sample)
+                if not isinstance(item.get("resource_usage"), dict):
+                    raise ComparisonError(f"missing resource usage for {position_id}")
+                validate_resources(item["resource_usage"])
                 if type(sample.get("elapsed_ns")) is not int or sample["elapsed_ns"] <= 0:
                     raise ComparisonError(f"invalid search elapsed for {position_id}")
                 if type(sample.get("nodes_searched")) is not int or sample["nodes_searched"] < 0:
@@ -238,15 +241,18 @@ def aggregate(raw: list[dict[str, object]], records: list[dict[str, object]],
             sample = item["sample"]
             if any(reference.get(field) != sample.get(field) for field in SEMANTIC_FIELDS):
                 raise ComparisonError(f"result or node mismatch across repetitions for {position_id}")
-        samples = {label: [by_key[(repetition, label)]["sample"] for repetition in repetitions]
+        samples = {label: [by_key[(repetition, label)] for repetition in repetitions]
                    for label in ("baseline", "candidate")}
         medians = {}
         for label in ("baseline", "candidate"):
-            medians[label] = {key: median([sample[key] for sample in samples[label]]) for key in
-                              ("elapsed_ns", "process_elapsed_ns", "user_cpu_ns", "system_cpu_ns")}
-            medians[label]["cpu_ns"] = median([sample["user_cpu_ns"] + sample["system_cpu_ns"]
-                                                for sample in samples[label]])
-            medians[label]["peak_rss_kib"] = max(sample["peak_rss_kib"] for sample in samples[label])
+            medians[label] = {"elapsed_ns": median([item["sample"]["elapsed_ns"] for item in samples[label]])}
+            medians[label].update({key: median([item["resource_usage"][key] for item in samples[label]])
+                                   for key in ("process_elapsed_ns", "user_cpu_ns", "system_cpu_ns")})
+            medians[label]["cpu_ns"] = median([item["resource_usage"]["user_cpu_ns"] +
+                                                item["resource_usage"]["system_cpu_ns"]
+                                                for item in samples[label]])
+            medians[label]["peak_rss_kib"] = max(item["resource_usage"]["peak_rss_kib"]
+                                                for item in samples[label])
         base, cand = medians["baseline"], medians["candidate"]
         if base["cpu_ns"] <= 0 or cand["cpu_ns"] <= 0:
             raise ComparisonError(f"CPU median is zero for {position_id}")
@@ -291,7 +297,11 @@ def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], r
             order = (("baseline", baseline), ("candidate", candidate)) if repetition % 2 else (("candidate", candidate), ("baseline", baseline))
             for label, binary in order:
                 sample = invoke(binary, record, time_limit_ms, run)
-                raw.append({"binary": label, "position_id": record["position_id"], "repetition": repetition, "workload": workload(record), "sample": sample})
+                resources = {key: sample.pop(key) for key in
+                             ("process_elapsed_ns", "user_cpu_ns", "system_cpu_ns", "peak_rss_kib")}
+                raw.append({"binary": label, "position_id": record["position_id"],
+                            "repetition": repetition, "workload": workload(record),
+                            "sample": sample, "resource_usage": resources})
     positions, workloads = aggregate(raw, records, list(range(start_repetition, start_repetition + repetitions)))
     return {"schema_version": 2, "runner_version": RUNNER_VERSION, "repetitions": repetitions, "start_repetition": start_repetition, "time_limit_ms": time_limit_ms, "binaries": {"baseline": {"path": str(baseline), "sha256": sha256_file(baseline)}, "candidate": {"path": str(candidate), "sha256": sha256_file(candidate)}}, "environment": environment(), "raw_samples": raw, "positions": positions, "workloads": workloads}
 
@@ -320,12 +330,43 @@ def merge_fragments(fragments: list[dict[str, object]]) -> dict[str, object]:
     return {"schema_version": 2, "runner_version": RUNNER_VERSION, "repetitions": 5, "time_limit_ms": first["time_limit_ms"], "binaries": first["binaries"], "environment": first["environment"], "raw_samples": raw, "positions": positions, "workloads": workloads}
 
 
+def verify_report(report: dict[str, object], records: list[dict[str, object]]) -> None:
+    if report.get("schema_version") != 2 or report.get("runner_version") != RUNNER_VERSION:
+        raise ComparisonError("unsupported report schema or runner")
+    repetitions = report.get("repetitions")
+    if type(repetitions) is not int or repetitions < 5 or report.get("start_repetition", 1) != 1:
+        raise ComparisonError("final report requires at least five repetitions from one")
+    environment = report.get("environment")
+    if (not isinstance(environment, dict)
+            or environment.get("measurement_method") != "linux-wait4"
+            or not environment.get("host") or not environment.get("cpu_model")):
+        raise ComparisonError("final report lacks Linux host and measurement method")
+    binaries = report.get("binaries")
+    if not isinstance(binaries, dict):
+        raise ComparisonError("final report lacks binary digests")
+    for label in ("baseline", "candidate"):
+        identity = binaries.get(label)
+        if not isinstance(identity, dict) or not identity.get("path") or not identity.get("sha256"):
+            raise ComparisonError(f"final report lacks {label} identity")
+        path = Path(identity["path"])
+        if not path.is_file() or sha256_file(path) != identity["sha256"]:
+            raise ComparisonError(f"{label} binary digest changed")
+    raw = report.get("raw_samples")
+    if not isinstance(raw, list):
+        raise ComparisonError("final report lacks raw samples")
+    positions, workloads = aggregate(raw, records, list(range(1, repetitions + 1)))
+    if (canonical_json(report.get("positions")) != canonical_json(positions)
+            or canonical_json(report.get("workloads")) != canonical_json(workloads)):
+        raise ComparisonError("final report aggregates do not match raw samples")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--corpus", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--verify-report", type=Path)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--start-repetition", type=int, default=1)
     parser.add_argument("--no-warmup", action="store_true")
@@ -333,6 +374,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--time-limit-ms", type=int, default=300000)
     args = parser.parse_args(argv)
     try:
+        if args.verify_report:
+            if not args.corpus:
+                raise ComparisonError("--verify-report requires --corpus")
+            verify_report(json.loads(args.verify_report.read_text(encoding="utf-8")),
+                          load_corpus(args.corpus))
+            print("verified comparison report")
+            return 0
+        if args.output is None:
+            raise ComparisonError("--output is required for comparison or fragment merge")
         if args.fragments:
             report = merge_fragments([json.loads(path.read_text(encoding="utf-8")) for path in args.fragments])
         else:
