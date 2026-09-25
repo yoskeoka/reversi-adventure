@@ -45,8 +45,8 @@ CPU time と peak RSS も実測・報告し、増加する場合は採用前に�
   順序交互、raw sample、意味論フィールドを定める。同文書 `:461-489` は
   exact 結果と中断時の公開契約を定める。
 - `tools/reversi-ai-benchmark/compare.py:83-172` は現行比較器。
-  `docs/issues/0011-exact-solver-20-performance.md:1-37` は 20-empty の
-  oracle score `+26` と 5 分で未完了の状態を記録する。
+  `docs/references/reversi-ai-search-performance-0020-closeout.md` は
+  20-empty の oracle score `+26` と 5 分以内の完了を記録する。
 - Edax の [search-owned state](https://github.com/abulmo/edax-reversi/blob/master/src/search.h)
   と [compact hash entry](https://github.com/abulmo/edax-reversi/blob/master/src/hash.h)、
   Egaroucid の [table](https://github.com/Nyanyan/Egaroucid/blob/main/src/engine/transposition_table.hpp)
@@ -150,5 +150,4 @@ CPU time と peak RSS も実測・報告し、増加する場合は採用前に�
 
 ## Addresses
 
-- N/A。`docs/issues/0011-exact-solver-20-performance.md` は 0020 が所有し、
-  この計画の結果だけでは閉じない。
+- N/A。0020 の 20-empty local issue は完了時に解決された。
