@@ -585,8 +585,9 @@ struct MoveExplanation {
    - If only one legal move exists: `ForcedMove`.
    - If best move is a corner: `CornerGrab`.
    - If best move is adjacent to a corner and PV leads to corner take: `CornerSetup`.
-   - For an exact endgame result, show its final disc differential and PV with
-     `ExactEndgame`; do not derive a heuristic-factor delta.
+   - For an exact endgame result, show its root-side terminal score under the
+     rule above and PV with `ExactEndgame`; do not derive a heuristic-factor
+     delta.
 
 - `generate_explanation(board: &Board, color: Color, search_result: &SearchResult, evaluator: &dyn BoardEvaluator)` — Returns `MoveExplanation`.
 
