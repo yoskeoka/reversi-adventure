@@ -1,6 +1,7 @@
 pub mod endgame;
 pub mod negascout;
 pub mod ordering;
+mod stability;
 pub mod tt;
 
 use reversi_engine::board::Board;

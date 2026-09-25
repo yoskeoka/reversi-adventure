@@ -6,11 +6,13 @@ use reversi_engine::types::{Color, Position};
 
 #[cfg(test)]
 use super::ordering::order_moves;
+use super::stability;
 use super::tt::{Bound, ZobristKeys};
 use super::{SearchBudget, SearchOutcome};
 
 const NOT_A_FILE: u64 = 0xfefefefefefefefe;
 const NOT_H_FILE: u64 = 0x7f7f7f7f7f7f7f7f;
+const STABILITY_MAX_EMPTY: u32 = 16;
 
 // Keep in step with the secondary ordering in search/ordering.rs. The exact
 // solver needs its scores without allocating the heuristic move vector.
@@ -229,6 +231,9 @@ pub struct ExactPvsDiagnostics {
     pub null_window_calls: u64,
     pub fail_highs: u64,
     pub full_researches: u64,
+    pub stability_attempts: u64,
+    pub stability_proven_discs: u64,
+    pub stability_cutoffs: u64,
 }
 
 impl<'a> EndgameSolver<'a> {
@@ -532,6 +537,34 @@ impl<'a> EndgameSolver<'a> {
                 }
                 Bound::LowerBound if entry.score > alpha => alpha = entry.score,
                 _ => {}
+            }
+        }
+
+        if regions.empty.count_ones() <= STABILITY_MAX_EMPTY {
+            self.diagnostics.stability_attempts += 1;
+            let (lower, upper, proven) = stability::score_interval(board, color);
+            self.diagnostics.stability_proven_discs += u64::from(proven);
+            let cutoff = if upper <= alpha {
+                Some((upper, Bound::UpperBound))
+            } else if lower >= beta {
+                Some((lower, Bound::LowerBound))
+            } else {
+                None
+            };
+            if let Some((score, bound)) = cutoff {
+                self.diagnostics.stability_cutoffs += 1;
+                self.table.insert(
+                    hash,
+                    ExactEntry {
+                        score,
+                        bound,
+                        pv: Vec::new(),
+                    },
+                );
+                return Ok(NodeResult {
+                    score,
+                    pv: Vec::new(),
+                });
             }
         }
 
