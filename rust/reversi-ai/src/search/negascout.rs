@@ -2,6 +2,7 @@ use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
 
+use super::endgame::terminal_score;
 use super::ordering::order_moves_with_successors;
 use super::tt::{Bound, TranspositionTable, TtEntry, ZobristKeys};
 use super::{SearchBudget, SearchOutcome};
@@ -65,7 +66,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             };
             return CompletedSearch {
                 outcome,
-                score: None,
+                score: (outcome == SearchOutcome::GameOver).then(|| terminal_score(board, color)),
                 pv: best_pv,
                 leaf_eval: None,
                 completed_depth: 0,
@@ -94,9 +95,7 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
                 best_move = result.pv[0];
                 best_score = Some(result.score);
                 best_pv = result.pv;
-                if let Some(leaf_eval) = result.leaf_eval {
-                    best_leaf = Some(leaf_eval);
-                }
+                best_leaf = result.leaf_eval;
                 completed_depth = depth;
             }
         }
@@ -127,6 +126,15 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             return Err(());
         }
         self.nodes_searched += 1;
+
+        let legal = moves::legal_moves(board, color);
+        if legal == 0 && !moves::has_legal_move(board, color.opponent()) {
+            return Ok(NodeResult {
+                score: terminal_score(board, color),
+                pv: Vec::new(),
+                leaf_eval: None,
+            });
+        }
 
         // Leaf node: evaluate
         if depth == 0 {
@@ -179,19 +187,8 @@ impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
             None
         };
 
-        let legal = moves::legal_moves(board, color);
-
         // No legal moves: pass or game over
         if legal == 0 {
-            if !moves::has_legal_move(board, color.opponent()) {
-                // Game over — evaluate final position
-                let eval = self.evaluator.evaluate(board, color);
-                return Ok(NodeResult {
-                    score: eval.score,
-                    pv: Vec::new(),
-                    leaf_eval: Some(eval),
-                });
-            }
             // Pass: search opponent's turn at same depth
             let child = self.negascout(board, color.opponent(), depth, -beta, -alpha, budget)?;
             return Ok(NodeResult {

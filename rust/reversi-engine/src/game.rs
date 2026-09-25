@@ -238,6 +238,24 @@ mod tests {
     }
 
     #[test]
+    fn wipeout_ends_game_with_empty_squares_and_keeps_actual_counts() {
+        let board = Board::from_string(
+            "BW......\n........\n........\n........\n........\n........\n........\n........",
+        )
+        .unwrap();
+        let mut game = Game::from_board(board, Color::Black);
+
+        assert_eq!(
+            game.play(Position::new(0, 2)),
+            Ok(GameStatus::GameOver(GameResult::Win(Color::Black)))
+        );
+        assert_eq!(game.score(), (3, 0));
+        assert_eq!(game.board().empty_cells().count_ones(), 61);
+        assert_eq!(moves::legal_moves(game.board(), Color::Black), 0);
+        assert_eq!(moves::legal_moves(game.board(), Color::White), 0);
+    }
+
+    #[test]
     fn test_move_history_string() {
         let mut game = Game::new();
         game.play(Position::new(2, 3)).unwrap(); // D3

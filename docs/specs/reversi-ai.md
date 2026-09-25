@@ -487,12 +487,21 @@ enum SearchOutcome {
 }
 ```
 
-- A heuristic state without a legal move returns `Pass` when the opponent can
-  move and `GameOver` otherwise. It never exposes a sentinel `Position` or
-  score. Completed exact endgame states are the documented exception: they
-  retain the final root-side score.
+- A state without a legal move returns `Pass` when the opponent can move and
+  `GameOver` otherwise. It never exposes a sentinel `Position`. A root
+  `GameOver` returns the terminal score from the root side's perspective in
+  both heuristic and exact search, with an empty PV and no `leaf_eval`.
+- Terminal scoring applies at the root and within search, before a heuristic
+  depth-zero evaluation. If one color has no discs and the other has at least
+  one, the winner scores `+64` and the loser `-64`, regardless of empty squares.
+  All other terminal positions use the difference between the discs actually
+  on the board; an empty board scores `0`. `Game::score()` continues to report
+  the actual disc counts for display.
 - For a legal-move state, search selects a legal root fallback before deeper work. If interrupted before depth 1 completes, it returns that fallback, an empty PV, no score or leaf evaluation, `completed_depth = 0`, and `exact = false`.
-- After each wholly completed depth, the result atomically advances to that iteration's move, PV, score, and leaf evaluation. A partial iteration is never returned or stored as the completed PV.
+- After each wholly completed depth, the result atomically advances to that
+  iteration's move, PV, score, and leaf evaluation, including a missing
+  `leaf_eval` when the completed line ends at a terminal position. A partial
+  iteration is never returned or stored as the completed PV.
 - Heuristic iterative deepening always reports `exact = false`, including when
   its configured maximum depth completes. `exact = true` is reserved for a
   completed final-disc proof from the endgame solver.
@@ -505,10 +514,10 @@ enum SearchOutcome {
   16-empty-square oracle-checked fixture must complete within 1,000,000 solver
   nodes; this is a profile evidence ceiling, not a replacement for a caller's
   deadline, node limit, or cancellation token.
-- A completed endgame result has `exact = true`, its `score` is the final disc
-  differential from the root side's perspective, and its PV contains only
-  played positions (a pass is represented by `SearchOutcome::Pass`, never by a
-  sentinel position).
+- A completed endgame result has `exact = true`, its `score` follows the
+  terminal scoring rule above from the root side's perspective, and its PV
+  contains only played positions (a pass is represented by
+  `SearchOutcome::Pass`, never by a sentinel position).
 - The solver handles forced passes without consuming an empty square and
   returns `GameOver` only when neither side can move. A terminal endgame score
   is exact.
@@ -520,8 +529,8 @@ enum SearchOutcome {
   and deterministic equal-score choice. Exact search currently supplies no
   transposition move so cache probes cannot change equal-score choices.
 - With one through four empty squares, the solver uses bounded scalar search
-  for legal placements and forced passes. It returns the same root-side final
-  disc difference and complete played-move PV as the general exact search,
+  for legal placements and forced passes. It returns the same root-side terminal
+  score and complete played-move PV as the general exact search,
   including when both sides have no move before the board fills. Larger
   positions use the general exact path.
 - Every recursive exact search invocation, including a scalar position or

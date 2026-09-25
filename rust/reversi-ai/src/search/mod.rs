@@ -247,6 +247,30 @@ mod tests {
         evaluations: Arc<AtomicUsize>,
     }
 
+    struct NoTerminalEvaluator;
+
+    impl BoardEvaluator for NoTerminalEvaluator {
+        fn evaluate(&self, board: &Board, _color: Color) -> EvalResult {
+            assert!(
+                reversi_engine::moves::has_legal_move(board, Color::Black)
+                    || reversi_engine::moves::has_legal_move(board, Color::White),
+                "terminal board must bypass heuristic evaluation"
+            );
+            EvalResult {
+                score: 7,
+                factors: EvalFactors::default(),
+            }
+        }
+
+        fn name(&self) -> &str {
+            "no-terminal"
+        }
+
+        fn context_fingerprint(&self) -> u64 {
+            4
+        }
+    }
+
     impl BoardEvaluator for CountingEvaluator {
         fn evaluate(&self, _board: &Board, _color: Color) -> EvalResult {
             self.evaluations.fetch_add(1, Ordering::Relaxed);
@@ -540,7 +564,83 @@ mod tests {
 
         assert_eq!(pass.outcome, SearchOutcome::Pass);
         assert_eq!(game_over.outcome, SearchOutcome::GameOver);
-        assert!(pass.score.is_none() && game_over.score.is_none());
+        assert!(pass.score.is_none());
+        assert_eq!(game_over.score, Some(0));
+        assert!(game_over.leaf_eval.is_none());
+        assert!(game_over.pv.is_empty());
+        assert!(!game_over.exact);
+    }
+
+    #[test]
+    fn heuristic_wipeout_scores_both_root_sides_without_evaluation() {
+        let board = Board::from_string(
+            "BBB.....\n........\n........\n........\n........\n........\n........\n........",
+        )
+        .unwrap();
+        assert_eq!(board.empty_cells().count_ones(), 61);
+        let config = AiConfig::new(2, 2, 2);
+        for (color, score) in [(Color::Black, 64), (Color::White, -64)] {
+            assert_eq!(reversi_engine::moves::legal_moves(&board, color), 0);
+            let result = SearchEngine::new().search_with_budget(
+                &board,
+                color,
+                &NoTerminalEvaluator,
+                &config,
+                &SearchBudget::with_node_limit_only(100),
+            );
+            assert_eq!(result.outcome, SearchOutcome::GameOver);
+            assert_eq!(result.score, Some(score));
+            assert!(result.pv.is_empty());
+            assert!(result.leaf_eval.is_none());
+            assert!(!result.exact);
+        }
+    }
+
+    #[test]
+    fn heuristic_depth_zero_wipeout_replaces_previous_leaf_evaluation() {
+        let board = Board::from_string(
+            "BW.W....\n........\n........\n........\n........\n........\n........\n........",
+        )
+        .unwrap();
+        let config = AiConfig::new(2, 2, 2);
+        let result = SearchEngine::new().search_with_budget(
+            &board,
+            Color::Black,
+            &NoTerminalEvaluator,
+            &config,
+            &SearchBudget::with_node_limit_only(100),
+        );
+        assert_eq!(result.outcome, SearchOutcome::Move(Position::new(0, 2)));
+        assert_eq!(result.completed_depth, 2);
+        assert_eq!(result.score, Some(64));
+        assert_eq!(result.pv, vec![Position::new(0, 2), Position::new(0, 4)]);
+        assert!(result.leaf_eval.is_none());
+        assert!(!result.exact);
+    }
+
+    #[test]
+    fn public_exact_search_scores_wipeout_before_board_fills() {
+        let board = Board::from_string(
+            "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBB.",
+        )
+        .unwrap();
+        assert_eq!(board.empty_cells().count_ones(), 1);
+        let config = AiConfig::new(2, 2, 2);
+        for (color, score) in [(Color::Black, 64), (Color::White, -64)] {
+            assert_eq!(reversi_engine::moves::legal_moves(&board, color), 0);
+            let result = SearchEngine::new().search_with_budget(
+                &board,
+                color,
+                &NoTerminalEvaluator,
+                &config,
+                &SearchBudget::with_node_limit_only(100),
+            );
+            assert_eq!(result.outcome, SearchOutcome::GameOver);
+            assert_eq!(result.score, Some(score));
+            assert!(result.pv.is_empty());
+            assert!(result.leaf_eval.is_none());
+            assert!(result.exact);
+        }
     }
 
     #[test]

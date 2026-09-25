@@ -257,7 +257,7 @@ impl<'a> EndgameSolver<'a> {
             if !moves::has_legal_move(board, color.opponent()) {
                 return CompletedEndgame {
                     outcome: SearchOutcome::GameOver,
-                    score: Some(disc_difference(board, color)),
+                    score: Some(terminal_score(board, color)),
                     pv: Vec::new(),
                     completed_depth: empty_squares,
                     exact: true,
@@ -430,7 +430,7 @@ impl<'a> EndgameSolver<'a> {
         let legal = moves::legal_moves(board, color);
         if legal == 0 {
             if !moves::has_legal_move(board, color.opponent()) {
-                return Ok(SmallResult::empty(disc_difference(board, color)));
+                return Ok(SmallResult::empty(terminal_score(board, color)));
             }
             let child =
                 self.small_with_regions(board, color.opponent(), -beta, -alpha, budget, regions)?;
@@ -539,7 +539,7 @@ impl<'a> EndgameSolver<'a> {
         if legal == 0 {
             if !moves::has_legal_move(board, color.opponent()) {
                 return Ok(NodeResult {
-                    score: disc_difference(board, color),
+                    score: terminal_score(board, color),
                     pv: Vec::new(),
                 });
             }
@@ -638,8 +638,16 @@ impl<'a> EndgameSolver<'a> {
     }
 }
 
-fn disc_difference(board: &Board, color: Color) -> i32 {
-    board.count(color) as i32 - board.count(color.opponent()) as i32
+pub(crate) fn terminal_score(board: &Board, color: Color) -> i32 {
+    let own = board.count(color) as i32;
+    let opponent = board.count(color.opponent()) as i32;
+    if own == 0 && opponent > 0 {
+        -64
+    } else if opponent == 0 && own > 0 {
+        64
+    } else {
+        own - opponent
+    }
 }
 
 #[cfg(test)]
@@ -761,12 +769,63 @@ mod tests {
         (result, nodes)
     }
 
+    #[test]
+    fn early_wipeout_has_fixed_scores_from_either_root_side() {
+        let board = Board::from_string(
+            "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBB.",
+        )
+        .unwrap();
+        assert_eq!(board.count(Color::Black), 63);
+        assert_eq!(board.count(Color::White), 0);
+        assert_eq!(board.empty_cells().count_ones(), 1);
+        for (color, score) in [(Color::Black, 64), (Color::White, -64)] {
+            assert_eq!(moves::legal_moves(&board, color), 0);
+            let (result, _) = solve(&board, color);
+            assert_eq!(result.outcome, SearchOutcome::GameOver);
+            assert_eq!(result.score, Some(score));
+            assert!(result.exact);
+            assert!(result.pv.is_empty());
+        }
+    }
+
+    #[test]
+    fn exact_move_can_wipe_out_before_board_fills() {
+        let mut board = Board::empty();
+        for row in 0..8 {
+            for col in 0..8 {
+                board.set(Position::new(row, col), Color::Black);
+            }
+        }
+        board.remove(Position::new(0, 0));
+        board.remove(Position::new(7, 7));
+        board.set(Position::new(7, 6), Color::White);
+        let (result, _) = solve(&board, Color::Black);
+        assert_eq!(result.outcome, SearchOutcome::Move(Position::new(7, 7)));
+        assert_eq!(result.score, Some(64));
+        assert!(result.exact);
+        let final_board = moves::make_move(&board, Color::Black, Position::new(7, 7));
+        assert_eq!(final_board.empty_cells().count_ones(), 1);
+        assert_eq!(final_board.count(Color::Black), 63);
+        assert_eq!(final_board.count(Color::White), 0);
+    }
+
+    #[test]
+    fn ordinary_terminal_and_empty_board_use_actual_disc_difference() {
+        let board = Board::from_string(
+            "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBWW",
+        )
+        .unwrap();
+        assert_eq!(solve(&board, Color::Black).0.score, Some(60));
+        assert_eq!(solve(&board, Color::White).0.score, Some(-60));
+        assert_eq!(solve(&Board::empty(), Color::Black).0.score, Some(0));
+    }
+
     fn full_window_reference(board: &Board, color: Color) -> NodeResult {
         let legal = moves::legal_moves(board, color);
         if legal == 0 {
             if !moves::has_legal_move(board, color.opponent()) {
                 return NodeResult {
-                    score: disc_difference(board, color),
+                    score: terminal_score(board, color),
                     pv: Vec::new(),
                 };
             }
