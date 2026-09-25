@@ -159,13 +159,15 @@ and neither its datasets nor caches are runtime dependencies.
 
 The offline reinforcement producer accepts a versioned, immutable manifest. It
 pins the source commit and producer code digests, baseline artifact SHA-256 and
-artifact identity, the project-owned candidate executable SHA-256, trained evaluator and all three
-search depths, exact-solver threshold, disabled book, seed, even game count,
-opening plies, D4 rotation and color-pairing policy, per-decision timeout,
-maximum decisions, update rule, and disjoint validation position input and
-digest. It rejects changed inputs before any game. The production command is
-started by a human in a separate terminal; an agent may prepare the manifest
-and validate completed files but does not run or monitor that command.
+artifact identity, and project-owned candidate executable SHA-256. It also pins
+the trained evaluator, all three search depths, exact-solver threshold,
+disabled book, seed, even game count, opening plies, D4 rotation and
+color-pairing policy, per-decision timeout, maximum decisions, update rule,
+and disjoint validation position input and digest.
+
+The producer rejects changed inputs before any game. A human starts the
+production command in a separate terminal. An agent may prepare the manifest
+and validate completed files without running or monitoring that command.
 
 - Each seeded opening is generated from legal moves and yields exactly two
   games: one original position and one color-swapped D4 rotation. The report
