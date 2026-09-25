@@ -414,6 +414,19 @@ count exact null-window calls, fail-highs, and full re-searches separately
 from searched nodes. These counts are diagnostic and may change when the
 search tree changes.
 
+An experimental exact-search stability bound may label only occupied discs
+whose color cannot change in any legal continuation. A same-color run from an
+occupied corner along an edge is such a subset; overlapping runs count each
+disc once. Every other disc remains unproven. For the side to move at a node,
+the final disc difference lies in the inclusive interval
+`[2 * own_stable - 64, 64 - 2 * opponent_stable]`. A bound may end that node
+only when its upper endpoint is at or below alpha, or its lower endpoint is at
+or above beta. Such a result is an upper or lower bound in that node's side-to-
+move perspective and has no completed principal variation. A pass negates the
+window and result on the unchanged board. Full-window roots still require an
+exact score and complete principal variation. Profiler diagnostics report
+stability attempts, proven discs, and bound cutoffs separately from node counts.
+
 ### SearchEngine
 
 Wrapper around `Negascout` managing the transposition table and Zobrist keys.
