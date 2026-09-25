@@ -101,7 +101,11 @@ impl TranspositionTable {
             return None;
         }
         let index = (hash as usize) % self.capacity;
-        self.entries[index]
+        // SAFETY: new creates exactly capacity initialized entries; clear keeps
+        // the length, and no method resizes entries. The nonzero guard above
+        // makes index strictly less than capacity. This shared borrow stays
+        // within the lifetime of self and does not alias a mutable borrow.
+        unsafe { self.entries.get_unchecked(index) }
             .as_ref()
             .filter(|entry| entry.hash == hash)
     }
@@ -122,12 +126,17 @@ impl TranspositionTable {
             return;
         }
         let index = (hash as usize) % self.capacity;
-        let should_replace = match &self.entries[index] {
+        // SAFETY: new initializes capacity entries, clear preserves length,
+        // and index is below nonzero capacity. This borrow ends before the
+        // mutable access below, so the two references do not overlap.
+        let should_replace = match unsafe { self.entries.get_unchecked(index) } {
             None => true,
             Some(existing) => existing.hash != hash || entry.depth >= existing.depth,
         };
         if should_replace {
-            self.entries[index] = Some(entry);
+            // SAFETY: the same initialized slot is in bounds, and the shared
+            // reference used to decide replacement is no longer live.
+            *unsafe { self.entries.get_unchecked_mut(index) } = Some(entry);
         }
     }
 
