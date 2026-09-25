@@ -262,4 +262,27 @@ mod tests {
         tt.store(42, entry2);
         assert_eq!(tt.probe(42).unwrap().score, 100);
     }
+
+    #[test]
+    fn test_tt_collision_replaces_previous_hash() {
+        let mut tt = TranspositionTable::new(1);
+        let first = TtEntry {
+            hash: 42,
+            depth: 5,
+            score: 100,
+            bound: Bound::Exact,
+            best_move: None,
+        };
+        let second = TtEntry {
+            hash: u64::MAX,
+            depth: 1,
+            score: -50,
+            bound: Bound::LowerBound,
+            best_move: None,
+        };
+        tt.store(first.hash, first);
+        tt.store(second.hash, second);
+        assert!(tt.probe(first.hash).is_none());
+        assert_eq!(tt.probe(second.hash).unwrap().score, second.score);
+    }
 }
