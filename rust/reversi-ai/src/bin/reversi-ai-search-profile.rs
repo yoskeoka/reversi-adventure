@@ -191,11 +191,6 @@ fn main() -> Result<(), String> {
                 "fail_highs": result.exact_pvs.fail_highs,
                 "full_researches": result.exact_pvs.full_researches,
             },
-            "exact_stability": {
-                "attempts": result.exact_pvs.stability_attempts,
-                "proven_discs": result.exact_pvs.stability_proven_discs,
-                "cutoffs": result.exact_pvs.stability_cutoffs,
-            },
             "nodes_searched": result.nodes_searched,
             "outcome": outcome_json(result.outcome),
             "position_id": position_id,
