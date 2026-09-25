@@ -423,6 +423,7 @@ The Rust cost reassessment measures the same corpus as twelve
 select `strategic` or `trained`; trained mode requires a validated artifact and
 is reported separately from the strategic release comparison. Artifact loading
 is outside the search interval. Exact solving makes no evaluator calls.
+
 Diagnostic instrumentation records ordered search decisions and resource costs
 but is disabled in release timing. For a cost-only change, original and tuned
 node-only runs must have matching ordered trace digests, node counts, outcome,
@@ -432,12 +433,14 @@ cancellation cases.
 On Linux each measured profiler invocation has a sibling `resource_usage`
 object with positive process elapsed time, nonnegative user and system CPU
 time, and positive peak RSS from that child's `wait4` result. The report
-identifies the measurement method, host,
-binary digests, and build flags. Process metrics cover startup through exit;
-profiler elapsed time covers search after evaluator construction. Warm-ups do
-not enter the aggregates. For each position the report gives binary medians of
+identifies the measurement method, host, binary digests, and build flags.
+Process metrics cover startup through exit. Profiler elapsed time covers search
+after evaluator construction. Warm-ups are excluded from the aggregates.
+
+For each position the report gives binary medians of
 search elapsed and CPU time and candidate-to-baseline ratios. Each workload
 gives geometric means of those ratios and maximum peak RSS for each binary.
+
 Missing or invalid resources, incomplete positions or repetitions, mismatched
 measurement context, unfinished depth, or any result, node, or required trace
 mismatch rejects the comparison. The report presents both workloads and

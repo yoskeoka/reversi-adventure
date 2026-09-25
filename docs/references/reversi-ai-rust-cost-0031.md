@@ -34,14 +34,16 @@ move-order, transposition decision, re-search, cutoff, and store events. The
 [machine-readable diagnostic report](reversi-ai-rust-cost-0031-diagnostics.json)
 contains the sixteen matching trace digests, node counts, diagnostic input
 hashes, and inclusive counters. Original and tuned fixed-node runs used the
-same 100,000-node budget for each corpus position. All sixteen outcomes,
+same 100,000-node budget for each corpus position.
+
+All sixteen outcomes,
 scores, PVs, completed depths, exact flags, node counts, and ordered trace
 digests matched. The original report includes 1,200,000 heuristic legal-move
 calls and 420,673 heuristic ordering calls. Inclusive ordering time was about
-655 ms in the original diagnostic run and 570 ms in the tuned diagnostic run;
-this is a localization signal, not adoption evidence. Exact ordering, region
-update, and table costs are separately counted; the candidate does not change
-that path.
+655 ms in the original diagnostic run and 570 ms in the tuned diagnostic run.
+These diagnostic times identified the code to tune. Exact ordering, region
+update, and table costs are separately counted. The candidate leaves the exact
+path unchanged.
 
 Instrumentation itself is material: a serial fixed-node run of the original
 implementation took 1.42 s without instrumentation and 3.05 s with it on this
@@ -50,12 +52,16 @@ host. Counter intervals can overlap and are never added as total search time.
 The trained diagnostic used `tools/reversi-ai-training/fixtures/tiny-manifest.json`
 (SHA-256 `95b0590b3741bb704c9e5ffe053e2bf33d99a2bd55fd027b0e985c69be603925`)
 and `tools/reversi-ai-training/training.py` from commit
-`f1b133965e252bea2a17105e9958a55a08c801d8`. The generated artifact SHA-256
+`f1b133965e252bea2a17105e9958a55a08c801d8`.
+
+The generated artifact SHA-256
 was `351e1ce8db2a66ec5e84bdb70402f7a30282cca3cf83024f164c379b7bd71c6d`;
 the trainer report SHA-256 was
 `964cf214801f36faf03453da1faaa2e53a277e03b6923caabf46b9955a21722a`.
 The evaluator context was `6368932617396054397`. Loading and validation
-took 302,144 ns once for the 16-position diagnostic process. Across its twelve
+took 302,144 ns once for the 16-position diagnostic process.
+
+Across its twelve
 heuristic roots, the feature extractor was called 745,085 times and consumed
 about 6.50 s inclusive; lookup consumed about 0.23 s. All four exact roots
 made zero evaluator calls. The tiny sparse fixture is diagnostic input only;
@@ -82,7 +88,7 @@ diagnostic report is not a release timing report.
 The candidate is **unadopted pending the human-operated serial run**. The
 following frozen command performs one warm-up per binary and board followed by
 five alternating measured repetitions. Run it on a quiet Linux host under one
-power policy; keep the two `/tmp` binaries unchanged and check their SHA-256
+power policy. Keep the two `/tmp` binaries unchanged and check their SHA-256
 values above before starting. It writes 160 measured samples and 80 pairs.
 
 ```sh
@@ -99,6 +105,7 @@ The report must show all samples complete and equal for outcome, score, PV,
 depth, exactness, and nodes, with CPU and RSS for each process. Adoption needs
 a per-position median search-time ratio geometric mean at or below `0.95` in
 either workload. Both workload ratios, CPU ratios, and peak RSS are required
-even if only one workload improves. No speed or memory estimate has been
-substituted for this run. No `unsafe` was introduced; a small safe change was
-the first measured candidate.
+even if only one workload improves.
+
+The adoption decision awaits those measurements. The first candidate is a
+small safe change; it uses no `unsafe`.
