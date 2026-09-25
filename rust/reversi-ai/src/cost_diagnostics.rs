@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+#[cfg(not(test))]
 use std::time::Instant;
 
 use serde_json::{json, Value};
@@ -22,6 +23,10 @@ pub fn reset() {
     STATE.with(|state| *state.borrow_mut() = State::default());
 }
 
+#[cfg(test)]
+pub fn event(_tag: u8, _values: &[u64]) {}
+
+#[cfg(not(test))]
 pub fn event(tag: u8, values: &[u64]) {
     STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -34,6 +39,12 @@ pub fn event(tag: u8, values: &[u64]) {
     });
 }
 
+#[cfg(test)]
+pub fn measure<T>(_category: &'static str, action: impl FnOnce() -> T) -> T {
+    action()
+}
+
+#[cfg(not(test))]
 pub fn measure<T>(category: &'static str, action: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let result = action();

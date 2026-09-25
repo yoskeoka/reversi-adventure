@@ -42,10 +42,17 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def report(corpus: Path, original: Path, tuned: Path, trained: Path) -> dict:
-    ids = [row["position_id"] for row in load_corpus(corpus)]
+    records = load_corpus(corpus)
+    ids = [row["position_id"] for row in records]
+    stone_counts = {row["position_id"]: row["stone_count"] for row in records}
     before = load_diagnostics(original, ids)
     after = load_diagnostics(tuned, ids)
     trained_rows = load_diagnostics(trained, ids)
+    node_limit = before[0].get("node_limit")
+    if type(node_limit) is not int or node_limit <= 0 or any(
+        row.get("node_limit") != node_limit for row in before + after + trained_rows
+    ):
+        raise ComparisonError("diagnostic node-only budgets differ")
     for left, right in zip(before, after):
         if any(left[field] != right[field] for field in FIELDS):
             raise ComparisonError(f"cost-only result or node mismatch: {left['position_id']}")
@@ -54,7 +61,7 @@ def report(corpus: Path, original: Path, tuned: Path, trained: Path) -> dict:
     for row in trained_rows:
         if row.get("evaluator") != "trained" or not row.get("artifact_sha256"):
             raise ComparisonError("trained diagnostic lacks a fixed artifact")
-        if row["position_id"].endswith("-48") and any(
+        if stone_counts[row["position_id"]] == 48 and any(
             row["cost_diagnostics"]["counters"].get(name, {}).get("calls", 0)
             for name in ("heuristic_leaf_eval", "trained_feature_extract", "trained_lookup")
         ):
@@ -63,7 +70,7 @@ def report(corpus: Path, original: Path, tuned: Path, trained: Path) -> dict:
         raise ComparisonError("trained artifact changed between positions")
     return {
         "schema_version": 1,
-        "node_limit": before[0].get("node_limit"),
+        "node_limit": node_limit,
         "corpus_sha256": sha256_file(corpus),
         "original": {"jsonl_sha256": sha256_file(original), "counters": summarize(before)},
         "tuned": {"jsonl_sha256": sha256_file(tuned), "counters": summarize(after)},

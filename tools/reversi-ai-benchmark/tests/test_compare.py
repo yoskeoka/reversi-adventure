@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -34,7 +35,7 @@ class ComparatorTests(unittest.TestCase):
                 elapsed = 100 if binary == "baseline" else 80
                 output = json.dumps({
                     "position_id": record["position_id"], "elapsed_ns": elapsed,
-                    "board_digest": "board",
+                    "board_digest": hashlib.sha256(record["board"].encode("ascii")).hexdigest(),
                     "nodes_searched": 1, "outcome": {"kind": "move", "move": "a1"},
                     "score": 0, "pv": ["a1"], "completed_depth": 16 if record["stone_count"] == 48 else 12,
                     "exact": record["stone_count"] == 48, "timing_success": True,
@@ -78,7 +79,7 @@ class ComparatorTests(unittest.TestCase):
         records = self.corpus()
         record = records[0]
         sample = {
-            "position_id": record["position_id"], "board_digest": "board", "elapsed_ns": 100,
+            "position_id": record["position_id"], "board_digest": hashlib.sha256(record["board"].encode("ascii")).hexdigest(), "elapsed_ns": 100,
             "nodes_searched": 100, "outcome": {"kind": "move", "move": "a1"},
             "score": 1, "pv": ["a1"], "completed_depth": 12,
             "exact": False, "timing_success": True,

@@ -214,6 +214,13 @@ def aggregate(raw: list[dict[str, object]], records: list[dict[str, object]],
                     raise ComparisonError(f"invalid node count for {position_id}")
                 if not all(field in sample for field in SEMANTIC_FIELDS):
                     raise ComparisonError(f"missing result field for {position_id}")
+                expected_board_digest = hashlib.sha256(record["board"].encode("ascii")).hexdigest()
+                if sample["board_digest"] != expected_board_digest:
+                    raise ComparisonError(f"board digest mismatch for {position_id}")
+                if (type(sample.get("score")) is not int
+                        or not isinstance(sample.get("outcome"), dict)
+                        or not isinstance(sample.get("pv"), list)):
+                    raise ComparisonError(f"invalid completed result for {position_id}")
                 expected_exact = record["stone_count"] == 48
                 expected_depth = 16 if expected_exact else 12
                 if sample.get("exact") is not expected_exact or sample.get("completed_depth") != expected_depth:
@@ -296,6 +303,13 @@ def merge_fragments(fragments: list[dict[str, object]]) -> dict[str, object]:
     required = ("schema_version", "runner_version", "time_limit_ms", "binaries", "environment")
     if any(first.get(key) is None for key in required):
         raise ComparisonError("comparison fragment has an incomplete schema")
+    if first["schema_version"] != 2 or first["runner_version"] != RUNNER_VERSION:
+        raise ComparisonError("comparison fragment has an unsupported schema or runner")
+    if (not isinstance(first["environment"], dict)
+            or first["environment"].get("measurement_method") != "linux-wait4"
+            or not first["environment"].get("host")
+            or not first["environment"].get("cpu_model")):
+        raise ComparisonError("comparison fragment lacks a Linux host or measurement method")
     if any(any(fragment.get(key) != first[key] for key in required) for fragment in fragments[1:]):
         raise ComparisonError("comparison fragments were not measured in the same environment")
     if sorted(fragment.get("start_repetition") for fragment in fragments) != [1, 2, 3, 4, 5] or any(fragment.get("repetitions") != 1 for fragment in fragments):
