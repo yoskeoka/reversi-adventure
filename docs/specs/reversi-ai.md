@@ -494,6 +494,23 @@ enum SearchOutcome {
 - The solver handles forced passes without consuming an empty square and
   returns `GameOver` only when neither side can move. A terminal endgame score
   is exact.
+- Exact search tracks the remaining empty squares and their orthogonally
+  connected regions. A placement removes one square and updates region
+  membership even when that removal splits a region; a pass leaves both
+  unchanged. When a transposition move is supplied, ordering places it first;
+  otherwise it favors odd regions, then uses the established secondary order
+  and deterministic equal-score choice. Exact search currently supplies no
+  transposition move so cache probes cannot change equal-score choices.
+- With one through four empty squares, the solver uses bounded scalar search
+  for legal placements and forced passes. It returns the same root-side final
+  disc difference and complete played-move PV as the general exact search,
+  including when both sides have no move before the board fills. Larger
+  positions use the general exact path.
+- Every recursive exact search invocation, including a scalar position or
+  pass, checks the same deadline, cancellation, and node ceiling before
+  consuming one searched node. A terminal root returned without recursive
+  search keeps the existing zero-node behavior. An interrupted scalar search
+  cannot publish a partial exact score or PV.
 - Exact endgame cache entries are private to the solver and are never read as
   heuristic transposition-table entries. Heuristic TT entries must likewise
   never cause `exact = true`.
