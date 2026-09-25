@@ -155,6 +155,44 @@ and neither its datasets nor caches are runtime dependencies.
   artifact and report digests. Corruption, NaN, overflow, or a contract-mismatched
   artifact fails closed.
 
+### Bounded pattern reinforcement cycle
+
+The offline reinforcement producer accepts a versioned, immutable manifest. It
+pins the source commit and producer code digests, baseline artifact SHA-256 and
+artifact identity, the project-owned candidate executable SHA-256, trained evaluator and all three
+search depths, exact-solver threshold, disabled book, seed, even game count,
+opening plies, D4 rotation and color-pairing policy, per-decision timeout,
+maximum decisions, update rule, and disjoint validation position input and
+digest. It rejects changed inputs before any game. The production command is
+started by a human in a separate terminal; an agent may prepare the manifest
+and validate completed files but does not run or monitor that command.
+
+- Each seeded opening is generated from legal moves and yields exactly two
+  games: one original position and one color-swapped D4 rotation. The report
+  records the opening, every decision and pass, terminal board and disc counts,
+  final score, and a digest for each game. Any illegal move, timeout, malformed
+  response, resource-cap breach, or incomplete pair fails the whole cycle.
+- One deterministic update pass uses nonterminal self-play positions and their
+  final-disc-difference targets. For each phase, feature, and code, it adds the
+  rounded mean residual divided by 64 to the baseline integer weight, clamped
+  to `-1..=1`. Updates are simultaneous against baseline predictions. The
+  resulting sparse artifact retains the existing 64-feature, 60-phase,
+  `-64..=64` score and canonical digest contracts.
+- Validation positions have a canonical board-and-side key disjoint from every
+  tuning position and are never taken from the 0018 acceptance openings. The
+  baseline and updated artifact are both measured on the same validation
+  records by mean squared error. The updated artifact is selected only on a
+  strict improvement; ties and failed gates select the baseline. The immutable
+  report retains both metrics and the selected artifact digest.
+- The command writes candidate artifact, complete report, and game records
+  atomically at cycle completion. A report is valid only when its manifest,
+  baseline, candidate, selected, game-record and validation-input digests
+  recompute and every declared pair and game is present. Partial files are not
+  evidence. Identical frozen inputs produce byte-identical outputs.
+- Corpus regret under `strong-engine-hcap-v1` is a separate evaluation-only
+  report for the selected artifact. The 0018 held-out opening suite is not read
+  during generation, update, selection, or corpus regret.
+
 ### StrategicEvaluator
 
 Hand-tuned weights based on known Othello strategy. Evaluates:

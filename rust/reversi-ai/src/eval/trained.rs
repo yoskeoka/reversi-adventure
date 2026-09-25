@@ -17,6 +17,7 @@ use crate::eval::pattern::{
 
 const TRAINED_EVALUATOR_VERSION: u64 = 1;
 const TRAINER_VERSION: &str = "reversi-ai-pattern-training-v1";
+const REINFORCEMENT_VERSION: &str = "reversi-ai-pattern-reinforcement-v1";
 
 #[derive(Debug)]
 pub enum TrainedEvaluatorError {
@@ -206,7 +207,8 @@ fn validate_feature_contract(value: &Value) -> Result<(), TrainedEvaluatorError>
 
 fn validate_provenance(value: &Value) -> Result<(), TrainedEvaluatorError> {
     let provenance = object(value, "provenance")?;
-    if string(provenance, "trainer_version")? != TRAINER_VERSION
+    let trainer_version = string(provenance, "trainer_version")?;
+    if !matches!(trainer_version, TRAINER_VERSION | REINFORCEMENT_VERSION)
         || u64_value(provenance, "seed").is_err()
     {
         return invalid("provenance is incomplete");
@@ -216,7 +218,12 @@ fn validate_provenance(value: &Value) -> Result<(), TrainedEvaluatorError> {
         "input manifest digest",
     )?;
     let optimizer = object(object_value(provenance, "optimizer")?, "optimizer")?;
-    if string(optimizer, "name")? != "sparse_mean_v1"
+    let expected_optimizer = if trainer_version == TRAINER_VERSION {
+        "sparse_mean_v1"
+    } else {
+        "bounded_td_v1"
+    };
+    if string(optimizer, "name")? != expected_optimizer
         || u64_value(optimizer, "normalization_divisor")? != PATTERN_FEATURE_COUNT as u64
     {
         return invalid("provenance has an unsupported optimizer");
@@ -381,5 +388,16 @@ mod tests {
         let one = TrainedEvaluator::from_json_value(artifact(1)).unwrap();
         let minus_one = TrainedEvaluator::from_json_value(artifact(-1)).unwrap();
         assert_ne!(one.context_fingerprint(), minus_one.context_fingerprint());
+    }
+
+    #[test]
+    fn accepts_bounded_reinforcement_provenance() {
+        let mut value = artifact(1);
+        value["provenance"]["trainer_version"] = json!(REINFORCEMENT_VERSION);
+        value["provenance"]["optimizer"]["name"] = json!("bounded_td_v1");
+        value.as_object_mut().unwrap().remove("artifact_digest");
+        let artifact_digest = digest(&value);
+        value["artifact_digest"] = json!(artifact_digest);
+        assert!(TrainedEvaluator::from_json_value(value).is_ok());
     }
 }

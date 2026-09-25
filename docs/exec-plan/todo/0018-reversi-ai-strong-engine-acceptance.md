@@ -38,8 +38,10 @@ during the held-out run or claim parity with unrestricted world-class engines.
    suite digest, suite seed, hardware/resource declaration, and report schema
    before the first held-out game.
 2. Use legal, diverse opening prefixes; pair each with reversed colors and
-   symmetry rotations where applicable. No opening used for tuning may enter
-   this suite.
+   symmetry rotations where applicable. No opening or position used for 0019
+   self-play tuning or artifact selection may enter this suite; check its
+   canonical board-and-side keys against the frozen 0019 report before the
+   first acceptance game.
 3. Define primary success as `candidate wins / all games >= 0.50`. Report draws
    and match points separately. Declare sample size and a one-sided confidence
    rule before execution; passing point estimate alone is insufficient.
@@ -55,6 +57,10 @@ Depends on completed 0011, 0014, 0015, 0016, 0017, 0019, and the completed
 candidate may contain only merged optimizations accepted by that series. If
 0017 accepts a book, its dedicated integration child plan must also complete
 before this plan freezes the candidate.
+For 0019, completion means the human-operated cycle has finished and a later
+task has independently verified the immutable manifest, game records, candidate
+and selected artifacts, validation metrics, and corpus-regret report. This plan
+does not freeze a candidate from a prepared manifest or a partial cycle report.
 
 ## Verification
 
