@@ -210,6 +210,24 @@ Phase is determined by total stone count on the board:
 
 ## Search
 
+### Adopted search acceleration methods
+
+The search uses the following methods. Phase names describe where each method
+does useful work; the exact solver is selected by remaining empty squares,
+which is distinct from the stone-count phase labels above.
+
+[Methods not adopted](../references/reversi-ai-search-experiments.md)
+
+| Method | Where it helps |
+| --- | --- |
+| Portable bitboard move generation and reuse of computed flips | Legal moves and successor boards are needed throughout play; repeated generation makes this especially relevant to opening and midgame search. |
+| Iterative deepening with principal variation search | In opening and midgame search, completed shallower searches guide move order, and narrow probes avoid full-window work for later moves when their bounds suffice. |
+| Transposition caching and move ordering by cached moves, corners, opponent mobility, and positional value | In opening and midgame search, repeated positions and promising early moves improve reuse and alpha-beta pruning. |
+| Exact-position caching | In exact endgame search, previously proved positions and bounds can avoid repeating equivalent proof work. |
+| Exact endgame principal variation search | With few empty squares, narrow probes of later moves reduce work when they prove a bound; a full search still establishes an exact result where needed. |
+| Empty-region parity ordering | In exact endgame search, odd empty regions guide the order in which candidate moves are proved. |
+| Specialized search for the last four empty squares | At the end of an exact solve, the small remaining position uses direct move and pass handling. |
+
 ### TranspositionTable
 
 Hash table storing previously evaluated positions.

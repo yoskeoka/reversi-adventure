@@ -67,10 +67,10 @@ them, and then decides whether 0018 may freeze the candidate.
 ## Dependencies and sequencing
 
 - Depends on merged 0013/0014 and the 0011 calibration profile.
-- Before the human-operated long run, 0021 and the nonselective performance
-  children 0022--0029 must have recorded accepted or rejected outcomes. The
-  manifest freezes only merged, accepted optimizations and their accumulated
-  benchmark report; it never runs against an experiment branch.
+- Before the human-operated long run, use the completed 0020 series and its
+  `docs/references/reversi-ai-search-performance-0020-closeout.md` report. The
+  manifest freezes only merged, accepted optimizations; it never runs against
+  an experiment branch.
 - It may use completed 0017 changes when available, but freezes whichever
   accepted candidate configuration exists at execution time.
 - 0018 depends on this plan's recorded selected artifact; it performs the

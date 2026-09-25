@@ -31,15 +31,19 @@ issue の扱いが確定してから着手する。未完了の 0020 を本計�
   `04006088940dcbc4497a1b93d468a39a8f4858ff0ec6f33e457a9e8024415d0e`。
   heuristic depth-12 比 `0.985057117170627`、exact-16 比
   `1.0077264536193302` であり、全 80 組の結果投影は一致した。
-- `docs/exec-plan/todo/0020-reversi-ai-search-performance.md` の shared
-  acceptance rules は二つの workload と 5% gate を定める。0020 の完了時に
-  不採用手法の一覧、最終 baseline、各 report digest を固定する。
+- 完了した 0020 の実行内容は
+  [PR #212](https://github.com/yoskeoka/reversi-adventure/pull/212) と
+  `docs/references/reversi-ai-search-performance-0020-closeout.md` から
+  取得する。不採用手法の一覧は
+  `docs/references/reversi-ai-search-experiments.md` に残す。二つの
+  workload と 5% gate は元の計画の履歴を参照する。
 - `docs/exec-plan/todo/0029-reversi-ai-search-storage-refinement.md` は
   0023 の storage 案、CPU time、peak RSS を扱う。この計画は探索手法を
   再評価する際の実装コストだけを扱い、0029 を代行しない。
 - `rust/reversi-ai/src/search/negascout.rs:18-291` は heuristic の PV 構築、
   TT、PVS の現行経路。`rust/reversi-ai/src/search/endgame.rs:8-262` は
-  exact 経路。対象手法の候補 commit と report は 0020 の記録から取得する。
+  exact 経路。対象手法の候補 commit と report は PR #212 で削除した
+  0020 計画の履歴から取得する。
 - `tools/reversi-ai-benchmark/compare.py:83-172` と
   `docs/specs/reversi-ai.md:318-401` は full-depth の 16 局面比較、固定
   ノード診断、結果投影、release 計時の契約を定める。
@@ -119,5 +123,5 @@ issue の扱いが確定してから着手する。未完了の 0020 を本計�
 
 ## Addresses
 
-- N/A。0020 が所有する `docs/issues/0011-exact-solver-20-performance.md` は
-  0020 の完了時に別途扱う。この追試はその issue の先行解決条件ではない。
+- N/A。0020 が所有した 20-empty fixture の local issue は、その
+  完了時に解決して削除された。この追試は当該 issue を再開しない。
