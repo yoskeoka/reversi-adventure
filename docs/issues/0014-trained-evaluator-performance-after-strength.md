@@ -32,15 +32,17 @@ post-acceptance optimization evidence yet.
 ## Next
 
 After 0018 records an accepted strength result, create a focused execution
-plan for trained-mode performance. Freeze the accepted source, artifact digest,
-search settings, and representative boards before measuring. Profile search
-and feature extraction, then evaluate one bounded candidate at a time using
-the 0020/0032 discipline: identical results and ordered fixed-node traces,
-same-host release comparisons, and reported elapsed time, CPU time, and peak
-RSS. Preserve any rejected candidate and its evidence. Keep performance
-experiments separate from the frozen strength-acceptance run; set no CI speed
-threshold. An `unsafe` candidate needs its own local safety proof and measured
-benefit over an otherwise identical safe version.
+plan for trained-mode performance:
+
+- Freeze the accepted source, artifact digest, search settings, and
+  representative boards before measuring.
+- Profile search and feature extraction. Evaluate one bounded candidate at a
+  time using the 0020/0032 method: matching results and ordered fixed-node
+  traces, same-host release runs, and elapsed time, CPU time, and peak RSS.
+- Preserve rejected candidates and their evidence. Keep performance work
+  separate from the frozen strength-acceptance run, with no CI speed threshold.
+- Require a local safety proof and measured benefit over an otherwise identical
+  safe version before considering an `unsafe` candidate.
 
 ## Priority
 
