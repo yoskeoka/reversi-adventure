@@ -1,10 +1,10 @@
-# Child plan: refine search-owned PV storage after 0023
+# Follow-up plan: refine search-owned PV storage after 0023
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
 ## 目的と完了条件
 
-親計画 0020 の二つの workload で、探索中に必要な PV を保持する方法と、
+0020 で使用した二つの workload で、探索中に必要な PV を保持する方法と、
 compact な exact table から不足した経路だけを補う方法を分離して評価する。
 棄却した 0023 の結果は、固定容量表と後段の PV 再探索を組み合わせた
 PR #200 の実装結果であり、探索所有の storage 全般の否定とは扱わない。
@@ -18,7 +18,7 @@ PR #200 の実装結果であり、探索所有の storage 全般の否定とは
 返し、未完成の exact スコアや PV を出さない。
 
 候補ごとに完全な意味論検証を行い、最終候補だけを同一ホストの release
-wall-clock 比較で判定する。各 workload は独立に報告し、親計画の
+wall-clock 比較で判定する。各 workload は独立に報告し、0020 と同じ
 「どちらかで geometric mean 5% 以上改善」を採用の性能条件とする。
 CPU time と peak RSS も実測・報告し、増加する場合は採用前にその
 トレードオフを明示する。node 総数は診断値のみで、資源上限や採用条件に
@@ -65,14 +65,10 @@ CPU time と peak RSS も実測・報告し、増加する場合は採用前に�
   `tools/reversi-ai-benchmark/` -- 意味論検証と process-specific な
   CPU time / peak RSS 計測、report schema と synthetic validation。
   比較器の wall-clock 算術は維持する。
-- (MODIFY) `docs/exec-plan/todo/0018-reversi-ai-strong-engine-acceptance.md`
-  と `0019-reversi-ai-pattern-reinforcement-cycle.md` -- 0029 の結果を
-  候補 freeze と long-run manifest の前提に加える。
-- (NEW) `docs/references/` の候補別診断記録と最終 5 反復 report。
-- (MODIFY) `docs/exec-plan/todo/0020-reversi-ai-search-performance.md`
-  -- 両 workload の比率、実測資源、原因の切り分け、report digest と
+- (NEW) `docs/references/` の候補別診断記録と最終 5 反復 report --
+  両 workload の比率、実測資源、原因の切り分け、report digest と
   採用／不採用を記録する。
-- (DELETE) この child plan。検証と PR 準備が終わった時点で削除し、
+- (DELETE) この plan。検証と PR 準備が終わった時点で削除し、
   内容は PR/Git history から取得する。
 
 ## 作業と比較順序
@@ -147,12 +143,12 @@ CPU time と peak RSS も実測・報告し、増加する場合は採用前に�
 
 ## 依存・並行性
 
-- 親 0020 と PR #201 の結果を前提とし、PR #200 は未採用の設計資料。
-- exact 変更は 0026--0028 より先に評価するか、各 child の最新採用
-  `main` に合わせて baseline と candidate を作り直す。heuristic 側の
-  0024--0025 とは独立に進められる。
+- 完了した 0020 と PR #201 の結果を参照する独立した後続計画とし、
+  その結果を 0020 の完了条件に含めない。PR #200 は未採用の設計資料。
+- 0026 と 0027 の採用済み exact 変更を含む最新 `main` を baseline とし、
+  candidate を作る。棄却された 0024、0025、0028 の実装は含めない。
 
 ## Addresses
 
-- N/A。`docs/issues/0011-exact-solver-20-performance.md` は親 0020 が所有し、
-  この child の結果だけでは閉じない。
+- N/A。`docs/issues/0011-exact-solver-20-performance.md` は 0020 が所有し、
+  この計画の結果だけでは閉じない。

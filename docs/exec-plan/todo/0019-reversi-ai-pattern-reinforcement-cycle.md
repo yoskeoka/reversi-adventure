@@ -68,7 +68,7 @@ them, and then decides whether 0018 may freeze the candidate.
 
 - Depends on merged 0013/0014 and the 0011 calibration profile.
 - Before the human-operated long run, 0021 and the nonselective performance
-  children 0022--0029 must have recorded accepted or rejected outcomes. The
+  children 0022--0028 must have recorded accepted or rejected outcomes. The
   manifest freezes only merged, accepted optimizations and their accumulated
   benchmark report; it never runs against an experiment branch.
 - It may use completed 0017 changes when available, but freezes whichever

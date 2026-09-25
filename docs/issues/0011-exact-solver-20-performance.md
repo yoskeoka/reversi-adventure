@@ -33,8 +33,8 @@ a supported 20-empty threshold across other positions.
 ## Next
 
 - Write a dedicated execution plan before changing the threshold beyond 16.
-- Finish parent plan 0020, including child 0029 and its final accumulated
-  benchmark. Close this local issue with that plan once its completion
+- Finish parent plan 0020 and its final accumulated benchmark. Close this
+  local issue with that plan once its completion
   conditions are verified.
 - Use a separate plan and profiling across legal 17--20-empty positions before
   considering a higher supported threshold.

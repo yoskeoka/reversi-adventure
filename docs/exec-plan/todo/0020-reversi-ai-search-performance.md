@@ -11,8 +11,9 @@ versioned suite of sixteen positions. Four pinned self-play games each supply
 positions at 20, 40, 44, and 48 occupied discs. Then try each
 architecture-neutral technique in a separate, rollbackable child plan.
 
-The series is complete only when all child experiments have an accepted or
-rejected report, the accumulated accepted changes reduce the geometric mean of
+The series is complete only when the 0021 benchmark is complete, children
+0022--0028 each have an accepted or rejected report, and the accumulated
+accepted changes reduce the geometric mean of
 per-position median time by at least 20% in both workload classes relative to
 the 0021 baseline, and the existing 20-empty fixture completes with oracle
 score `+26` inside five minutes. If the last condition is still missed, keep
@@ -48,7 +49,8 @@ GDExtension, or release artifacts.
 
 ## Change map
 
-- (NEW) detailed executable plans `0021` through `0029`.
+- (NEW) detailed executable plans `0021` through `0028`. Plan `0029` is a
+  separate follow-up to the rejected 0023 storage experiment.
 - (MODIFY) `docs/exec-plan/todo/0009-reversi-ai-strong-engine.md`,
   `0018-reversi-ai-strong-engine-acceptance.md`, and
   `0019-reversi-ai-pattern-reinforcement-cycle.md` -- make the performance
@@ -185,14 +187,14 @@ GDExtension, or release artifacts.
    at commit `a0eb402a112affbdd7b384d5e323ac56479f8071`; the identical
    original experiment is commit `4fa7980` in the outcome PR #210. It is
    removed from this branch's final tree.
-9. `0029-reversi-ai-search-storage-refinement.md` remains to be executed. It separately evaluates
-   pass-safe heuristic PV scratch and compact exact storage after the rejected
-   0023 result. It compares an in-search complete PV path with selective
-   recovery of missing exact proof, and measures CPU time and peak RSS as well
-   as the existing release wall-clock gate. [PR #200](https://github.com/yoskeoka/reversi-adventure/pull/200)
-   remains a retained, unadopted reference candidate.
 
-After this parent and all its children are complete,
+Plan `0029-reversi-ai-search-storage-refinement.md` is a separate follow-up
+to the rejected 0023 result. It evaluates pass-safe heuristic PV scratch and
+compact exact storage, including CPU time and peak RSS. Its outcome is not a
+completion condition for this parent. [PR #200](https://github.com/yoskeoka/reversi-adventure/pull/200)
+remains a retained, unadopted reference candidate.
+
+After this parent and its 0021--0028 children are complete,
 `0030-reversi-ai-rejected-search-reassessment.md` rechecks whether Rust
 implementation costs masked the benefit of rejected search methods. It
 covers 0024 and any rejected 0025--0028 result; 0029 already owns the 0023
@@ -200,8 +202,7 @@ storage follow-up. Plan 0030 is a successor, not an additional completion
 condition for 0020.
 
 Plan `0022` is an accepted shared foundation; `0023` was evaluated after it
-and rejected. Plan `0029` revisits storage before later exact-track work when
-possible. The midgame track (`0024` then `0025`) and exact track (`0026` then
+and rejected. The midgame track (`0024` then `0025`) and exact track (`0026` then
 `0027` then `0028`) may proceed in parallel, but each experiment starts
 from the latest accepted `main` in its track and compares against its immediate
 parent. A child
@@ -244,8 +245,8 @@ and parallel search remain owned by their existing plans.
 
 ## Verification
 
-N/A - detail is owned by the executable children. After 0029 records its
-outcome, parent closeout verifies the checked-in reports and runs a direct,
+N/A - detail is owned by the executable children. Parent closeout verifies the
+checked-in reports and runs a direct,
 same-host release comparison of the frozen 0021 baseline against the final
 accepted engine. It checks semantic equality and computes the sixteen-position
 per-workload geometric means against the 20% completion gate. Adjacent child
