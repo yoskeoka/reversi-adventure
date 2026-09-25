@@ -160,8 +160,28 @@ GDExtension, or release artifacts.
    Peak RSS was not measured; node totals are diagnostic only. The 20-empty
    issue fixture completed exactly with Black `+26` in 12.813 seconds and
    20,694,346 nodes under the five-minute budget.
-8. `0028-reversi-ai-exact-stability-cutoff.md` adds only mathematically sound,
-   conservative exact score bounds from proven stable discs.
+8. `0028-reversi-ai-exact-stability-cutoff.md` was rejected by the 5% gate.
+   A proof-only corner-run and full-edge detector was tried at 5--16 empties;
+   the 16-empty premeasurement took 236 ms versus 231 ms for the baseline,
+   with 44,154 attempts and five cutoffs, so 16 was frozen as the maximum
+   attempted count before the full comparison. Against main
+   `abe2286dde7ab42be1815d4792e84d72ef141bd8`, the quiet same-host Rust
+   1.98.1 release comparison used one warm-up and five alternating measured
+   repetitions per binary and position. Candidate/baseline geometric-mean
+   elapsed ratios were `0.9979840386194613` for heuristic depth 12 (0.202%
+   faster, incidental because it bypasses exact search) and
+   `1.0314200410490422` for exact 16 (3.142% slower). All 160 samples
+   completed and all 80 paired outcome, score, PV, completed-depth, and exact
+   projections matched. Across the 20 exact samples, 1,215,070 stability
+   attempts proved 17,119,290 discs in aggregate but produced only 1,885
+   cutoffs; exact nodes changed from 9,628,210 to 9,594,810. The detector's
+   per-node work outweighed these rare cuts. The raw report is
+   `docs/references/reversi-ai-search-performance-0028.json`, SHA-256
+   `cf93fa5fe09b3362471c2ebe895fb81431d73fd93b2d94fd9fe03f2eb1c02d80`.
+   Peak RSS was not measured; node totals are diagnostic only. The separate
+   20-empty issue fixture completed exactly with Black `+26` in 12.932 seconds
+   and 20,693,729 nodes under the five-minute budget. The experiment is
+   preserved in this branch's commit history and removed from the final tree.
 9. `0029-reversi-ai-search-storage-refinement.md` separately evaluates
    pass-safe heuristic PV scratch and compact exact storage after the rejected
    0023 result. It compares an in-search complete PV path with selective
