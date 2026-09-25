@@ -85,11 +85,41 @@ diagnostic report is not a release timing report.
 
 ## Strategic release comparison and adoption status
 
-The candidate is **unadopted pending the human-operated serial run**. The
-following frozen command performs one warm-up per binary and board followed by
-five alternating measured repetitions. Run it on a quiet Linux host under one
-power policy. Keep the two `/tmp` binaries unchanged and check their SHA-256
-values above before starting. It writes 160 measured samples and 80 pairs.
+The [machine-readable release report](reversi-ai-rust-cost-0031-comparison.json)
+has SHA-256 `63ae61bef10fe3752356667526cbfb0df883add66837bed7be2d42877eb5582f`.
+It was measured on host `xps`, an Intel Core i7-1065G7 running
+`Linux-6.18.33.2-microsoft-standard-WSL2-x86_64`, with Rust 1.98.1 and empty
+`RUSTFLAGS`. Host load averaged under 0.6 before the serial run. The binaries
+and corpus matched the frozen SHA-256 values above. One warm-up per binary and
+board preceded five alternating measured repetitions. All 160 measured
+samples completed. All 80 baseline/candidate pairs and repetitions matched on
+outcome, score, PV, completed depth, exactness, and nodes. Every sample has
+nonnegative user/system CPU time and positive peak RSS from its own Linux
+`wait4` result. The saved report passed `--verify-report`, and an independent
+`statistics.median`/geometric-mean calculation reproduced both workload ratios.
+
+| Workload | Positions | Search elapsed ratio | CPU ratio | Process elapsed ratio | Peak RSS baseline → candidate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `heuristic-depth-12` | 12 | `0.9406831253153776` | `0.9437905080226138` | `0.9426055582083069` | `26,956 → 27,020 KiB` |
+| `exact-16` | 4 | `0.9918580986140435` | `0.9855616496316089` | `0.985672580808073` | `34,852 → 35,080 KiB` |
+
+The heuristic workload is about 5.93% faster by the plan's search elapsed
+gate, and CPU time falls about 5.62%. The improvement matches the diagnosed
+heuristic ordering path: each ordering call now uses the legal mask already
+computed at the node and avoids one temporary move vector. Exact solving does
+not call this ordering path; its search elapsed ratio is about 0.82% lower and
+does not meet the 5% gate alone. Peak RSS rose by 64 KiB for heuristic and
+228 KiB for exact. These are measured maxima, not estimates from node totals.
+
+The candidate meets the plan's numerical gate through heuristic search, with
+matching results and trace. It is **proposed for human adoption review** in
+PR #216. The exact path and its configuration did not change. If the candidate
+is adopted, 0029 starts from this new `main` and reuses the `wait4` comparator;
+0030 must measure each rejected search method separately against the then
+current `main`. Neither successor may credit this common ordering improvement
+to its own method. No `unsafe` was needed for this measured gain.
+
+The frozen measurement command was:
 
 ```sh
 rtk python3 tools/reversi-ai-benchmark/compare.py --baseline /tmp/reversi-ai-0031-baseline --candidate /tmp/reversi-ai-0031-candidate-v2 --corpus tools/reversi-ai-benchmark/positions-v1.jsonl --output /tmp/reversi-ai-0031-comparison.json --repetitions 5 --time-limit-ms 300000
@@ -101,11 +131,6 @@ The completed immutable output is validated independently with:
 rtk python3 tools/reversi-ai-benchmark/compare.py --verify-report /tmp/reversi-ai-0031-comparison.json --corpus tools/reversi-ai-benchmark/positions-v1.jsonl
 ```
 
-The report must show all samples complete and equal for outcome, score, PV,
-depth, exactness, and nodes, with CPU and RSS for each process. Adoption needs
-a per-position median search-time ratio geometric mean at or below `0.95` in
-either workload. Both workload ratios, CPU ratios, and peak RSS are required
-even if only one workload improves.
-
-The adoption decision awaits those measurements. The first candidate is a
-small safe change; it uses no `unsafe`.
+The report records the search interval after evaluator construction and the
+process interval from launch through exit. The two intervals are reported
+separately. The trained fixture results remain outside the adoption gate.
