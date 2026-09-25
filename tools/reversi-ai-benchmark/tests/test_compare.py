@@ -46,7 +46,13 @@ class ComparatorTests(unittest.TestCase):
                                                                    "cpu_model": "test",
                                                                    "measurement_method": "linux-wait4"}):
                 report = compare.compare(baseline, candidate, records, 5, 1, fake_run)
-            compare.verify_report(report, records)
+            self.assertFalse(compare.verify_report(report, records))
+            relocated_baseline = root / "relocated-baseline"
+            relocated_baseline.write_bytes(baseline.read_bytes())
+            self.assertTrue(compare.verify_report(report, records, relocated_baseline, candidate))
+            relocated_baseline.write_bytes(b"wrong")
+            with self.assertRaisesRegex(compare.ComparisonError, "baseline binary digest changed"):
+                compare.verify_report(report, records, relocated_baseline, candidate)
             report["workloads"][0]["geometric_mean_ratio"] = 0.9
             with self.assertRaisesRegex(compare.ComparisonError, "aggregates do not match"):
                 compare.verify_report(report, records)

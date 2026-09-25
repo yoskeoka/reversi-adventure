@@ -125,10 +125,19 @@ The frozen measurement command was:
 rtk python3 tools/reversi-ai-benchmark/compare.py --baseline /tmp/reversi-ai-0031-baseline --candidate /tmp/reversi-ai-0031-candidate-v2 --corpus tools/reversi-ai-benchmark/positions-v1.jsonl --output /tmp/reversi-ai-0031-comparison.json --repetitions 5 --time-limit-ms 300000
 ```
 
-The completed immutable output is validated independently with:
+The committed report's samples and aggregates can be checked on a fresh
+checkout with:
 
 ```sh
-rtk python3 tools/reversi-ai-benchmark/compare.py --verify-report /tmp/reversi-ai-0031-comparison.json --corpus tools/reversi-ai-benchmark/positions-v1.jsonl
+rtk python3 tools/reversi-ai-benchmark/compare.py --verify-report docs/references/reversi-ai-rust-cost-0031-comparison.json --corpus tools/reversi-ai-benchmark/positions-v1.jsonl
+```
+
+This mode validates the recorded SHA-256 strings but cannot rehash binary
+content that is absent from the checkout. To also verify binary content,
+supply both original or relocated binaries:
+
+```sh
+rtk python3 tools/reversi-ai-benchmark/compare.py --verify-report docs/references/reversi-ai-rust-cost-0031-comparison.json --corpus tools/reversi-ai-benchmark/positions-v1.jsonl --baseline /tmp/reversi-ai-0031-baseline --candidate /tmp/reversi-ai-0031-candidate-v2
 ```
 
 The report records the search interval after evaluator construction and the

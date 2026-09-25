@@ -330,7 +330,9 @@ def merge_fragments(fragments: list[dict[str, object]]) -> dict[str, object]:
     return {"schema_version": 2, "runner_version": RUNNER_VERSION, "repetitions": 5, "time_limit_ms": first["time_limit_ms"], "binaries": first["binaries"], "environment": first["environment"], "raw_samples": raw, "positions": positions, "workloads": workloads}
 
 
-def verify_report(report: dict[str, object], records: list[dict[str, object]]) -> None:
+def verify_report(report: dict[str, object], records: list[dict[str, object]],
+                  baseline_binary: Path | None = None,
+                  candidate_binary: Path | None = None) -> bool:
     if report.get("schema_version") != 2 or report.get("runner_version") != RUNNER_VERSION:
         raise ComparisonError("unsupported report schema or runner")
     repetitions = report.get("repetitions")
@@ -344,12 +346,18 @@ def verify_report(report: dict[str, object], records: list[dict[str, object]]) -
     binaries = report.get("binaries")
     if not isinstance(binaries, dict):
         raise ComparisonError("final report lacks binary digests")
+    if (baseline_binary is None) != (candidate_binary is None):
+        raise ComparisonError("binary rehash requires both baseline and candidate")
     for label in ("baseline", "candidate"):
         identity = binaries.get(label)
-        if not isinstance(identity, dict) or not identity.get("path") or not identity.get("sha256"):
+        if (not isinstance(identity, dict)
+                or not isinstance(identity.get("path"), str) or not identity["path"]
+                or not isinstance(identity.get("sha256"), str)
+                or len(identity["sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in identity["sha256"])):
             raise ComparisonError(f"final report lacks {label} identity")
-        path = Path(identity["path"])
-        if not path.is_file() or sha256_file(path) != identity["sha256"]:
+        path = baseline_binary if label == "baseline" else candidate_binary
+        if path is not None and (not path.is_file() or sha256_file(path) != identity["sha256"]):
             raise ComparisonError(f"{label} binary digest changed")
     raw = report.get("raw_samples")
     if not isinstance(raw, list):
@@ -358,6 +366,7 @@ def verify_report(report: dict[str, object], records: list[dict[str, object]]) -
     if (canonical_json(report.get("positions")) != canonical_json(positions)
             or canonical_json(report.get("workloads")) != canonical_json(workloads)):
         raise ComparisonError("final report aggregates do not match raw samples")
+    return baseline_binary is not None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -377,9 +386,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.verify_report:
             if not args.corpus:
                 raise ComparisonError("--verify-report requires --corpus")
-            verify_report(json.loads(args.verify_report.read_text(encoding="utf-8")),
-                          load_corpus(args.corpus))
-            print("verified comparison report")
+            rehashed = verify_report(json.loads(args.verify_report.read_text(encoding="utf-8")),
+                                     load_corpus(args.corpus), args.baseline, args.candidate)
+            print("verified comparison report data" +
+                  (" and supplied binary digests" if rehashed else
+                   "; recorded binary digests were not rehashed"))
             return 0
         if args.output is None:
             raise ComparisonError("--output is required for comparison or fragment merge")
