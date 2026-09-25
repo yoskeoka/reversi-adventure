@@ -52,6 +52,10 @@ Rust 実装コストを序中盤の通常探索と終盤の完全読みに分け
   は elapsed の比較のみで、子プロセスごとの CPU/RSS を保持しない。
   `docs/specs/reversi-ai.md:331-419` は corpus、完了 depth、交互 5 反復、
   成功 sample と結果投影の現行契約である。
+- `tools/reversi-ai-training/fixtures/tiny-manifest.json` と
+  `tools/reversi-ai-training/training.py` は再現可能な artifact 入力と
+  生成器である。小規模 fixture の sparse table は本番モデルの性能を
+  代表しないため、trained 側の数値を 0020 系の採否 gate に使わない。
 
 ## 変更対象と仕様
 
@@ -88,10 +92,22 @@ Rust 実装コストを序中盤の通常探索と終盤の完全読みに分け
    合法手生成、TT hash/probe/store、PV・一時確保を、完全読みの ordering、
    region 更新、exact table、PV、探索本体と分けて計数・時間観察する。
    追加計測自体の overhead を記録し、重複区間を足し合わせない。
-   trained evaluator は固定した検証済み artifact の digest と context を
-   記録し、初期 load と search 中の評価を分ける。exact では evaluator
-   呼出数が 0 であることを確認する。既存の検証済み artifact がなければ
-   再現可能な training fixture から用意し、生成元と digest を固定する。
+   trained evaluator は `tools/reversi-ai-training/fixtures/tiny-manifest.json`
+   から既存 trainer で生成・検証した artifact を診断入力とし、manifest、
+   artifact、trainer commit の digest、生成コマンド、evaluator context を
+   report に固定する。artifact load/validation と search 中の評価を
+   別々に計数・観察する。exact では evaluator 呼出数が 0 と確認する。
+   profiler は `--evaluator strategic|trained`（既定 strategic）と
+   trained 専用の必須 `--trained-artifact PATH` を受け、他の組合せを
+   拒否する。採否用 release 比較は従来の strategic、深さ 12/exact-16
+   のみ。trained は固定 artifact を使う通常探索の補助診断とし、
+   その比率を 5% gate や 0029/0030 の結果へ混ぜない。fixture は
+   `python3 tools/reversi-ai-training/training.py train --manifest
+   tools/reversi-ai-training/fixtures/tiny-manifest.json --artifact
+   /tmp/pattern-artifact.json --report /tmp/pattern-report.json` で生成し、
+   同 tool の `validate --artifact /tmp/pattern-artifact.json` で検証する。
+   strategic 採否 report と trained 診断 report は profile 名と digest を
+   持つ別成果物とする。
 3. 診断値と呼出回数・allocation 等の帰属から、一つの支配的コストを
    選ぶ。同程度なら通常/exact の両方に効く箇所、または変更範囲の狭い
    箇所を優先する。改善余地が測れなければ tuning を実施しない。
@@ -122,10 +138,15 @@ stdout/stderr を欠落・deadlock なく取得する。各 measured sample に
 非負の `user_cpu_ns`、`system_cpu_ns`、正の `peak_rss_kib` を記録する。
 `ru_maxrss` は Linux の KiB として保存し、
 `measurement_method: linux-wait4`、host/OS/CPU、binary digest、
-Rust flags を environment に
-記録する。elapsed は profiler の search elapsed と process wall の
-対象区間を区別して記録し、性能比に用いる区間を固定する。warm-up は
-集計から除外する。累積 `RUSAGE_CHILDREN` を sample 値に使わない。
+Rust flags を environment に記録する。同じ起動から終了までの区間で
+`process_elapsed_ns`、CPU、peak RSS を測り、baseline/candidate の
+process 指標を対で集計する。従来の 5% gate に用いる
+`search_elapsed_ns`（現行 profiler の `elapsed_ns`）は evaluator 構築後に
+profiler が測る別区間として
+保持する。load 込み process 値と search-only 値の比を直接比較せず、
+report で区間を明示する。trained の初期 load が process 指標に含まれる
+ことを明記し、診断計数で search 中の費用を別に示す。warm-up は集計から
+除外する。累積 `RUSAGE_CHILDREN` を sample 値に使わない。
 
 異常終了、rusage 欠落/不正、RSS 0、局面や反復の不足、host/計測方式の
 不一致、未完了 depth、結果または node/trace の不一致は fail closed。
