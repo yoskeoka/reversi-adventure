@@ -62,8 +62,9 @@ CPU time と peak RSS も実測・報告し、増加する場合は採用前に�
 - (MODIFY) `rust/reversi-ai/src/search/endgame.rs` -- compact cache と
   完全な exact PV を両立する二つの限定候補を試す。
 - (MODIFY) 必要な `rust/reversi-ai/src/search/` の focused tests と
-  `tools/reversi-ai-benchmark/` -- 意味論検証と process-specific な
-  CPU time / peak RSS 計測、report schema と synthetic validation。
+  `tools/reversi-ai-benchmark/` -- 意味論検証と storage 固有の診断。
+  process-specific な CPU time / peak RSS 計測、report schema と
+  synthetic validation は先行する 0031 の共通測定基盤を使用する。
   比較器の wall-clock 算術は維持する。
 - (NEW) `docs/references/` の候補別診断記録と最終 5 反復 report --
   両 workload の比率、実測資源、原因の切り分け、report digest と
@@ -143,6 +144,9 @@ CPU time と peak RSS も実測・報告し、増加する場合は採用前に�
 
 ## 依存・並行性
 
+- `0031-reversi-ai-rust-cost-tuning` の計測基盤と、採用された場合の
+  実装調整が `main` に入った後に開始する。0031 の選択・採否と本 plan の
+  storage 候補の採否は別々に判定する。
 - 完了した 0020 と PR #201 の結果を参照する独立した後続計画とし、
   その結果を 0020 の完了条件に含めない。PR #200 は未採用の設計資料。
 - 0026 と 0027 の採用済み exact 変更を含む最新 `main` を baseline とし、
