@@ -28,8 +28,11 @@ PR #216 の Rust 実装コスト改善とは独立して、探索の意味論を
   `unsafe` の効果は測っていない。PR #216 は本 plan 作成時点で未 merge。
 - `rust/reversi-ai/src/search/tt.rs:73-112` の `TranspositionTable::new`、
   `probe`、`store` は `capacity` で割った添字から `entries` を参照する。
-  `entries.len() == capacity > 0` を全経路で保てるか、最適化後に
-  bounds check が残るか、TT コストに寄与するかを調べる候補である。
+  公開 `new(0)` は現在構築できるため、`entries.len() == capacity > 0`
+  は現状の不変条件ではない。最初に容量 0 を入口で拒否するか、
+  `probe` / `store` が安全に処理するかを仕様化し、容量 0 の回帰テストを
+  加える。その上で最適化後に bounds check が残るか、TT コストに
+  寄与するかを調べる候補である。
 - `rust/reversi-ai/src/search/endgame.rs:35-78` の
   `EmptyRegions::assign`、`after_placement`、`is_odd` は 64 要素配列を
   bit index で参照する。`trailing_zeros` は非ゼロ mask から 0..63 と
@@ -83,7 +86,9 @@ PR #216 の Rust 実装コスト改善とは独立して、探索の意味論を
 3. 残った一箇所について safe 対応版と `unsafe` 版を別 commit/binary で
    作る。両者の探索処理、データ構造、割当、分岐、結果は揃え、`unsafe`
    以外の改善を利益に混ぜない。`get_unchecked` 等の前提を境界値と型の
-   全生成経路から検証し、release codegen の差分を記録する。
+   全生成経路から検証し、release codegen の差分を記録する。TT を選ぶ
+   場合は公開 `new(0)` の扱いと回帰テストを safe / unsafe の両版へ同じく
+   適用し、その API 変更の費用を `unsafe` 固有の利益に混ぜない。
 4. fixed-node の baseline / safe / unsafe で通常探索と exact の
    outcome、score、PV、completed depth、exact、node 数、実行順 trace
    digest を照合する。pass、TT collision、期限切れ、cancel も対象。
