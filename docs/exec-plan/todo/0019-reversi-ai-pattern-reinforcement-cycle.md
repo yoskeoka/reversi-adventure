@@ -66,6 +66,11 @@ them, and then decides whether 0018 may freeze the candidate.
 
 ## Dependencies and sequencing
 
+- Requires the verified project-owned random-game inputs from 0032. Freeze the
+  production manifest only after its baseline artifact and separate validation
+  JSONL have passed their digest and complete-game verification. Pin their
+  exact paths and SHA-256 values; never substitute the tiny fixtures. Keep the
+  trainer-held-out set separate from the 0019 validation set.
 - Depends on merged 0013/0014 and the 0011 calibration profile.
 - Before the human-operated long run, use the completed 0020 series and its
   `docs/references/reversi-ai-search-performance-0020-closeout.md` report. The

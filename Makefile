@@ -21,6 +21,15 @@ PATTERN_TRAINER := tools/reversi-ai-training/training.py
 PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-manifest.json
 PATTERN_ARTIFACT ?= /tmp/reversi-adventure-pattern-artifact.json
 PATTERN_REPORT ?= /tmp/reversi-adventure-pattern-report.json
+RANDOM_INPUT_TOOL := tools/reversi-ai-training/random_inputs.py
+RANDOM_INPUT_MANIFEST ?= /tmp/reversi-adventure-random-inputs-manifest.json
+RANDOM_INPUT_OUTPUT_DIR ?= /tmp/reversi-adventure-random-inputs
+RANDOM_INPUT_TRAIN_GAMES ?= 2048
+RANDOM_INPUT_VALIDATION_GAMES ?= 256
+RANDOM_INPUT_HELD_OUT_GAMES ?= 256
+RANDOM_INPUT_SEED ?= 20260926
+RANDOM_INPUT_ARTIFACT ?= /tmp/reversi-adventure-random-baseline.json
+RANDOM_INPUT_TRAIN_REPORT ?= /tmp/reversi-adventure-random-baseline-report.json
 REINFORCEMENT_TOOL := tools/reversi-ai-training/reinforcement.py
 REINFORCEMENT_MANIFEST ?= /tmp/reversi-adventure-reinforcement-manifest.json
 REINFORCEMENT_OUTPUT_DIR ?= /tmp/reversi-adventure-reinforcement
@@ -51,7 +60,7 @@ AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPEN
 AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH) --exact-solver-empty-squares $(AI_EXACT_SOLVER_EMPTY_SQUARES)
 AI_CALIBRATION_COMMAND := $(AI_BINARY) --evaluator strategic --profile strong-engine-hcap-v1
 
-.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify benchmark-reference benchmark-reference-verify benchmark-compare pattern-training-test pattern-training-fixture pattern-reinforcement-prepare pattern-reinforcement-run pattern-reinforcement-verify pattern-reinforcement-regret
+.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify benchmark-reference benchmark-reference-verify benchmark-compare pattern-training-test pattern-training-fixture pattern-random-prepare pattern-random-generate pattern-random-verify pattern-random-train pattern-reinforcement-prepare pattern-reinforcement-run pattern-reinforcement-verify pattern-reinforcement-regret
 
 pattern-training-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-training/tests -p 'test_*.py'
@@ -59,6 +68,19 @@ pattern-training-test:
 pattern-training-fixture: pattern-training-test
 	$(PYTHON) $(PATTERN_TRAINER) train --manifest $(PATTERN_MANIFEST) --artifact $(PATTERN_ARTIFACT) --report $(PATTERN_REPORT)
 	$(PYTHON) $(PATTERN_TRAINER) validate --artifact $(PATTERN_ARTIFACT)
+
+pattern-random-prepare:
+	$(PYTHON) $(RANDOM_INPUT_TOOL) prepare --manifest "$(RANDOM_INPUT_MANIFEST)" --seed $(RANDOM_INPUT_SEED) --train-games $(RANDOM_INPUT_TRAIN_GAMES) --validation-games $(RANDOM_INPUT_VALIDATION_GAMES) --held-out-games $(RANDOM_INPUT_HELD_OUT_GAMES)
+
+pattern-random-generate:
+	$(PYTHON) $(RANDOM_INPUT_TOOL) generate --manifest "$(RANDOM_INPUT_MANIFEST)" --output-dir "$(RANDOM_INPUT_OUTPUT_DIR)"
+
+pattern-random-verify:
+	$(PYTHON) $(RANDOM_INPUT_TOOL) verify --manifest "$(RANDOM_INPUT_MANIFEST)" --output-dir "$(RANDOM_INPUT_OUTPUT_DIR)"
+
+pattern-random-train: pattern-random-verify
+	$(PYTHON) $(PATTERN_TRAINER) train --manifest "$(RANDOM_INPUT_OUTPUT_DIR)/trainer-manifest.json" --artifact "$(RANDOM_INPUT_ARTIFACT)" --report "$(RANDOM_INPUT_TRAIN_REPORT)"
+	$(PYTHON) $(PATTERN_TRAINER) validate --artifact "$(RANDOM_INPUT_ARTIFACT)"
 
 pattern-reinforcement-prepare:
 	@test -n "$(REINFORCEMENT_BASELINE_ARTIFACT)" && test -n "$(REINFORCEMENT_VALIDATION_INPUT)" && test -n "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" || (echo "Set REINFORCEMENT_BASELINE_ARTIFACT, REINFORCEMENT_VALIDATION_INPUT, and REINFORCEMENT_CANDIDATE_EXECUTABLE" >&2; exit 2)

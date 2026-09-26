@@ -20,6 +20,54 @@ source digest. The emitted artifact has only sparse integer tables, a fixed
 60-phase/64-feature contract, per-feature bounds no greater than one, and
 canonical SHA-256 identity fields.
 
+## Project-owned random-game baseline inputs
+
+`random_inputs.py` draws complete legal games from the canonical initial board.
+Its frozen manifest pins the merged source commit and generator digest, seed,
+split game ids, random and split rules, `CC0-1.0` provenance, record start and
+turn cap. Defaults are 2,048 train, 256 validation, and 256 held-out games;
+every split must cover opening, midgame, and endgame. The validation file is
+separate from training and held-out inputs. All production files stay outside
+the checkout.
+
+First run a small pilot with the same generator and use `/usr/bin/time -v` to
+record elapsed time and maximum resident set size. Set a production wall-clock
+and peak-memory cap from that measurement before freezing the production
+manifest. If the estimated production run exceeds either cap, choose new
+counts and freeze a new manifest before generation.
+
+```sh
+make pattern-random-prepare RANDOM_INPUT_MANIFEST=/tmp/random-pilot/manifest.json \
+  RANDOM_INPUT_TRAIN_GAMES=4 RANDOM_INPUT_VALIDATION_GAMES=2 RANDOM_INPUT_HELD_OUT_GAMES=2
+/usr/bin/time -v make pattern-random-generate \
+  RANDOM_INPUT_MANIFEST=/tmp/random-pilot/manifest.json RANDOM_INPUT_OUTPUT_DIR=/tmp/random-pilot/output
+make pattern-random-verify \
+  RANDOM_INPUT_MANIFEST=/tmp/random-pilot/manifest.json RANDOM_INPUT_OUTPUT_DIR=/tmp/random-pilot/output
+```
+
+Use fresh paths for production. `prepare` refuses to overwrite a manifest;
+`generate` refuses a nonempty output directory and writes `report.json` last.
+Only a successful `verify` establishes complete input evidence.
+
+```sh
+make pattern-random-prepare RANDOM_INPUT_MANIFEST=/absolute/path/input-manifest.json
+make pattern-random-generate RANDOM_INPUT_MANIFEST=/absolute/path/input-manifest.json \
+  RANDOM_INPUT_OUTPUT_DIR=/absolute/path/inputs
+make pattern-random-verify RANDOM_INPUT_MANIFEST=/absolute/path/input-manifest.json \
+  RANDOM_INPUT_OUTPUT_DIR=/absolute/path/inputs
+make pattern-random-train RANDOM_INPUT_MANIFEST=/absolute/path/input-manifest.json \
+  RANDOM_INPUT_OUTPUT_DIR=/absolute/path/inputs \
+  RANDOM_INPUT_ARTIFACT=/absolute/path/baseline.json \
+  RANDOM_INPUT_TRAIN_REPORT=/absolute/path/baseline-report.json
+```
+
+Record the SHA-256 of the generator manifest, all output files, trained
+artifact and trainer report. The trainer report measures held-out error only;
+compare that error against zero-weight predictions on the same held-out rows.
+These metrics do not establish playing strength. Give 0019 the exact baseline
+artifact and `inputs/validation.jsonl` paths and digests. Keep 0018 openings
+unread until its acceptance run.
+
 ## One bounded reinforcement cycle
 
 Build a project-owned `reversi-ai-cli` from the accepted, merged source commit.
