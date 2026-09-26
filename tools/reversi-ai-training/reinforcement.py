@@ -22,6 +22,38 @@ import training
 VERSION = "reversi-ai-pattern-reinforcement-v1"
 PAIRING = "color_swap_d4_v1"
 OUTPUTS = ("candidate-artifact.json", "selected-artifact.json", "games.jsonl", "report.json")
+
+
+def positive_interval(value: str) -> int:
+    try:
+        interval = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if interval < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return interval
+
+
+class Progress:
+    def __init__(self, interval: int):
+        if interval < 1:
+            fail("progress interval must be a positive integer")
+        self.interval = interval
+        self.started = time.monotonic()
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
+
+    def stage_start(self, name: str) -> float:
+        print(f"stage {name} start elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
+        return time.monotonic()
+
+    def stage_done(self, name: str, started: float) -> None:
+        print(f"stage {name} done stage={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
+
+    def game(self, pair: int, member: int, completed: int, total: int, started: float) -> None:
+        if completed % self.interval == 0 or completed == total:
+            print(f"progress self-play pair={pair} member={member} {completed}/{total} game={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
 INITIAL = "...........................WB......BW..........................."
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 MOVE = re.compile(r"[a-h][1-8]\Z")
@@ -358,26 +390,42 @@ def output_bytes(artifact: dict, selected: dict, games: list[dict], report: dict
             "report.json": training.canonical_json(report) + b"\n"}
 
 
-def cycle(manifest_path: Path) -> dict[str, bytes]:
+def cycle(manifest_path: Path, progress: Progress | None = None) -> dict[str, bytes]:
     manifest, baseline_path, executable, validation_path = validate_manifest(manifest_path)
+    progress = progress or Progress(1)
     baseline = training.read_json(baseline_path)
     generated = openings(manifest["seed"], manifest["game_count"], manifest["opening_plies"])
     games = []
     remaining = [manifest["max_decisions"]]
     candidate = Candidate(executable, baseline_path, manifest["candidate"], manifest["decision_timeout_seconds"])
+    stage = progress.stage_start("self-play")
     try:
         for pair, (board, side, opening, rotation) in enumerate(generated):
+            game_started = time.monotonic()
             games.append(play(pair, 0, board, side, opening, 0, candidate, remaining))
+            progress.game(pair, 0, len(games), manifest["game_count"], game_started)
             paired_board, paired_side = rotated_pair(board, side, rotation)
+            game_started = time.monotonic()
             games.append(play(pair, 1, paired_board, paired_side, opening, rotation, candidate, remaining))
+            progress.game(pair, 1, len(games), manifest["game_count"], game_started)
     finally:
         candidate.close()
+    progress.stage_done("self-play", stage)
+    stage = progress.stage_start("replay-tuning-extraction")
     tuning = [row for game in games for row in replay(game)]
+    progress.stage_done("replay-tuning-extraction", stage)
+    stage = progress.stage_start("validation")
     validation = validate_positions(validation_path, tuning, manifest["validation"]["source"])
+    progress.stage_done("validation", stage)
+    stage = progress.stage_start("artifact-update")
     artifact = updated_artifact(baseline, tuning, manifest)
     training.validate_artifact(artifact)
+    progress.stage_done("artifact-update", stage)
+    stage = progress.stage_start("metrics-selection")
     base_metrics, candidate_metrics = mse(baseline, validation), mse(artifact, validation)
     selected = select_artifact(baseline, artifact, base_metrics, candidate_metrics)
+    progress.stage_done("metrics-selection", stage)
+    stage = progress.stage_start("report-serialization")
     report = {"schema_version": 1, "producer_version": VERSION, "source_commit": manifest["source_commit"],
               "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": artifact["artifact_digest"],
@@ -389,15 +437,19 @@ def cycle(manifest_path: Path) -> dict[str, bytes]:
     partial = output_bytes(artifact, selected, games, report)
     report["output_sha256"] = {name: hashlib.sha256(partial[name]).hexdigest() for name in OUTPUTS[:-1]}
     report["report_digest"] = training.digest(report)
-    return output_bytes(artifact, selected, games, report)
+    data = output_bytes(artifact, selected, games, report)
+    progress.stage_done("report-serialization", stage)
+    return data
 
 
-def run(manifest: Path, directory: Path) -> None:
+def run(manifest: Path, directory: Path, progress_every: int = 1) -> None:
     if any((directory / name).exists() for name in OUTPUTS):
         fail("output paths already exist; choose a fresh directory")
-    data = cycle(manifest)
+    progress = Progress(progress_every)
+    data = cycle(manifest, progress)
     directory.mkdir(parents=True, exist_ok=True)
     temporary = {}
+    stage = progress.stage_start("atomic-output-publication")
     try:
         for name in OUTPUTS:
             with tempfile.NamedTemporaryFile(dir=directory, prefix=f".{name}.", delete=False) as handle:
@@ -410,6 +462,7 @@ def run(manifest: Path, directory: Path) -> None:
     finally:
         for path in temporary.values():
             path.unlink(missing_ok=True)
+    progress.stage_done("atomic-output-publication", stage)
 
 
 def verify(manifest_path: Path, directory: Path) -> None:
@@ -522,6 +575,8 @@ def main(argv: list[str]) -> int:
         command = commands.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)
         command.add_argument("--output-dir", type=Path, required=True)
+        if name == "run":
+            command.add_argument("--progress-every", type=positive_interval, default=1)
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
@@ -531,7 +586,10 @@ def main(argv: list[str]) -> int:
         elif args.command == "regret-timeout":
             print(regret_timeout(args.manifest, args.output_dir))
         else:
-            (run if args.command == "run" else verify)(args.manifest, args.output_dir)
+            if args.command == "run":
+                run(args.manifest, args.output_dir, args.progress_every)
+            else:
+                verify(args.manifest, args.output_dir)
     except (training.TrainingError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as error:
         print(f"reinforcement error: {error}", file=sys.stderr)
         return 2

@@ -47,6 +47,32 @@ class OracleError(RuntimeError):
     """A fail-closed adapter error suitable for command-line reporting."""
 
 
+def positive_interval(value: str) -> int:
+    try:
+        interval = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if interval < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return interval
+
+
+class Progress:
+    def __init__(self, interval: int = 1):
+        self.interval, self.started = interval, time.monotonic()
+
+    def stage_start(self, name: str) -> float:
+        print(f"stage oracle-{name} start elapsed={time.monotonic() - self.started:.1f}s", file=sys.stderr, flush=True)
+        return time.monotonic()
+
+    def stage_done(self, name: str, started: float) -> None:
+        print(f"stage oracle-{name} done stage={time.monotonic() - started:.1f}s elapsed={time.monotonic() - self.started:.1f}s", file=sys.stderr, flush=True)
+
+    def game(self, game: int, total: int, started: float) -> None:
+        if game % self.interval == 0 or game == total:
+            print(f"progress oracle-match game={game} {game}/{total} game={time.monotonic() - started:.1f}s elapsed={time.monotonic() - self.started:.1f}s", file=sys.stderr, flush=True)
+
+
 class DepthProbabilityRange(NamedTuple):
     move_start: int
     move_end: int
@@ -1534,16 +1560,21 @@ def run_match(
     candidate_command: str,
     games: int,
     profile: OracleProfile,
-    timeout: float,
+    timeout: float, progress_every: int = 1,
 ) -> dict[str, object]:
     validate_profile(profile)
     validate_budget(1, timeout)
     if games < 1:
         die("match requires at least one game")
+    if progress_every < 1:
+        die("progress interval must be positive")
+    progress = Progress(progress_every)
+    stage = progress.stage_start("match")
     candidate = CandidateSession(candidate_command, repo_root(), timeout)
     game_reports: list[dict[str, object]] = []
     try:
         for game_index in range(games):
+            game_started = time.monotonic()
             oracle = GtpSession(binary, cwd, profile, timeout)
             try:
                 board = "".join("........" for _ in range(8))
@@ -1621,10 +1652,12 @@ def run_match(
                         "game_record": "".join(history),
                     }
                 )
+                progress.game(game_index + 1, games, game_started)
             finally:
                 oracle.close()
     finally:
         candidate.close()
+    progress.stage_done("match", stage)
 
     counts = {"candidate_win": 0, "oracle_win": 0, "draw": 0}
     for report in game_reports:
@@ -1698,6 +1731,7 @@ def command_main(argv: list[str]) -> int:
     match.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     match.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     match.add_argument("--output", type=Path)
+    match.add_argument("--progress-every", type=positive_interval, default=1)
 
     ci = subparsers.add_parser("ci")
     ci.add_argument("--corpus", type=Path, default=default_paths()[0])
@@ -1708,6 +1742,7 @@ def command_main(argv: list[str]) -> int:
     ci.add_argument("--games", type=int, default=2)
     ci.add_argument("--match-timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     ci.add_argument("--match-output", type=Path)
+    ci.add_argument("--progress-every", type=positive_interval, default=1)
 
     args = parser.parse_args(argv)
     try:
@@ -1733,7 +1768,10 @@ def command_main(argv: list[str]) -> int:
         if args.command == "generate-benchmark-corpus":
             validate_budget(1, args.timeout)
             binary, cwd = ensure_oracle(args.timeout)
+            progress = Progress()
+            stage = progress.stage_start("benchmark-self-play")
             records = run_fast_self_play(binary, cwd, 4, args.timeout)
+            progress.stage_done("benchmark-self-play", stage)
             validate_benchmark_corpus(records)
             write_jsonl(args.output, records)
             print(f"wrote {len(records)} benchmark positions to {args.output}")
@@ -1744,9 +1782,12 @@ def command_main(argv: list[str]) -> int:
             records = load_canonical_jsonl(args.corpus)
             validate_benchmark_corpus(records)
             binary, cwd = ensure_oracle(args.timeout)
+            progress = Progress()
+            stage = progress.stage_start("benchmark-reference-analysis")
             analyses = analyze_records(
                 records, binary, cwd, SEARCH_PERFORMANCE_REFERENCE_V1, args.timeout, None
             )
+            progress.stage_done("benchmark-reference-analysis", stage)
             reports = benchmark_reference_reports(records, analyses)
             write_jsonl(args.output, reports)
             print(f"wrote {len(reports)} benchmark reference reports to {args.output}")
@@ -1766,7 +1807,10 @@ def command_main(argv: list[str]) -> int:
             records = load_jsonl(args.corpus)
             validate_corpus(records)
             binary, cwd = ensure_oracle(args.timeout)
+            progress = Progress()
+            stage = progress.stage_start("analysis")
             reports = analyze_records(records, binary, cwd, profile, args.timeout, None)
+            progress.stage_done("analysis", stage)
             actual = golden_projection(reports)
             expected = load_jsonl(args.golden)
             if [canonical_json(item) for item in actual] != [canonical_json(item) for item in expected]:
@@ -1780,7 +1824,10 @@ def command_main(argv: list[str]) -> int:
             records = load_jsonl(args.corpus)
             validate_corpus(records)
             binary, cwd = ensure_oracle(args.timeout)
+            progress = Progress()
+            stage = progress.stage_start("golden-analysis")
             reports = analyze_records(records, binary, cwd, profile, args.timeout, None)
+            progress.stage_done("golden-analysis", stage)
             write_jsonl(args.output, golden_projection(reports))
             print(f"wrote {len(reports)} golden oracle reports to {args.output}")
             return 0
@@ -1791,9 +1838,12 @@ def command_main(argv: list[str]) -> int:
             records = load_jsonl(args.corpus)
             validate_corpus(records)
             binary, cwd = ensure_oracle(args.timeout)
+            progress = Progress()
+            stage = progress.stage_start("analysis")
             reports = analyze_records(
                 records, binary, cwd, profile, args.timeout, args.candidate_command
             )
+            progress.stage_done("analysis", stage)
             write_jsonl(args.output, reports)
             print(f"wrote {len(reports)} oracle reports to {args.output}")
             return 0
@@ -1803,7 +1853,7 @@ def command_main(argv: list[str]) -> int:
             validate_budget(1, args.timeout)
             binary, cwd = ensure_oracle(args.timeout)
             summary = run_match(
-                binary, cwd, args.candidate_command, args.games, profile, args.timeout
+                binary, cwd, args.candidate_command, args.games, profile, args.timeout, args.progress_every
             )
             output = canonical_json(summary)
             if args.output:
@@ -1819,7 +1869,10 @@ def command_main(argv: list[str]) -> int:
             records = load_jsonl(args.corpus)
             validate_corpus(records)
             binary, cwd = ensure_oracle(max(args.timeout, args.match_timeout))
+            progress = Progress(args.progress_every)
+            stage = progress.stage_start("ci-analysis")
             reports = analyze_records(records, binary, cwd, profile, args.timeout, None)
+            progress.stage_done("ci-analysis", stage)
             actual = golden_projection(reports)
             expected = load_jsonl(args.golden)
             if [canonical_json(item) for item in actual] != [canonical_json(item) for item in expected]:
@@ -1832,6 +1885,7 @@ def command_main(argv: list[str]) -> int:
                 args.games,
                 profile,
                 args.match_timeout,
+                args.progress_every,
             )
             output = canonical_json(summary)
             if args.match_output:

@@ -61,6 +61,13 @@ not a final 50% strength assertion.
 process, so CI builds the pinned external source once while retaining the same
 verification and match gates.
 
+Long-running oracle analysis commands write flushed stderr stage start/done
+lines around external solve batches. `oracle-match` and `oracle-ci` additionally
+write a completed terminal-game line by default; pass `--progress-every N`
+(positive) to retain each Nth game and the final game. These diagnostics do not
+alter stdout, corpus, golden, or report bytes and do not turn a failed run into
+valid evidence.
+
 The candidate protocol is line-oriented and intentionally independent of the
 oracle:
 

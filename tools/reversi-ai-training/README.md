@@ -53,13 +53,15 @@ Only a successful `verify` establishes complete input evidence.
 ```sh
 make pattern-random-prepare RANDOM_INPUT_MANIFEST=/absolute/path/input-manifest.json
 make pattern-random-generate RANDOM_INPUT_MANIFEST=/absolute/path/input-manifest.json \
-  RANDOM_INPUT_OUTPUT_DIR=/absolute/path/inputs
+  RANDOM_INPUT_OUTPUT_DIR=/absolute/path/inputs \
+  RANDOM_INPUT_PROGRESS_EVERY=1
 make pattern-random-verify RANDOM_INPUT_MANIFEST=/absolute/path/input-manifest.json \
   RANDOM_INPUT_OUTPUT_DIR=/absolute/path/inputs
 make pattern-random-train RANDOM_INPUT_MANIFEST=/absolute/path/input-manifest.json \
   RANDOM_INPUT_OUTPUT_DIR=/absolute/path/inputs \
   RANDOM_INPUT_ARTIFACT=/absolute/path/baseline.json \
-  RANDOM_INPUT_TRAIN_REPORT=/absolute/path/baseline-report.json
+  RANDOM_INPUT_TRAIN_REPORT=/absolute/path/baseline-report.json \
+  PATTERN_PROGRESS_EVERY=1
 ```
 
 Record the SHA-256 of the generator manifest, all output files, trained
@@ -68,6 +70,11 @@ compare that error against zero-weight predictions on the same held-out rows.
 These metrics do not establish playing strength. Give 0019 the exact baseline
 artifact and `inputs/validation.jsonl` paths and digests. Keep 0018 openings
 unread until its acceptance run.
+
+The trainer writes flushed stderr progress for validated and prediction-checked
+records, with start and done boundaries for loading, aggregation, metrics, and
+publication. `PATTERN_PROGRESS_EVERY=N` is a positive interval override;
+diagnostics never change the artifact or report bytes.
 
 ## One bounded reinforcement cycle
 
@@ -110,8 +117,16 @@ An agent and the test targets leave this run to the human operator.
 ```sh
 make pattern-reinforcement-run \
   REINFORCEMENT_MANIFEST=/absolute/path/cycle-manifest.json \
-  REINFORCEMENT_OUTPUT_DIR=/absolute/path/cycle-output
+  REINFORCEMENT_OUTPUT_DIR=/absolute/path/cycle-output \
+  REINFORCEMENT_PROGRESS_EVERY=1
 ```
+
+The runner writes flushed stderr diagnostics: one completed-game line by
+default, plus start and done lines for each later stage. `N/total` counts
+individual games, not pairs. Set `REINFORCEMENT_PROGRESS_EVERY=N` (a positive
+integer) to retain every Nth game and the final game for log-limited callers.
+Progress is not part of the candidate protocol or any output artifact and does
+not replace final verification.
 
 After the human run finishes, a later task validates the immutable outputs and
 records the SHA-256 of the manifest, four output files, and regret report. The

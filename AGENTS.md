@@ -33,6 +33,7 @@ This project follows the AI-Centered Development workflow.
    - **Spec First**: Update `docs/specs/` to reflect changes BEFORE modifying code.
    - **Focus**: If you find unrelated issues, log them in `docs/issues/<sequence>-<name>.md` and ignore them for the current task (unless they are blockers).
    - **Completion**: When a task is done, delete the plan file from `todo/` after verification and PR preparation. Retrieve completed plans from the implementation PR or Git history.
+    - **Long-running batches**: A plan for a long-running batch command must define its completed work unit, known total, live progress fields, meaningful stage boundaries, and a rate-control option when per-unit output can overwhelm a caller. Its black-box spec fixes the exact diagnostic format and default rate.
 
 ## When asked to "Start a new feature":
 1. Create a branch: `ww create plan/feature-name` then `cd "$(ww cd plan/feature-name)"`

@@ -1,9 +1,11 @@
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from contextlib import redirect_stderr
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("reinforcement", ROOT / "reinforcement.py")
@@ -68,6 +70,37 @@ class ReinforcementTests(unittest.TestCase):
             self.assertIn("--trained-artifact", command)
             self.assertIn("--exact-solver-empty-squares 16", command)
             self.assertEqual(reinforcement.regret_timeout(manifest, root / "first"), 5)
+
+    def test_progress_interval_stages_and_output_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self.prepare_fixture(root)
+            default_log, limited_log = io.StringIO(), io.StringIO()
+            with redirect_stderr(default_log):
+                reinforcement.run(manifest, root / "default")
+            with redirect_stderr(limited_log):
+                reinforcement.run(manifest, root / "limited", progress_every=2)
+            default_lines = [line for line in default_log.getvalue().splitlines() if line.startswith("progress self-play")]
+            limited_lines = [line for line in limited_log.getvalue().splitlines() if line.startswith("progress self-play")]
+            self.assertEqual(["1/2" in line for line in default_lines], [True, False])
+            self.assertEqual(len(limited_lines), 1)
+            self.assertIn("2/2", limited_lines[0])
+            for stage in ("self-play", "replay-tuning-extraction", "validation", "artifact-update", "metrics-selection", "report-serialization", "atomic-output-publication"):
+                self.assertIn(f"stage {stage} start", default_log.getvalue())
+                self.assertIn(f"stage {stage} done", default_log.getvalue())
+            self.assertEqual({name: (root / "default" / name).read_bytes() for name in reinforcement.OUTPUTS},
+                             {name: (root / "limited" / name).read_bytes() for name in reinforcement.OUTPUTS})
+
+    def test_progress_interval_rejects_zero_and_failure_does_not_publish(self):
+        with self.assertRaises(SystemExit):
+            reinforcement.main(["run", "--manifest", "x", "--output-dir", "y", "--progress-every", "0"])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self.prepare_fixture(root)
+            with mock.patch.object(reinforcement, "updated_artifact", side_effect=training.TrainingError("stop")):
+                with self.assertRaisesRegex(training.TrainingError, "stop"):
+                    reinforcement.run(manifest, root / "failed")
+            self.assertFalse((root / "failed" / "report.json").exists())
 
     def test_seed_and_pair_generation(self):
         self.assertEqual(reinforcement.openings(11, 4, 3), reinforcement.openings(11, 4, 3))
