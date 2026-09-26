@@ -231,7 +231,14 @@ bytes, and cannot make a failed or interrupted cycle valid.
 - Validation positions have a canonical board-and-side key disjoint from every
   tuning position. The report includes those keys so 0018 can compare its
   opening suite against both validation and tuning positions before use. The
-  baseline and updated artifact are both measured on the same validation
+  producer checks this disjointness after each completed self-play game, so a
+  collision stops the cycle before later games. Its error identifies the frozen
+  manifest, the one-based game number and total, pair and member, the decision
+  turn, the matching validation record, and compact opening/game move strings
+  (`--` denotes a pass). This diagnostic remains on stderr and never makes a
+  partial run valid. The independent verifier reports the same game context
+  for a collision in supplied game records. The baseline and updated artifact
+  are both measured on the same validation
   records by mean squared error. The updated artifact is selected only on a
   strict improvement; ties and failed gates select the baseline. The immutable
   report retains both metrics and the selected artifact digest.

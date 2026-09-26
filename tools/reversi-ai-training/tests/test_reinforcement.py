@@ -202,8 +202,53 @@ class ReinforcementTests(unittest.TestCase):
             data = training.read_json(manifest)
             data["validation"] = {"path": str(validation), "sha256": reinforcement.sha(validation), "source": "test-v1"}
             manifest.write_bytes(training.canonical_json(data) + b"\n")
-            with self.assertRaises(training.TrainingError):
-                reinforcement.cycle(manifest)
+            output = root / "output"
+            with mock.patch.object(reinforcement, "play", wraps=reinforcement.play) as played:
+                with self.assertRaises(training.TrainingError) as error:
+                    reinforcement.run(manifest, output)
+            self.assertEqual(played.call_count, 1)
+            self.assertIn(f"manifest={manifest}", str(error.exception))
+            self.assertIn("game=1/2 pair=0 member=0 turn=0", str(error.exception))
+            self.assertIn("validation_record=leak", str(error.exception))
+            self.assertIn("seed_opening=", str(error.exception))
+            self.assertIn("game_moves=", str(error.exception))
+            self.assertFalse(output.exists())
+
+    def test_overlap_diagnostic_contains_compact_move_history(self):
+        board = reinforcement.INITIAL
+        later_board = reinforcement.apply_move(board, "B", "f5")
+        game = {"pair": 3, "member": 1, "opening": ["f5", "d4"], "rotation": 4,
+                "decisions": [{"board": board, "side": "B", "move": "f5"},
+                              {"board": board, "side": "W", "move": "pass"},
+                              {"board": later_board, "side": "B", "move": "d4"}]}
+        key = training.canonical_position_key(later_board, "B")
+        with self.assertRaises(training.TrainingError) as error:
+            reinforcement.check_game_overlap(game, 8, 64, {key: "validation-17"}, Path("/tmp/frozen.json"))
+        self.assertIn("game=8/64 pair=3 member=1 turn=2", str(error.exception))
+        self.assertIn("validation_record=validation-17", str(error.exception))
+        self.assertIn("seed_opening=f5d4 rotation=4 game_moves=f5--", str(error.exception))
+
+    def test_verifier_identifies_overlapping_game(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.prepare_fixture(root)
+            output = root / "output"
+            reinforcement.run(manifest_path, output)
+            game = training.read_jsonl(output / "games.jsonl")[0]
+            record = training.read_jsonl(ROOT / "fixtures" / "reinforcement-validation-v1.jsonl")[0]
+            record["record_id"] = "overlap-in-output"
+            record["board"] = game["decisions"][0]["board"]
+            record["side"] = game["decisions"][0]["side"]
+            validation = root / "overlap.jsonl"
+            validation.write_bytes(training.canonical_json(record) + b"\n")
+            manifest = training.read_json(manifest_path)
+            manifest["validation"] = {"path": str(validation), "sha256": reinforcement.sha(validation),
+                                      "source": record["source"]}
+            manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
+            with self.assertRaises(training.TrainingError) as error:
+                reinforcement.verify(manifest_path, output)
+            self.assertIn("game=1/2 pair=0 member=0 turn=0", str(error.exception))
+            self.assertIn("validation_record=overlap-in-output", str(error.exception))
 
     def test_partial_candidate_line_obeys_timeout(self):
         with tempfile.TemporaryDirectory() as temporary:

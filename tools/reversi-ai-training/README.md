@@ -112,6 +112,13 @@ by terminating that process. A failed or interrupted cycle has no valid
 `report.json`; start over with a fresh output directory and the same frozen
 manifest.
 
+If a self-play position overlaps the pinned validation input, the run stops
+after that game and prints the manifest path, one-based game count, pair/member,
+turn, validation record id, and compact `seed_opening` and `game_moves` strings.
+`game_moves` starts at the recorded game start board; `--` marks a pass. This
+diagnostic does not produce a candidate. Changing the producer or validation
+input requires a new manifest from the corresponding clean, merged source.
+
 An agent and the test targets leave this run to the human operator.
 
 ```sh

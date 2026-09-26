@@ -343,6 +343,22 @@ def validation_keys(rows: list[dict]) -> list[str]:
     return sorted(training.canonical_position_key(row["board"], row["side"]) for row in rows)
 
 
+def check_game_overlap(game: dict, game_number: int, total: int, validation_ids: dict[str, str],
+                       manifest_path: Path) -> None:
+    moves = []
+    for turn, decision in enumerate(game["decisions"]):
+        key = training.canonical_position_key(decision["board"], decision["side"])
+        record_id = validation_ids.get(key)
+        if record_id is not None:
+            opening = "".join(game["opening"])
+            fail("validation position overlaps tuning records: "
+                 f"manifest={manifest_path} game={game_number}/{total} "
+                 f"pair={game['pair']} member={game['member']} turn={turn} "
+                 f"validation_record={record_id} seed_opening={opening} "
+                 f"rotation={game['rotation']} game_moves={''.join(moves)}")
+        moves.append("--" if decision["move"] == "pass" else decision["move"])
+
+
 def updated_artifact(baseline: dict, tuning: list[dict], manifest: dict) -> dict:
     sums = defaultdict(lambda: [0, 0])
     base = baseline["weights"]
@@ -394,6 +410,9 @@ def cycle(manifest_path: Path, progress: Progress | None = None) -> dict[str, by
     manifest, baseline_path, executable, validation_path = validate_manifest(manifest_path)
     progress = progress or Progress(1)
     baseline = training.read_json(baseline_path)
+    validation_rows = validate_positions(validation_path, [], manifest["validation"]["source"])
+    validation_ids = {training.canonical_position_key(row["board"], row["side"]): row["id"]
+                      for row in validation_rows}
     generated = openings(manifest["seed"], manifest["game_count"], manifest["opening_plies"])
     games = []
     remaining = [manifest["max_decisions"]]
@@ -403,10 +422,12 @@ def cycle(manifest_path: Path, progress: Progress | None = None) -> dict[str, by
         for pair, (board, side, opening, rotation) in enumerate(generated):
             game_started = time.monotonic()
             games.append(play(pair, 0, board, side, opening, 0, candidate, remaining))
+            check_game_overlap(games[-1], len(games), manifest["game_count"], validation_ids, manifest_path)
             progress.game(pair, 0, len(games), manifest["game_count"], game_started)
             paired_board, paired_side = rotated_pair(board, side, rotation)
             game_started = time.monotonic()
             games.append(play(pair, 1, paired_board, paired_side, opening, rotation, candidate, remaining))
+            check_game_overlap(games[-1], len(games), manifest["game_count"], validation_ids, manifest_path)
             progress.game(pair, 1, len(games), manifest["game_count"], game_started)
     finally:
         candidate.close()
@@ -481,12 +502,16 @@ def verify(manifest_path: Path, directory: Path) -> None:
     if len(games) != manifest["game_count"] or report.get("game_count") != len(games) or report.get("pair_count") != len(games) // 2:
         fail("incomplete game set")
     generated = openings(manifest["seed"], manifest["game_count"], manifest["opening_plies"])
+    validation_rows = validate_positions(validation_path, [], manifest["validation"]["source"])
+    validation_ids = {training.canonical_position_key(row["board"], row["side"]): row["id"]
+                      for row in validation_rows}
     for pair, (board, side, opening, rotation) in enumerate(generated):
         for member in (0, 1):
             game = games[2 * pair + member]
             expected_board, expected_side = (board, side) if member == 0 else rotated_pair(board, side, rotation)
             if game["pair"] != pair or game["member"] != member or game["start_board"] != expected_board or game["start_side"] != expected_side or game["opening"] != opening or game["rotation"] != (rotation if member else 0) or game["failure"] is not None:
                 fail("game pairing or opening mismatch")
+            check_game_overlap(game, 2 * pair + member + 1, manifest["game_count"], validation_ids, manifest_path)
     tuning = [row for game in games for row in replay(game)]
     if report.get("game_digests") != [game["game_digest"] for game in games] or report.get("decisions") != len(tuning) or len(tuning) > manifest["max_decisions"] or report.get("failures") != []:
         fail("game record or resource metadata mismatch")
