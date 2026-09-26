@@ -128,6 +128,12 @@ class RandomInputsTests(unittest.TestCase):
             self.assertEqual(len(lines), 3)
             self.assertIn("8/8", lines[-1])
             self.assertIn("stage random-inputs-generation start", default_log.getvalue())
+            verify_log = io.StringIO()
+            with redirect_stderr(verify_log):
+                ri.verify(manifest, root / "default", progress_every=3)
+            rebuild = [line for line in verify_log.getvalue().splitlines() if line.startswith("progress random-inputs verify-rebuild")]
+            self.assertEqual(len(rebuild), 3)
+            self.assertIn("8/8", rebuild[-1])
 
 
 if __name__ == "__main__":

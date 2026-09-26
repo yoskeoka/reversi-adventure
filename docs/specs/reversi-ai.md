@@ -255,7 +255,8 @@ N/total game=S.s elapsed=S.s`; verification writes the corresponding
 Both commands write start and done stage lines using the same stage-line forms
 above. These diagnostics are excluded from frozen manifests, reports, records,
 digests, and generated output bytes; a report written last remains the only
-completion evidence.
+completion evidence. Verification's required replay rebuild emits the same
+interval-controlled form with `verify-rebuild` as its action.
 
 ### Existing batch-tool progress
 

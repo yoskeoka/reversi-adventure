@@ -307,7 +307,8 @@ def aggregate(raw: list[dict[str, object]], records: list[dict[str, object]],
 
 def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], repetitions: int,
             time_limit_ms: int, run: Callable[[list[str]], MeasuredProcess] = run_measured,
-            start_repetition: int = 1, warmup: bool = True, progress_every: int = 1) -> dict[str, object]:
+            start_repetition: int = 1, warmup: bool = True, progress_every: int = 1,
+            progress: Progress | None = None) -> dict[str, object]:
     if repetitions < 1 or start_repetition < 1:
         raise ComparisonError("repetitions and start repetition must be positive")
     if time_limit_ms <= 0:
@@ -317,7 +318,7 @@ def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], r
     if not baseline.is_file() or not candidate.is_file():
         raise ComparisonError("baseline and candidate must be explicit executable files")
     raw: list[dict[str, object]] = []
-    progress = Progress(progress_every)
+    progress = progress or Progress(progress_every)
     stage = progress.stage("measurement")
     completed, total = 0, len(records) * repetitions
     # One unrecorded warm-up per binary and board prevents first-use effects from
@@ -439,8 +440,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if not args.baseline or not args.candidate or not args.corpus:
                 raise ComparisonError("--baseline, --candidate, and --corpus are required without --fragments")
-            report = compare(args.baseline, args.candidate, load_corpus(args.corpus), args.repetitions, args.time_limit_ms, start_repetition=args.start_repetition, warmup=not args.no_warmup, progress_every=args.progress_every)
-        progress = Progress(args.progress_every)
+            progress = Progress(args.progress_every)
+            report = compare(args.baseline, args.candidate, load_corpus(args.corpus), args.repetitions, args.time_limit_ms, start_repetition=args.start_repetition, warmup=not args.no_warmup, progress_every=args.progress_every, progress=progress)
+        if args.fragments:
+            progress = Progress(args.progress_every)
         stage = progress.stage("output-publication")
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(canonical_json(report) + "\n", encoding="utf-8")

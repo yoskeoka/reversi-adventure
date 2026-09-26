@@ -50,9 +50,11 @@ class Progress:
     def stage_done(self, name: str, started: float) -> None:
         print(f"stage {name} done stage={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
 
-    def game(self, game_id: int, split: str, completed: int, total: int, started: float) -> None:
+    def game(self, game_id: int, split: str, completed: int, total: int, started: float,
+             action: str | None = None) -> None:
         if completed % self.interval == 0 or completed == total:
-            print(f"progress random-inputs {self.action} game={game_id} split={split} {completed}/{total} game={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
+            action = action or self.action
+            print(f"progress random-inputs {action} game={game_id} split={split} {completed}/{total} game={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
 
 
 def reject(message: str) -> None:
@@ -224,7 +226,8 @@ def play(game_id: int, split: str, manifest: dict) -> tuple[dict, list[dict], in
     return game, rows, placements
 
 
-def build(manifest: dict, progress: Progress | None = None) -> tuple[dict[str, bytes], dict]:
+def build(manifest: dict, progress: Progress | None = None,
+          progress_action: str | None = None) -> tuple[dict[str, bytes], dict]:
     mapping = {game_id: split for split in SPLITS for game_id in manifest["game_ids"][split]}
     games, records = [], {split: [] for split in SPLITS}
     seen = set()
@@ -240,7 +243,7 @@ def build(manifest: dict, progress: Progress | None = None) -> tuple[dict[str, b
         game, candidates, _ = play(game_id, split, manifest)
         games.append(game)
         if progress:
-            progress.game(game_id, split, len(games), total, game_started)
+            progress.game(game_id, split, len(games), total, game_started, progress_action)
         turns[split] += len(game["turns"])
         for row in candidates:
             key = training.canonical_position_key(row["board"], row["side"])
@@ -339,7 +342,7 @@ def verify(manifest_path: Path, output: Path, progress_every: int = 1) -> dict:
         progress.game(game["game_id"], game["split"], completed, len(games), game_started)
     progress.stage_done("random-inputs-verification", stage)
     stage = progress.stage_start("random-inputs-rebuild")
-    blobs, report = build(manifest)
+    blobs, report = build(manifest, progress, "verify-rebuild")
     progress.stage_done("random-inputs-rebuild", stage)
     report["manifest_sha256"] = training.sha256_file(manifest_path)
     for name, data in blobs.items():
