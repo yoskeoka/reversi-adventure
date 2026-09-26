@@ -15,12 +15,17 @@ or another log-limited caller. An interval of `N` writes each `N`th completed
 game and the final game. The default is `1`. Logging changes no game result,
 artifact bytes, manifest identity, or fail-closed completion.
 
+Agents planning a future long-running batch command must define equivalent
+visible progress for its own completed work units. They must also state how a
+log-limited caller can reduce per-unit output when that command needs it.
+
 The already frozen 0019 manifest at source commit `77e6fa6` and its human-run
 process keep their original producer. This plan applies to future runs from a
 new source commit; it does not restart, attach to, or monitor the current run.
 
 ## Existing references
 
+- `AGENTS.md:9-35` -- repository-wide planning and spec-first work rules.
 - `docs/specs/reversi-ai.md:182-235` -- bounded reinforcement observable
   contract and human-operated run boundary.
 - `Makefile:42-49, 90-91` -- 64-game run defaults and the current run target.
@@ -34,6 +39,8 @@ new source commit; it does not restart, attach to, or monitor the current run.
 
 ## Change map
 
+- (MODIFY) `AGENTS.md` -- require plans for long-running batch commands to
+  define completed-unit progress, stage visibility, and a log-rate control.
 - (MODIFY) `docs/specs/reversi-ai.md` -- state the reinforcement run's visible
   progress contract before code changes.
 - (MODIFY) `Makefile` -- expose the default-one-game `REINFORCEMENT_PROGRESS_EVERY`
@@ -78,6 +85,11 @@ new source commit; it does not restart, attach to, or monitor the current run.
    Any later production run with new logging needs a newly frozen manifest and
    its own human-operated command. No AI-started or AI-monitored production run
    is introduced.
+6. Add a repository rule in `AGENTS.md`: when an Agent plans a long-running
+   batch command, its plan states the completed unit, total when known, live
+   progress fields, meaningful stage lines, and a rate-control option when
+   per-unit logs can overwhelm a consumer. The command's black-box spec fixes
+   the exact format and default. This plan applies that rule to reinforcement.
 
 ## Dependencies and sequencing
 
