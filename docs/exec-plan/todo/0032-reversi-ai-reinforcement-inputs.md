@@ -49,11 +49,13 @@ The human runs the separate, long 0019 command.
 1. Freeze a versioned generator manifest before play. It identifies the merged
    source commit and generator digest, `CC0-1.0` project-owned provenance,
    master seed, per-game seed derivation and random-move rule, split game
-   counts, record start ply, maximum turns,
-   and output schema. The initial bounded configuration is 2,048 training,
+   counts, record start ply, maximum turns, and output schema. The initial
+   bounded configuration is 2,048 training,
    256 validation, and 256 trainer-held-out games with records beginning after
-   eight legal placements: at most about 133,000 sampled decisions before
-   duplicate removal. The command may override counts only before the
+   eight legal placements. This yields at most 133,120 placement decisions
+   before duplicate removal, plus possible pass turns. Set `maximum turns` to
+   128, including passes, for a hard bound of 327,680 turns across all games.
+   The command may override counts only before the
    manifest is frozen; each split must contain complete games. A small timing
    pilot must establish a wall-clock and peak-memory cap before production
    generation; if the configuration exceeds the cap, revise and freeze a new
@@ -63,12 +65,17 @@ The human runs the separate, long 0019 command.
    ids must produce distinct seeds. Start every game from the canonical initial
    board. Select uniformly among sorted legal moves with that game's PRNG.
    Pass only when required, finish at the actual game-over state, and use the
-   final black-minus-white disc
-   count to label each recorded position from its side's perspective. Do not
+   final black-minus-white disc count to label each recorded position from its
+   side's perspective. Do not
    replace this target with the search engine's wipeout `+64/-64` score.
    Record every move, pass, terminal board, disc counts, game seed/id, and a
    game digest. A malformed, timed-out, or incomplete game fails the set.
-3. Assign whole games to `train`, `validation`, or `held_out` before generation.
+3. Number games globally, assign them to `train`, `validation`, or `held_out`
+   with a seeded shuffle that is separate from the per-game move streams, and
+   freeze the exact game-id lists in the manifest. The verifier recomputes
+   this assignment. Define phase by placements since the initial board:
+   opening 8-20, midgame 21-44, and endgame 45-59; terminal positions are
+   excluded. Count a forced pass in its current phase.
    Emit nonterminal version-1 records only after the configured start ply.
    Deduplicate by the canonical absolute-color D4 board plus side key across
    all splits in deterministic game/turn order, while retaining all skipped
@@ -80,8 +87,9 @@ The human runs the separate, long 0019 command.
    remain disjoint from both training and held-out records.
 4. Emit canonical JSONL, a version-1 training manifest that pins each split
    input's SHA-256/source/license, and a report that pins every game, split,
-   output digest, record count, phase count, and target range. Write the report
-   last as the completion marker. A verifier independently replays games,
+   output digest, turn count including passes, record count, phase count, and
+   target range. Write the report last as the completion marker. A verifier
+   independently replays games,
    recalculates targets and canonical keys, and rejects missing, extra, changed,
    or cross-split records. Identical frozen inputs produce byte-identical
    outputs.
