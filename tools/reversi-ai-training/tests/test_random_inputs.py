@@ -48,6 +48,13 @@ class RandomInputsTests(unittest.TestCase):
                        config["record_start_placements"], config["max_turns"],
                        require_clean=False)
             manifest = ri.check_manifest(manifest_path)
+            bad_manifest = dict(manifest)
+            bad_manifest["producer_sources"] = dict(manifest["producer_sources"])
+            bad_manifest["producer_sources"]["training.py"] = "0" * 64
+            bad_path = root / "bad-manifest.json"
+            bad_path.write_bytes(ri.canonical(bad_manifest))
+            with self.assertRaises(training.TrainingError):
+                ri.check_manifest(bad_path)
             ri.generate(manifest_path, root / "one")
             ri.generate(manifest_path, root / "two")
             report = ri.verify(manifest_path, root / "one")
