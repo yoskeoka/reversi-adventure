@@ -17,10 +17,12 @@ BENCHMARK_CANDIDATE ?=
 BENCHMARK_REPORT ?= /tmp/reversi-adventure-search-comparison-v1.json
 BENCHMARK_REPETITIONS ?= 5
 BENCHMARK_TIME_LIMIT_MS ?= 300000
+BENCHMARK_PROGRESS_EVERY ?= 1
 PATTERN_TRAINER := tools/reversi-ai-training/training.py
 PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-manifest.json
 PATTERN_ARTIFACT ?= /tmp/reversi-adventure-pattern-artifact.json
 PATTERN_REPORT ?= /tmp/reversi-adventure-pattern-report.json
+PATTERN_PROGRESS_EVERY ?= 1
 RANDOM_INPUT_TOOL := tools/reversi-ai-training/random_inputs.py
 RANDOM_INPUT_MANIFEST ?= /tmp/reversi-adventure-random-inputs-manifest.json
 RANDOM_INPUT_OUTPUT_DIR ?= /tmp/reversi-adventure-random-inputs
@@ -28,6 +30,7 @@ RANDOM_INPUT_TRAIN_GAMES ?= 2048
 RANDOM_INPUT_VALIDATION_GAMES ?= 256
 RANDOM_INPUT_HELD_OUT_GAMES ?= 256
 RANDOM_INPUT_SEED ?= 20260926
+RANDOM_INPUT_PROGRESS_EVERY ?= 1
 RANDOM_INPUT_ARTIFACT ?= /tmp/reversi-adventure-random-baseline.json
 RANDOM_INPUT_TRAIN_REPORT ?= /tmp/reversi-adventure-random-baseline-report.json
 REINFORCEMENT_TOOL := tools/reversi-ai-training/reinforcement.py
@@ -47,6 +50,7 @@ REINFORCEMENT_TIME_LIMIT_MS ?= 300000
 REINFORCEMENT_NODE_LIMIT ?= 10000000
 REINFORCEMENT_DECISION_TIMEOUT_SECONDS ?= 310
 REINFORCEMENT_MAX_DECISIONS ?= 7680
+REINFORCEMENT_PROGRESS_EVERY ?= 1
 AI_EVALUATOR ?= strategic
 AI_OPENING_DEPTH ?= 3
 AI_MIDGAME_DEPTH ?= 4
@@ -73,13 +77,13 @@ pattern-random-prepare:
 	$(PYTHON) $(RANDOM_INPUT_TOOL) prepare --manifest "$(RANDOM_INPUT_MANIFEST)" --seed $(RANDOM_INPUT_SEED) --train-games $(RANDOM_INPUT_TRAIN_GAMES) --validation-games $(RANDOM_INPUT_VALIDATION_GAMES) --held-out-games $(RANDOM_INPUT_HELD_OUT_GAMES)
 
 pattern-random-generate:
-	$(PYTHON) $(RANDOM_INPUT_TOOL) generate --manifest "$(RANDOM_INPUT_MANIFEST)" --output-dir "$(RANDOM_INPUT_OUTPUT_DIR)"
+	$(PYTHON) $(RANDOM_INPUT_TOOL) generate --manifest "$(RANDOM_INPUT_MANIFEST)" --output-dir "$(RANDOM_INPUT_OUTPUT_DIR)" --progress-every $(RANDOM_INPUT_PROGRESS_EVERY)
 
 pattern-random-verify:
-	$(PYTHON) $(RANDOM_INPUT_TOOL) verify --manifest "$(RANDOM_INPUT_MANIFEST)" --output-dir "$(RANDOM_INPUT_OUTPUT_DIR)"
+	$(PYTHON) $(RANDOM_INPUT_TOOL) verify --manifest "$(RANDOM_INPUT_MANIFEST)" --output-dir "$(RANDOM_INPUT_OUTPUT_DIR)" --progress-every $(RANDOM_INPUT_PROGRESS_EVERY)
 
 pattern-random-train: pattern-random-verify
-	$(PYTHON) $(PATTERN_TRAINER) train --manifest "$(RANDOM_INPUT_OUTPUT_DIR)/trainer-manifest.json" --artifact "$(RANDOM_INPUT_ARTIFACT)" --report "$(RANDOM_INPUT_TRAIN_REPORT)"
+	$(PYTHON) $(PATTERN_TRAINER) train --manifest "$(RANDOM_INPUT_OUTPUT_DIR)/trainer-manifest.json" --artifact "$(RANDOM_INPUT_ARTIFACT)" --report "$(RANDOM_INPUT_TRAIN_REPORT)" --progress-every $(PATTERN_PROGRESS_EVERY)
 	$(PYTHON) $(PATTERN_TRAINER) validate --artifact "$(RANDOM_INPUT_ARTIFACT)"
 
 pattern-reinforcement-prepare:
@@ -88,7 +92,7 @@ pattern-reinforcement-prepare:
 
 # This is a human-operated long-running command; it is never a test prerequisite.
 pattern-reinforcement-run:
-	$(PYTHON) $(REINFORCEMENT_TOOL) run --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)"
+	$(PYTHON) $(REINFORCEMENT_TOOL) run --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)" --progress-every $(REINFORCEMENT_PROGRESS_EVERY)
 
 pattern-reinforcement-verify:
 	$(PYTHON) $(REINFORCEMENT_TOOL) verify --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)"
@@ -142,4 +146,4 @@ benchmark-reference-verify:
 
 benchmark-compare:
 	@test -n "$(BENCHMARK_BASELINE)" && test -n "$(BENCHMARK_CANDIDATE)" || (echo "BENCHMARK_BASELINE and BENCHMARK_CANDIDATE must name explicit release profiler binaries" >&2; exit 2)
-	$(PYTHON) $(BENCHMARK_COMPARATOR) --baseline "$(BENCHMARK_BASELINE)" --candidate "$(BENCHMARK_CANDIDATE)" --corpus $(BENCHMARK_CORPUS) --output $(BENCHMARK_REPORT) --repetitions $(BENCHMARK_REPETITIONS) --time-limit-ms $(BENCHMARK_TIME_LIMIT_MS)
+	$(PYTHON) $(BENCHMARK_COMPARATOR) --baseline "$(BENCHMARK_BASELINE)" --candidate "$(BENCHMARK_CANDIDATE)" --corpus $(BENCHMARK_CORPUS) --output $(BENCHMARK_REPORT) --repetitions $(BENCHMARK_REPETITIONS) --time-limit-ms $(BENCHMARK_TIME_LIMIT_MS) --progress-every $(BENCHMARK_PROGRESS_EVERY)

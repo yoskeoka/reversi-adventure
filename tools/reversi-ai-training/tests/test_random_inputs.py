@@ -1,9 +1,11 @@
 """Complete random-game inputs and fail-closed output verification."""
 
 import json
+import io
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 TOOL = Path(__file__).resolve().parents[1]
@@ -108,6 +110,30 @@ class RandomInputsTests(unittest.TestCase):
                 ri.verify(manifest, output)
             validation_path.write_bytes(validation_bytes)
             ri.verify(manifest, output)
+
+    def test_progress_interval_preserves_generated_bytes(self):
+        config = self.fixture()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = root / "manifest.json"
+            ri.prepare(manifest, config["seed"], config["counts"], 8, 128, require_clean=False)
+            default_log, limited_log = io.StringIO(), io.StringIO()
+            with redirect_stderr(default_log):
+                ri.generate(manifest, root / "default")
+            with redirect_stderr(limited_log):
+                ri.generate(manifest, root / "limited", progress_every=3)
+            self.assertEqual({path.name: path.read_bytes() for path in (root / "default").iterdir()},
+                             {path.name: path.read_bytes() for path in (root / "limited").iterdir()})
+            lines = [line for line in limited_log.getvalue().splitlines() if line.startswith("progress random-inputs generate")]
+            self.assertEqual(len(lines), 3)
+            self.assertIn("8/8", lines[-1])
+            self.assertIn("stage random-inputs-generation start", default_log.getvalue())
+            verify_log = io.StringIO()
+            with redirect_stderr(verify_log):
+                ri.verify(manifest, root / "default", progress_every=3)
+            rebuild = [line for line in verify_log.getvalue().splitlines() if line.startswith("progress random-inputs verify-rebuild")]
+            self.assertEqual(len(rebuild), 3)
+            self.assertIn("8/8", rebuild[-1])
 
 
 if __name__ == "__main__":

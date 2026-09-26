@@ -205,6 +205,18 @@ The producer rejects changed inputs before any game. A human starts the
 production command in a separate terminal. An agent may prepare the manifest
 and validate completed files without running or monitoring that command.
 
+The reinforcement `run` command writes flushed diagnostic progress only to
+stderr. It writes `stage NAME start elapsed=S.s` and `stage NAME done
+stage=S.s elapsed=S.s` for self-play, replay/tuning extraction, validation,
+artifact update, metrics/selection, report serialization, and atomic output
+publication. After each completed terminal self-play game and its digest, the
+default `--progress-every 1` writes `progress self-play pair=P member=M
+N/total game=S.s elapsed=S.s`, where `total` is the manifest individual game
+count. A positive larger interval writes completed-game lines only at interval
+multiples and at the final game. These monotonic-clock diagnostics do not
+enter the candidate protocol, manifest, reports, records, digests, or output
+bytes, and cannot make a failed or interrupted cycle valid.
+
 - Each seeded opening is generated from legal moves and yields exactly two
   games: one original position and one color-swapped D4 rotation. The report
   records the opening, every decision and pass, terminal board and disc counts,
@@ -231,6 +243,39 @@ and validate completed files without running or monitoring that command.
 - Corpus regret under `strong-engine-hcap-v1` is a separate evaluation-only
   report for the selected artifact. The 0018 held-out opening suite is not read
   during generation, update, selection, or corpus regret.
+
+### Random-game input batch progress
+
+The existing random-input `generate` and `verify` commands can process up to
+2,560 complete games. They write flushed stderr-only diagnostics with the
+same positive `--progress-every` rate control (default `1`). For each terminal
+game, generation writes `progress random-inputs generate game=ID split=S
+N/total game=S.s elapsed=S.s`; verification writes the corresponding
+`progress random-inputs verify game=ID split=S N/total game=S.s elapsed=S.s`.
+Both commands write start and done stage lines using the same stage-line forms
+above. These diagnostics are excluded from frozen manifests, reports, records,
+digests, and generated output bytes; a report written last remains the only
+completion evidence. Verification's required replay rebuild emits the same
+interval-controlled form with `verify-rebuild` as its action.
+
+### Existing batch-tool progress
+
+The offline pattern trainer writes flushed stderr-only start/done stage lines
+and, by default, a line for every validated and prediction-checked record:
+`progress pattern-training ACTION record=ID split=S N/total record=S.s
+elapsed=S.s`. `train --progress-every N` is a positive interval override; its
+diagnostics are not artifact or report content. The release comparator writes
+`progress benchmark position=ID repetition=R N/total pair=S.s elapsed=S.s`
+after each completed baseline/candidate pair, plus measurement, aggregation,
+and publication stages; `--progress-every` defaults to one.
+
+Oracle analysis and benchmark-reference commands write flushed stage start and
+done diagnostics around their indivisible external solve batches, without
+changing query ordering or adding artificial solve units. Oracle `match` and
+`ci` write `progress oracle-match game=N N/total game=S.s elapsed=S.s` after
+each terminal game; their positive `--progress-every` interval defaults to
+one. All of these lines are diagnostic stderr only and never establish a
+successful report or alter its bytes.
 
 ### StrategicEvaluator
 
