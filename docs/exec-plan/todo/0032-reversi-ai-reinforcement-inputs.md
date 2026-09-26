@@ -4,18 +4,15 @@
 
 ## Objective and completion boundary
 
-Produce one reproducible baseline pattern artifact and one independent
-validation JSONL for the human-operated 0019 cycle. Derive labelled positions
-from complete, legal, uniformly random project-owned games. Freeze the random
-seed, game split, source version, input digests, and generated artifact/report
-digests. The output is an input preparation step, not evidence that random play
-is a strong policy or that 0018's win target has been met.
+Produce one repeatable baseline pattern artifact and one separate validation
+JSONL for the human-run 0019 cycle. Draw labelled positions from complete,
+legal random games. Freeze the seed, game split, source version, and file
+digests. Later tests will measure playing strength against the 0018 target.
 
-The current checked-in `tiny` trainer and validation files are test fixtures.
-Do not use them as the production baseline or selection set. This plan ends
-after the generated inputs, trainer output, and their independent verification
-are recorded. The separate 0019 long-running command remains human-operated;
-an AI agent does not start or monitor it.
+The checked-in `tiny` trainer and validation files serve as test fixtures.
+This plan creates fresh data for the production baseline and selection set.
+It ends when the inputs, trainer output, and independent checks are recorded.
+The human runs the separate, long 0019 command.
 
 ## Existing references
 
@@ -65,8 +62,8 @@ an AI agent does not start or monitor it.
    globally unique game id using a specified stable algorithm. Distinct game
    ids must produce distinct seeds. Start every game from the canonical initial
    board. Select uniformly among sorted legal moves with that game's PRNG.
-   Pass only when required, finish
-   at the actual game-over state, and use the final black-minus-white disc
+   Pass only when required, finish at the actual game-over state, and use the
+   final black-minus-white disc
    count to label each recorded position from its side's perspective. Do not
    replace this target with the search engine's wipeout `+64/-64` score.
    Record every move, pass, terminal board, disc counts, game seed/id, and a
@@ -79,8 +76,8 @@ an AI agent does not start or monitor it.
    and report per-split, per-phase and legal-move-count distributions, plus
    duplicate counts. Require coverage of opening, midgame, and endgame
    positions in every split; fail before training if any phase is empty. The
-   validation JSONL must have the provenance fields expected by 0019 and remain disjoint
-   from both training and held-out records.
+   validation JSONL must have the provenance fields expected by 0019 and
+   remain disjoint from both training and held-out records.
 4. Emit canonical JSONL, a version-1 training manifest that pins each split
    input's SHA-256/source/license, and a report that pins every game, split,
    output digest, record count, phase count, and target range. Write the report
@@ -92,7 +89,7 @@ an AI agent does not start or monitor it.
    baseline artifact and report, record their SHA-256 and declared digests,
    held-out metrics, phase coverage, and nonzero-weight counts. Compare the
    trained artifact against a zero-weight baseline on the held-out records;
-   report whether its held-out error actually improves. These diagnostics are
+   report whether its held-out error improves. These diagnostics are
    not a strength claim. Give 0019 the exact baseline artifact
    and separate validation JSONL paths/digests. Keep 0018 openings unread;
    0018 later compares its suite keys with these positions and 0019 evidence.
