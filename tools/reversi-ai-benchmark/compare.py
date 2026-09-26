@@ -30,6 +30,34 @@ class ComparisonError(RuntimeError):
     pass
 
 
+def positive_interval(value: str) -> int:
+    try:
+        interval = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if interval < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return interval
+
+
+class Progress:
+    def __init__(self, interval: int):
+        self.interval = interval
+        self.started = time.monotonic()
+
+    def stage(self, name: str, start: float | None = None) -> float | None:
+        elapsed = time.monotonic() - self.started
+        if start is None:
+            print(f"stage benchmark-{name} start elapsed={elapsed:.1f}s", file=sys.stderr, flush=True)
+            return time.monotonic()
+        print(f"stage benchmark-{name} done stage={time.monotonic() - start:.1f}s elapsed={elapsed:.1f}s", file=sys.stderr, flush=True)
+        return None
+
+    def unit(self, position: str, repetition: int, completed: int, total: int, start: float) -> None:
+        if completed % self.interval == 0 or completed == total:
+            print(f"progress benchmark position={position} repetition={repetition} {completed}/{total} pair={time.monotonic() - start:.1f}s elapsed={time.monotonic() - self.started:.1f}s", file=sys.stderr, flush=True)
+
+
 class MeasuredProcess(NamedTuple):
     returncode: int
     stdout: str
@@ -279,14 +307,19 @@ def aggregate(raw: list[dict[str, object]], records: list[dict[str, object]],
 
 def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], repetitions: int,
             time_limit_ms: int, run: Callable[[list[str]], MeasuredProcess] = run_measured,
-            start_repetition: int = 1, warmup: bool = True) -> dict[str, object]:
+            start_repetition: int = 1, warmup: bool = True, progress_every: int = 1) -> dict[str, object]:
     if repetitions < 1 or start_repetition < 1:
         raise ComparisonError("repetitions and start repetition must be positive")
     if time_limit_ms <= 0:
         raise ComparisonError("time limit must be positive")
+    if progress_every < 1:
+        raise ComparisonError("progress interval must be positive")
     if not baseline.is_file() or not candidate.is_file():
         raise ComparisonError("baseline and candidate must be explicit executable files")
     raw: list[dict[str, object]] = []
+    progress = Progress(progress_every)
+    stage = progress.stage("measurement")
+    completed, total = 0, len(records) * repetitions
     # One unrecorded warm-up per binary and board prevents first-use effects from
     # entering samples, while alternating the recorded order controls drift.
     for record in records:
@@ -294,6 +327,7 @@ def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], r
             invoke(baseline, record, time_limit_ms, run)
             invoke(candidate, record, time_limit_ms, run)
         for repetition in range(start_repetition, start_repetition + repetitions):
+            pair_started = time.monotonic()
             order = (("baseline", baseline), ("candidate", candidate)) if repetition % 2 else (("candidate", candidate), ("baseline", baseline))
             for label, binary in order:
                 sample = invoke(binary, record, time_limit_ms, run)
@@ -302,7 +336,12 @@ def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], r
                 raw.append({"binary": label, "position_id": record["position_id"],
                             "repetition": repetition, "workload": workload(record),
                             "sample": sample, "resource_usage": resources})
+            completed += 1
+            progress.unit(str(record["position_id"]), repetition, completed, total, pair_started)
+    progress.stage("measurement", stage)
+    stage = progress.stage("aggregation")
     positions, workloads = aggregate(raw, records, list(range(start_repetition, start_repetition + repetitions)))
+    progress.stage("aggregation", stage)
     return {"schema_version": 2, "runner_version": RUNNER_VERSION, "repetitions": repetitions, "start_repetition": start_repetition, "time_limit_ms": time_limit_ms, "binaries": {"baseline": {"path": str(baseline), "sha256": sha256_file(baseline)}, "candidate": {"path": str(candidate), "sha256": sha256_file(candidate)}}, "environment": environment(), "raw_samples": raw, "positions": positions, "workloads": workloads}
 
 
@@ -381,6 +420,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-warmup", action="store_true")
     parser.add_argument("--fragments", type=Path, nargs="+")
     parser.add_argument("--time-limit-ms", type=int, default=300000)
+    parser.add_argument("--progress-every", type=positive_interval, default=1)
     args = parser.parse_args(argv)
     try:
         if args.verify_report:
@@ -399,9 +439,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if not args.baseline or not args.candidate or not args.corpus:
                 raise ComparisonError("--baseline, --candidate, and --corpus are required without --fragments")
-            report = compare(args.baseline, args.candidate, load_corpus(args.corpus), args.repetitions, args.time_limit_ms, start_repetition=args.start_repetition, warmup=not args.no_warmup)
+            report = compare(args.baseline, args.candidate, load_corpus(args.corpus), args.repetitions, args.time_limit_ms, start_repetition=args.start_repetition, warmup=not args.no_warmup, progress_every=args.progress_every)
+        progress = Progress(args.progress_every)
+        stage = progress.stage("output-publication")
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(canonical_json(report) + "\n", encoding="utf-8")
+        progress.stage("output-publication", stage)
     except ComparisonError as exc:
         parser.error(str(exc))
     return 0

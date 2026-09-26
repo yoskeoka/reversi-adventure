@@ -34,7 +34,8 @@ Build `main` and the candidate separately, on the same host, then run:
 make benchmark-compare \
   BENCHMARK_BASELINE=/absolute/path/to/main/reversi-ai-search-profile \
   BENCHMARK_CANDIDATE=/absolute/path/to/candidate/reversi-ai-search-profile \
-  BENCHMARK_REPORT=/absolute/path/to/report.json
+  BENCHMARK_REPORT=/absolute/path/to/report.json \
+  BENCHMARK_PROGRESS_EVERY=1
 ```
 
 It warms each binary once per board, alternates each measured pair, and records
@@ -42,3 +43,7 @@ five repetitions by default. The report is canonical JSON with raw samples,
 semantic search results, environment/build data, medians, and workload
 geometric means. It rejects incomplete samples. It has no speed threshold:
 only a human-run same-host release report is performance evidence.
+It writes flushed stderr progress after each complete baseline/candidate
+position-repetition pair, and stage boundaries for measurement, aggregation,
+and publication. Set the positive `BENCHMARK_PROGRESS_EVERY` interval to limit
+pair lines; diagnostics never change the JSON report.

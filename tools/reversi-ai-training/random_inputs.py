@@ -8,6 +8,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -19,6 +20,39 @@ SOURCE = "project-owned-random-games-v1"
 COUNTS = {"train": 2048, "validation": 256, "held_out": 256}
 SPLITS = ("train", "validation", "held_out")
 MASK = (1 << 64) - 1
+
+
+def positive_interval(value: str) -> int:
+    try:
+        interval = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if interval < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return interval
+
+
+class Progress:
+    def __init__(self, action: str, interval: int):
+        if interval < 1:
+            reject("progress interval must be a positive integer")
+        self.action = action
+        self.interval = interval
+        self.started = time.monotonic()
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
+
+    def stage_start(self, name: str) -> float:
+        print(f"stage {name} start elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
+        return time.monotonic()
+
+    def stage_done(self, name: str, started: float) -> None:
+        print(f"stage {name} done stage={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
+
+    def game(self, game_id: int, split: str, completed: int, total: int, started: float) -> None:
+        if completed % self.interval == 0 or completed == total:
+            print(f"progress random-inputs {self.action} game={game_id} split={split} {completed}/{total} game={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
 
 
 def reject(message: str) -> None:
@@ -190,7 +224,7 @@ def play(game_id: int, split: str, manifest: dict) -> tuple[dict, list[dict], in
     return game, rows, placements
 
 
-def build(manifest: dict) -> tuple[dict[str, bytes], dict]:
+def build(manifest: dict, progress: Progress | None = None) -> tuple[dict[str, bytes], dict]:
     mapping = {game_id: split for split in SPLITS for game_id in manifest["game_ids"][split]}
     games, records = [], {split: [] for split in SPLITS}
     seen = set()
@@ -199,10 +233,14 @@ def build(manifest: dict) -> tuple[dict[str, bytes], dict]:
     legal_counts = {split: Counter() for split in SPLITS}
     turns = {split: 0 for split in SPLITS}
     targets = {split: [] for split in SPLITS}
-    for game_id in range(sum(manifest["counts"].values())):
+    total = sum(manifest["counts"].values())
+    for game_id in range(total):
         split = mapping[game_id]
+        game_started = time.monotonic()
         game, candidates, _ = play(game_id, split, manifest)
         games.append(game)
+        if progress:
+            progress.game(game_id, split, len(games), total, game_started)
         turns[split] += len(game["turns"])
         for row in candidates:
             key = training.canonical_position_key(row["board"], row["side"])
@@ -268,19 +306,24 @@ def verify_game(game: dict, manifest: dict) -> None:
         reject("nonterminal game log")
 
 
-def generate(manifest_path: Path, output: Path) -> None:
+def generate(manifest_path: Path, output: Path, progress_every: int = 1) -> None:
     manifest = check_manifest(manifest_path)
     if output.exists() and any(output.iterdir()):
         reject("output directory must be empty")
-    blobs, report = build(manifest)
+    progress = Progress("generate", progress_every)
+    stage = progress.stage_start("random-inputs-generation")
+    blobs, report = build(manifest, progress)
+    progress.stage_done("random-inputs-generation", stage)
     report["manifest_sha256"] = training.sha256_file(manifest_path)
     output.mkdir(parents=True, exist_ok=True)
+    stage = progress.stage_start("random-inputs-output-publication")
     for name, data in blobs.items():
         (output / name).write_bytes(data)
     (output / "report.json").write_bytes(canonical(report))
+    progress.stage_done("random-inputs-output-publication", stage)
 
 
-def verify(manifest_path: Path, output: Path) -> dict:
+def verify(manifest_path: Path, output: Path, progress_every: int = 1) -> dict:
     manifest = check_manifest(manifest_path)
     expected_names = {"games.jsonl", "train.jsonl", "validation.jsonl", "held_out.jsonl", "trainer-manifest.json", "report.json"}
     if not output.is_dir() or {path.name for path in output.iterdir()} != expected_names:
@@ -288,9 +331,16 @@ def verify(manifest_path: Path, output: Path) -> dict:
     games = training.read_jsonl(output / "games.jsonl")
     if len(games) != sum(manifest["counts"].values()):
         reject("incomplete game set")
-    for game in games:
+    progress = Progress("verify", progress_every)
+    stage = progress.stage_start("random-inputs-verification")
+    for completed, game in enumerate(games, start=1):
+        game_started = time.monotonic()
         verify_game(game, manifest)
+        progress.game(game["game_id"], game["split"], completed, len(games), game_started)
+    progress.stage_done("random-inputs-verification", stage)
+    stage = progress.stage_start("random-inputs-rebuild")
     blobs, report = build(manifest)
+    progress.stage_done("random-inputs-rebuild", stage)
     report["manifest_sha256"] = training.sha256_file(manifest_path)
     for name, data in blobs.items():
         if (output / name).read_bytes() != data:
@@ -316,15 +366,16 @@ def main(argv: list[str]) -> int:
         command = commands.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)
         command.add_argument("--output-dir", type=Path, required=True)
+        command.add_argument("--progress-every", type=positive_interval, default=1)
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
             counts = {split: getattr(args, f"{split}_games") for split in SPLITS}
             prepare(args.manifest, args.seed, counts, args.record_start_placements, args.max_turns)
         elif args.command == "generate":
-            generate(args.manifest, args.output_dir)
+            generate(args.manifest, args.output_dir, args.progress_every)
         else:
-            verify(args.manifest, args.output_dir)
+            verify(args.manifest, args.output_dir, args.progress_every)
     except (training.TrainingError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"random inputs error: {error}", file=sys.stderr)
         return 2

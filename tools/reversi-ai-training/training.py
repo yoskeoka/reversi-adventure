@@ -13,6 +13,7 @@ import json
 import math
 import random
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,34 @@ BASE_PATTERNS = (
 
 class TrainingError(ValueError):
     """A malformed input or unsafe artifact.  All callers fail closed."""
+
+
+def positive_interval(value: str) -> int:
+    try:
+        interval = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if interval < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return interval
+
+
+class Progress:
+    def __init__(self, interval: int):
+        if interval < 1:
+            raise TrainingError("progress interval must be a positive integer")
+        self.interval, self.started = interval, time.monotonic()
+
+    def stage_start(self, name: str) -> float:
+        print(f"stage pattern-training-{name} start elapsed={time.monotonic() - self.started:.1f}s", file=sys.stderr, flush=True)
+        return time.monotonic()
+
+    def stage_done(self, name: str, started: float) -> None:
+        print(f"stage pattern-training-{name} done stage={time.monotonic() - started:.1f}s elapsed={time.monotonic() - self.started:.1f}s", file=sys.stderr, flush=True)
+
+    def record(self, action: str, record: dict[str, Any], completed: int, total: int, started: float) -> None:
+        if completed % self.interval == 0 or completed == total:
+            print(f"progress pattern-training {action} record={record['id']} split={record['split']} {completed}/{total} record={time.monotonic() - started:.1f}s elapsed={time.monotonic() - self.started:.1f}s", file=sys.stderr, flush=True)
 
 
 def canonical_json(value: Any) -> bytes:
@@ -188,10 +217,13 @@ def validate_manifest(manifest: dict[str, Any], root: Path) -> list[tuple[dict[s
     return loaded
 
 
-def validate_records(loaded: list[tuple[dict[str, Any], list[dict[str, Any]]]]) -> list[dict[str, Any]]:
+def validate_records(loaded: list[tuple[dict[str, Any], list[dict[str, Any]]]], progress: Progress | None = None) -> list[dict[str, Any]]:
     result, seen = [], set()
+    completed = 0
+    total = sum(len(records) for _, records in loaded)
     for input_entry, records in loaded:
         for record in records:
+            started = time.monotonic()
             if record.get("schema_version") != FORMAT_VERSION or not isinstance(record.get("record_id"), str):
                 raise TrainingError("record schema_version and record_id are required")
             if any(record.get(key) != input_entry[key] for key in ("source", "license", "source_digest")):
@@ -212,8 +244,12 @@ def validate_records(loaded: list[tuple[dict[str, Any], list[dict[str, Any]]]]) 
                 if not isinstance(candidate, dict) or not isinstance(candidate.get("move"), str):
                     raise TrainingError(f"record {record['record_id']} has invalid candidate")
                 parsed_candidates.append(parse_position(candidate, f"record {record['record_id']}.candidate"))
-            result.append({"id": record["record_id"], "split": split, "board": board, "side": side,
-                           "target": target, "candidates": parsed_candidates})
+            parsed = {"id": record["record_id"], "split": split, "board": board, "side": side,
+                      "target": target, "candidates": parsed_candidates}
+            result.append(parsed)
+            completed += 1
+            if progress:
+                progress.record("validate", parsed, completed, total, started)
     if not any(record["split"] == "train" for record in result):
         raise TrainingError("inputs contain no training records")
     return result
@@ -331,20 +367,33 @@ def validation_report(artifact: dict[str, Any], records: list[dict[str, Any]], m
     return report
 
 
-def run(manifest_path: Path, artifact_path: Path, report_path: Path) -> None:
+def run(manifest_path: Path, artifact_path: Path, report_path: Path, progress_every: int = 1) -> None:
+    progress = Progress(progress_every)
+    stage = progress.stage_start("manifest-load-validation")
     manifest = read_json(manifest_path)
     if not isinstance(manifest, dict):
         raise TrainingError("manifest must be an object")
     loaded = validate_manifest(manifest, manifest_path.parent)
-    records = validate_records(loaded)
+    records = validate_records(loaded, progress)
+    progress.stage_done("manifest-load-validation", stage)
     manifest_digest = digest(manifest)
+    stage = progress.stage_start("aggregate-artifact")
     artifact = artifact_from(manifest, records, manifest_digest)
     validate_artifact(artifact)
-    for record in records:
+    progress.stage_done("aggregate-artifact", stage)
+    stage = progress.stage_start("prediction-validation")
+    for completed, record in enumerate(records, start=1):
+        started = time.monotonic()
         predict(artifact["weights"], record["board"], record["side"])
+        progress.record("predict", record, completed, len(records), started)
+    progress.stage_done("prediction-validation", stage)
+    stage = progress.stage_start("held-out-metrics")
     report = validation_report(artifact, records, manifest_digest)
+    progress.stage_done("held-out-metrics", stage)
+    stage = progress.stage_start("output-publication")
     artifact_path.write_bytes(canonical_json(artifact) + b"\n")
     report_path.write_bytes(canonical_json(report) + b"\n")
+    progress.stage_done("output-publication", stage)
 
 
 def main(argv: list[str]) -> int:
@@ -354,12 +403,13 @@ def main(argv: list[str]) -> int:
     train.add_argument("--manifest", type=Path, required=True)
     train.add_argument("--artifact", type=Path, required=True)
     train.add_argument("--report", type=Path, required=True)
+    train.add_argument("--progress-every", type=positive_interval, default=1)
     validate = subcommands.add_parser("validate")
     validate.add_argument("--artifact", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "train":
-            run(args.manifest, args.artifact, args.report)
+            run(args.manifest, args.artifact, args.report, args.progress_every)
         else:
             artifact = read_json(args.artifact)
             if not isinstance(artifact, dict):
