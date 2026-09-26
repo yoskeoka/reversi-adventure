@@ -23,7 +23,8 @@ canonical SHA-256 identity fields.
 ## Project-owned random-game baseline inputs
 
 `random_inputs.py` draws complete legal games from the canonical initial board.
-Its frozen manifest pins the merged source commit and generator digest, seed,
+Its frozen manifest pins the exact clean producer checkout, merged-main base,
+and digests of the generator and imported game/trainer modules, plus seed,
 split game ids, random and split rules, `CC0-1.0` provenance, record start and
 turn cap. Defaults are 2,048 train, 256 validation, and 256 held-out games;
 every split must cover opening, midgame, and endgame. The validation file is

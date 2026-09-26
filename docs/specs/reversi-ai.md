@@ -159,7 +159,8 @@ and neither its datasets nor caches are runtime dependencies.
 
 The production baseline and validation inputs are generated from complete,
 legal, project-owned random games under a frozen version-1 generator manifest.
-It pins a merged source commit, generator SHA-256, `CC0-1.0` provenance,
+It pins the exact producer checkout commit, its merged-main base commit, SHA-256
+for the generator and both imported game/training modules, `CC0-1.0` provenance,
 master seed, game-id lists for `train`, `validation`, and `held_out`, and the
 record start placement and turn cap. A SHA-256-derived per-game seed and a
 separate seeded split shuffle give independent, repeatable streams. Each move

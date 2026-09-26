@@ -74,7 +74,8 @@ def assignment(master: int, counts: dict[str, int]) -> dict[str, list[int]]:
     return result
 
 
-def prepare(path: Path, master: int, counts: dict[str, int], start: int, max_turns: int) -> None:
+def prepare(path: Path, master: int, counts: dict[str, int], start: int, max_turns: int,
+            require_clean: bool = True) -> None:
     training.require_int(master, "seed", 0, MASK)
     training.require_int(start, "record start", 8, 59)
     training.require_int(max_turns, "maximum turns", 60, 128)
@@ -87,9 +88,16 @@ def prepare(path: Path, master: int, counts: dict[str, int], start: int, max_tur
     if len(set(seeds)) != total:
         reject("per-game seed collision")
     root = Path(__file__).resolve().parents[2]
-    source = subprocess.run(["git", "rev-parse", "origin/main"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+    if require_clean and subprocess.run(["git", "status", "--porcelain"], cwd=root, check=True,
+                                        capture_output=True, text=True).stdout:
+        reject("source checkout must be clean before freezing production inputs")
+    source = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+    base = subprocess.run(["git", "rev-parse", "origin/main"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
     manifest = {"schema_version": 1, "generator_version": VERSION,
-                "source_commit": source, "generator_sha256": training.sha256_file(Path(__file__)),
+                "source_commit": source, "base_commit": base,
+                "generator_sha256": training.sha256_file(Path(__file__)),
+                "producer_sources": {"reinforcement.py": training.sha256_file(Path(reinforcement.__file__)),
+                                     "training.py": training.sha256_file(Path(training.__file__))},
                 "license": "CC0-1.0", "source": SOURCE, "seed": master,
                 "seed_derivation": "sha256-prefix64-v1", "random_rule": "splitmix64-rejection-sorted-legal-v1",
                 "split_rule": "splitmix64-fisher-yates-v1", "counts": counts,
@@ -103,7 +111,7 @@ def prepare(path: Path, master: int, counts: dict[str, int], start: int, max_tur
 
 def check_manifest(path: Path) -> dict:
     manifest = training.read_json(path)
-    if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "generator_version", "source_commit", "generator_sha256", "license", "source", "seed", "seed_derivation", "random_rule", "split_rule", "counts", "game_ids", "record_start_placements", "max_turns", "output_schema"}:
+    if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "generator_version", "source_commit", "base_commit", "generator_sha256", "producer_sources", "license", "source", "seed", "seed_derivation", "random_rule", "split_rule", "counts", "game_ids", "record_start_placements", "max_turns", "output_schema"}:
         reject("invalid generator manifest shape")
     if manifest["schema_version"] != 1 or manifest["output_schema"] != 1 or manifest["generator_version"] != VERSION or manifest["license"] != "CC0-1.0" or manifest["source"] != SOURCE:
         reject("unsupported generator manifest")
@@ -111,12 +119,22 @@ def check_manifest(path: Path) -> dict:
         reject("unsupported random stream rule")
     if manifest["generator_sha256"] != training.sha256_file(Path(__file__)):
         reject("generator source digest mismatch")
+    sources = manifest["producer_sources"]
+    if not isinstance(sources, dict) or set(sources) != {"reinforcement.py", "training.py"}:
+        reject("invalid producer source digests")
+    for name, module in (("reinforcement.py", reinforcement), ("training.py", training)):
+        if sources[name] != training.sha256_file(Path(module.__file__)):
+            reject(f"producer source digest mismatch: {name}")
     source = manifest["source_commit"]
     if not isinstance(source, str) or len(source) != 40 or any(c not in "0123456789abcdef" for c in source):
         reject("invalid source commit")
+    base = manifest["base_commit"]
+    if not isinstance(base, str) or len(base) != 40 or any(c not in "0123456789abcdef" for c in base):
+        reject("invalid merged base commit")
     root = Path(__file__).resolve().parents[2]
-    if subprocess.run(["git", "merge-base", "--is-ancestor", source, "HEAD"], cwd=root).returncode:
-        reject("source commit is not an ancestor of this checkout")
+    if (subprocess.run(["git", "merge-base", "--is-ancestor", source, "HEAD"], cwd=root).returncode
+            or subprocess.run(["git", "merge-base", "--is-ancestor", base, source], cwd=root).returncode):
+        reject("source checkout or merged base commit mismatch")
     master = training.require_int(manifest["seed"], "seed", 0, MASK)
     counts = manifest["counts"]
     if not isinstance(counts, dict) or set(counts) != set(SPLITS):
@@ -153,10 +171,8 @@ def play(game_id: int, split: str, manifest: dict) -> tuple[dict, list[dict], in
             board = reinforcement.apply_move(board, side, move)
             placements += 1
         side = reinforcement.other(side)
-    else:
-        reject(f"game {game_id} exceeded turn cap")
     if reinforcement.legal_moves(board, side) or reinforcement.legal_moves(board, reinforcement.other(side)):
-        reject(f"game {game_id} is incomplete")
+        reject(f"game {game_id} is incomplete at turn cap")
     black, white = board.count("B"), board.count("W")
     game = {"schema_version": 1, "game_id": game_id, "split": split, "seed": seed,
             "turns": turns, "terminal_board": board, "black": black, "white": white}

@@ -32,13 +32,21 @@ class RandomInputsTests(unittest.TestCase):
         stream = ri.Stream(7)
         self.assertEqual(set(moves[stream.index(len(moves))] for _ in range(100)), set(moves))
 
+    def test_terminal_move_on_last_allowed_turn(self):
+        manifest = {"seed": 20260926, "record_start_placements": 8,
+                    "max_turns": 60, "generator_sha256": "fixture"}
+        game, _, _ = ri.play(0, "train", manifest)
+        self.assertEqual(len(game["turns"]), 60)
+        ri.verify_game(game, manifest)
+
     def test_complete_replay_targets_and_duplicate_filter(self):
         config = self.fixture()
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             manifest_path = root / "manifest.json"
             ri.prepare(manifest_path, config["seed"], config["counts"],
-                       config["record_start_placements"], config["max_turns"])
+                       config["record_start_placements"], config["max_turns"],
+                       require_clean=False)
             manifest = ri.check_manifest(manifest_path)
             ri.generate(manifest_path, root / "one")
             ri.generate(manifest_path, root / "two")
@@ -72,7 +80,7 @@ class RandomInputsTests(unittest.TestCase):
             root = Path(folder)
             manifest = root / "manifest.json"
             output = root / "output"
-            ri.prepare(manifest, config["seed"], config["counts"], 8, 128)
+            ri.prepare(manifest, config["seed"], config["counts"], 8, 128, require_clean=False)
             ri.generate(manifest, output)
             report = output / "report.json"
             original = report.read_bytes()
