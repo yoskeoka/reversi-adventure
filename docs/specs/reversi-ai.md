@@ -157,6 +157,38 @@ and neither its datasets nor caches are runtime dependencies.
 
 ### Bounded pattern reinforcement cycle
 
+The production baseline and validation inputs are generated from complete,
+legal, project-owned random games under a frozen version-1 generator manifest.
+It pins the exact producer checkout commit, its merged-main base commit, SHA-256
+for the generator and both imported game/training modules, `CC0-1.0` provenance,
+master seed, game-id lists for `train`, `validation`, and `held_out`, and the
+record start placement and turn cap. A SHA-256-derived per-game seed and a
+separate seeded split shuffle give independent, repeatable streams. Each move
+is selected uniformly by index from sorted legal moves; a pass occurs only
+when no move exists. A game must reach the actual terminal board within its
+turn cap. Its complete log records moves, passes, terminal disc counts and a
+digest. Every emitted nonterminal record has the final black-minus-white disc
+count signed for its side to move, including games ending in an early wipeout.
+
+Records start after eight placements by default. Phases use placement counts:
+opening 8-20, midgame 21-44, endgame 45-59. Canonical absolute-color D4
+board-and-side duplicates are retained in game logs but emitted only once,
+across all splits in global game and turn order. Every split must have all
+three phases and at least one record. The separate validation JSONL is
+disjoint from both training and trainer-held-out positions. The generator
+emits canonical JSONL, a trainer manifest with SHA-256 and source/license for
+each split, and a report written last. Its verifier replays every game,
+recomputes records, targets, split assignment, digests, counts and phase and
+legal-move distributions, and rejects partial or changed outputs. Frozen
+inputs must reproduce byte-identical outputs. A local pilot establishes time
+and memory caps before producing the 2,048/256/256-game baseline inputs.
+
+The offline trainer consumes these inputs to produce the baseline artifact.
+Its held-out loss, phase coverage, nonzero-weight count, and comparison with
+zero weights are diagnostics, not a playing-strength claim. The separate 0019
+cycle uses the exact baseline and validation digests; 0018 acceptance openings
+remain unread until their own gate.
+
 The offline reinforcement producer accepts a versioned, immutable manifest. It
 pins the source commit and producer code digests, baseline artifact SHA-256 and
 artifact identity, and project-owned candidate executable SHA-256. It also pins
