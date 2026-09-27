@@ -29,10 +29,12 @@
 
 ## ブラックボックス契約と作業
 
-1. 同一ホストの固定された合法開局、色割当、バイナリ digest、評価 artifact、各探索条件と資源上限を凍結する。Egaroucid 同士、現行 CLI 同士、改善 CLI 同士の全局対戦を、起動/終了処理を含めて計測する。両色・pass・完全読みを含む位置を用意し、wall time、user/system CPU、peak RSS、各手時間と完了状態を記録する。並行ベンチマークの干渉を避け、結果が疑わしければ静かなホストで直列再計測する。長時間の本計測は人間が別 terminal で開始し、agent は起動・待機・監視しない。
+全局比較 corpus は標準の黒先手から到達できる固定 4 開局を両色の seat 割当で指す 8 局とする。
+
+1. 同一ホストの固定された合法開局、色割当、バイナリ digest、評価 artifact、各探索条件と資源上限を凍結する。Egaroucid 同士、現行 CLI 同士、改善 CLI 同士の全局対戦を計測する。oracle 比較では全条件を同じ「1 seat につき 1 プロセスを 1 局だけ保持」の寿命にそろえ、起動/終了時間を別計測して探索中の時間と混同しない。加えて本番 runner と同じ CLI の全局間常駐を別の workload として測る。両色・pass・完全読みを含む位置を用意し、wall time、user/system CPU、peak RSS、各手時間と完了状態を記録する。並行ベンチマークの干渉を避け、結果が疑わしければ静かなホストで直列再計測する。長時間の本計測は人間が別 terminal で開始し、agent は起動・待機・監視しない。
 2. 既存の完全読みは手番ごとに solver/table を再生成している。次の root でも再利用できる表を設計し、盤面と手番の完全な識別、同値な root 視点の点数、bound、最善手/PV、pass、異なる探索コンテキスト、hash 衝突、容量上限と置換を明示する。前回の未完了探索や不足した証明から完全読み結果を捏造しない。通常探索 TT の深さ判定は維持する。
 3. 自己対局の手ごとの探索を、深さ 12 と中盤 8 の両条件で同じ入力から評価する。中盤 8 は学習用自己対局だけに指定でき、候補選択・0018 受け入れの探索設定と混同しない。選んだ条件・完全読み閾値・CLI digest は manifest/report に固定する。`prepare/run/verify` は不一致と旧 manifest の誤用を拒否する。
-4. 改善前後の着手と完全読み点数を同じ盤面で照合し、完全読みは project-owned solver と独立 oracle で一致を確認する。診断は flushed stderr または独立計測 report に出し、候補 protocol、棋譜、学習 artifact、既存 report digest には混ぜない。性能の採用理由として改善量と、何が時間を減らしたかを記録する。2–3 分目安と oracle 実測に届かない場合は、その理由と選べる設定を report に残し、時間だけを理由に探索の意味を変えない。
+4. 同一探索設定の改善前後で着手・点数・完全読み結果を同じ盤面で照合し、完全読みは project-owned solver と独立 oracle の点数で一致を確認する。深さ 12 と中盤 8 の heuristic 着手は相互一致を要求せず、別 report にする。診断は flushed stderr または独立計測 report に出し、候補 protocol、棋譜、学習 artifact、既存 report digest には混ぜない。性能の採用理由として改善量と、何が時間を減らしたかを記録する。2–3 分目安と oracle 実測に届かない場合は、その理由と選べる設定を report に残し、時間だけを理由に探索の意味を変えない。
 
 ## 依存関係と順序
 
@@ -43,7 +45,7 @@
 ## 検証
 
 - bounded table の容量、hash 衝突、同一/別 evaluator、pass、色、root 変更、timeout/interruption と置換の意味を確認する。
-- 同じ局面の最善手・点数・完全読み結果が改善前後および独立 oracle と一致する。
+- 同一設定の同じ局面で最善手・点数・完全読み結果が改善前後で一致し、完全読み点数が独立 oracle と一致する。中盤 8 と 12 は別条件として記録する。
 - 全局の raw timing と集計を再計算でき、wall/CPU/RSS 欠落は性能採用判定に使わない。
 - 該当 Rust/Python テスト、Clippy、GDExtension build、workflow lint、`git diff --check`。
 
