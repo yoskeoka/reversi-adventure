@@ -27,11 +27,11 @@
 
 ## ブラックボックス契約と作業
 
-1. backend が標準の初期盤面から board、黒白、合法手、pass、石数、終局を管理する。黒・白の各 seat は、人間/strategic/novice/trained/random/oracle から独立に選択できる。project-owned AI の各 seat は中盤探索深さと完全読みを始める残り空き数を UI で個別に調整できる。完全読み自体は終局までなので、後者を「完全読み開始空き数」と明示する。許可範囲はその engine の受け入れ済み設定に制限し、着手中の変更は次局から適用する。trained は読み込み済み artifact の digest、探索設定と実体 CLI を画面と session 記録に示す。random は合法手から選び、seed を固定できる。oracle が未設定・起動不可ならその選択だけを利用不可として明示する。
-2. project-owned AI には固定の許可済み実行ファイルと引数を backend が渡す。1 seat につき常駐 CLI を使い、複数手を protocol でやり取りする。oracle は既存の外部 GTP adapter の timeout、pass 同期、終了処理を参考に、checkout 外の binary/data を起動する。WebSocket の入力を shell command、任意実行パス、任意 artifact path に直結しない。新しい対局、切断、timeout、AI 異常応答で子プロセスと session を有界に終了する。
-3. WebSocket は接続直後に完全な局面 snapshot を送り、以後も revision を付けて手番/着手/思考中/pass/終局/error を配信する。人間の着手要求には session/revision と座標を含め、server が手番・合法性・鮮度を検証する。相手側の着手は人間の追加操作なしに配信する。再接続時は最新 snapshot を表示し、古い着手要求を拒否する。
+1. backend が標準の初期盤面から board、黒白、合法手、pass、石数、終局を管理する。黒・白の各 seat は、人間/strategic/novice/trained/random/oracle から独立に選択できる。project-owned AI の各 seat は中盤探索深さと完全読みを始める残り空き数を UI で個別に調整できる。完全読み自体は終局までなので、後者を「完全読み開始空き数」と明示する。許可範囲はその engine の受け入れ済み設定に制限し、着手中の変更は次局から適用する。trained は読み込み済み artifact の digest、探索設定と実体 CLI を画面と session 記録に示す。random は合法手から選び、seed を固定できる。oracle が未設定・起動不可ならその選択だけを利用不可として明示する。UI は `trained-baseline` などの安定した player ID だけを送信し、server のローカル設定が ID を CLI 実体・artifact、oracle 実体・data に対応させ、開始前に存在と digest を検証する。
+2. project-owned AI には固定の許可済み実行ファイルと引数を backend が渡す。1 seat につき常駐 CLI を使い、複数手を protocol でやり取りする。oracle は既存の外部 GTP adapter の timeout、pass 同期、終了処理を参考に、checkout 外の binary/data を起動する。WebSocket の入力を shell command、任意実行パス、任意 artifact path に直結しない。新しい対局、timeout、AI 異常応答で子プロセスと session を有界に終了する。WebSocket 切断時は 30 秒の再接続猶予を設け、その間は session とプロセスを保持し、猶予切れで終了する。
+3. WebSocket は接続直後に完全な局面 snapshot を送り、以後も revision を付けて手番/着手/思考中/pass/終局/error を配信する。人間の着手要求には session/revision と座標を含め、server が手番・合法性・鮮度を検証する。AI/oracle への問い合わせにも session/revision/position ID を付け、返答がその局面と一致する場合だけ状態を更新する。遅延・古い・違法・不正形式・不正 pass の返答は盤面/revision を変えずに拒否し、対象プロセスを停止して error を配信する。相手側の着手は人間の追加操作なしに配信する。30 秒以内の再接続時は token で同じ session に復帰し最新 snapshot を表示する。期限後は新規 session が必要で、古い着手要求を拒否する。
 4. UI は現在手番、黒白の player 名と各 seat の中盤探索深さ・完全読み開始空き数、合法着手候補、最後の着手、石数、AI 思考中、pass、勝敗と原因が分かる error を表示する。人間が担当する色だけを操作できる。双方 AI の場合も最後まで自動で進み、双方人間でも一つの画面から交互に指せる。ローカルホストだけで待ち受け、起動停止手順と必要な CLI/oracle 設定を README に記す。
-5. `pnpm install` と `pnpm dev` で起動する。既存 visualizer から再利用する部分のライセンスと依存関係を確認し、UI と backend の protocol をこの repo 内で管理する。production release/Steam/Godot の依存にしない。
+5. 作業ディレクトリを `tools/reversi-ai-playground/` とし、そこから `pnpm install` と `pnpm dev` で起動する。`pnpm dev` は repo 内の `cargo build --release -p reversi-ai --bin reversi-ai-cli` で project-owned CLI を用意し、その digest を server で固定する。trained artifact と oracle binary/data は checkout 外の任意実行入力として WebSocket へ渡さず、server 側のローカル設定に置く。未設定時は対応 seat を利用不可と表示し、他の player で起動できる。既存 visualizer から再利用する部分のライセンスと依存関係を確認し、UI と backend の protocol をこの repo 内で管理する。production release/Steam/Godot の依存にしない。
 
 ## 依存関係と順序
 
@@ -42,7 +42,7 @@
 ## 検証
 
 - 人間対人間、各 project-owned AI、random、oracle を黒白の両側で選べることを局所的に確認する。AI ごとの中盤探索深さと完全読み開始空き数を選び、server が凍結した値で CLI を起動し、許可範囲外の入力を拒否する。oracle 不在時も他の player が動く。
-- pass、終局、違法/古い着手、AI timeout/異常終了、session の入替と WebSocket 再接続で server と UI の状態が一致する。
+- pass、終局、違法/古い着手、AI/oracle の不正形式・違法着手・不正 pass・遅延返答・timeout/異常終了、session の入替と 30 秒以内/以後の WebSocket 再接続で server と UI の状態が一致し、失敗時には盤面/revision を変えず error を通知する。
 - 手動の browser 確認で着手の即時反映と選択 UI を確かめる。`pnpm` build/lint、該当 backend/Rust gates、workflow lint、`git diff --check` を実施する。
 
 ## Addresses
