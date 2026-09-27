@@ -31,7 +31,7 @@
 1. Edax と Egaroucid の source/docs/scripts で確認できる生成方法、学習対象、教師値、色と対称性、データ分割を出典と version 付きで記録する。Egaroucid 公開データのランダム序盤後の AI 対局と最終石差ラベルを区別し、公開資料にない Edax の学習工程を推測で埋めない。Egaroucid/Edax は引き続き Make/scripts/CI の外部ツールとし、Rust/GDExtension/配布物に含めない。
 2. 黒先手の標準初期盤面から合法に到達する入力だけを学習対局に使う。旧 `member=1` の色反転途中局面を、別の合法対局や黒白の先後交換として数えない。両色の各局面は手番側視点で同一 pattern 重みを使い、回転/反転の同値性は仕様に従って検証する。学習入力と validation、pilot 比較、0018 の未使用開局を分離する。
 3. ランダム合法手による高速な盤面収集と、教師値の生成を別の段階にする。単なる random rollout の最終石差、強い project-owned/oracle 継続対局の最終石差、局面ごとの exact score を混同しない。候補方式を pilot 前に固定し、対象局面・着手・score 視点・oracle version・time/node 上限・timeout と失敗処理を manifest に記録する。残り 30 空きから毎手完全読みする案は、固定した少数局面の独立計測で実行可能性を確認してから採用し、未完了/timeout の score を教師値にしない。
-4. 小規模 batch は、予定する 0019 本番の対局数・ラベル数・候補比較数の各々で 10% 以下に抑える。64 局を基準にするなら自己対局は最大 6 局、200 局を基準にするなら比較は最大 20 局とする。乱数・入力・候補 CLI・artifact・学習規則・更新回数と出力は固定する。全局が完成する前の checkpoint は候補証拠にしない。
+4. pilot manifest に本番規模の分母として自己対局 64 局、教師値の上限 7,680 行、候補比較 200 局を固定し、各上限の 10% を切り捨てた自己対局 6 局、採用する教師値 768 行、比較 20 局を超えない。教師値は重複排除後に実際に更新へ渡す行数で数え、生成量が変動しても verifier が上限超過を拒否する。候補比較は pilot 専用の 10 完全ペア・20 局の単段階契約にし、既存 50/200 局の checkpoint/継続判定を流用しない。manifest は分母・丸め規則・各上限・実数を記録し、report/verifier が照合する。乱数・入力・候補 CLI・artifact・学習規則・更新回数と出力は固定する。全局が完成する前の checkpoint は候補証拠にしない。
 5. pilot artifact を baseline と独立 validation/held-out の予測誤差、固定 oracle corpus regret、および未使用の色交替対局で比較する。更新前後の値とサンプル数をすべて記録し、少なくとも一つの事前指定した独立指標で改善し、他指標に重大な悪化がない場合だけ「この pilot では強化を観測」と記す。達しないときは artifact と不成立結果を保存し、0018 や本番サイズへの移行を行わない。
 
 ## 依存関係と順序
@@ -43,7 +43,7 @@
 ## 検証
 
 - 黒先手からの合法再生、分割の独立性、色相対 score、exact/oracle score の一致と timeout fail-closed を確認する。
-- pilot が 10% 上限を守り、同じ固定入力の再検証で artifact/report digest が一致する。
+- pilot が manifest の 64/7,680/200 分母から切り捨てた 6/768/20 上限をすべて守り、単段階 10 ペアの対局数と同じ固定入力の再検証で artifact/report digest が一致する。
 - 更新前後の独立指標を raw data から再計算し、`TrainedEvaluator` が artifact を受理する。
 - 該当 Python/Rust テスト、Clippy、GDExtension build、workflow lint、`git diff --check`。
 
