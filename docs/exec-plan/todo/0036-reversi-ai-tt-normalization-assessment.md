@@ -13,7 +13,8 @@ Edax と Egaroucid の現行公開 source は手番側/相手側の bitboard を
 - `docs/specs/reversi-ai.md:57-92,105-145` — 色相対評価、D4 特徴と探索の契約。
 - `rust/reversi-ai/src/search/tt.rs:18-105` — 現行の黒/白/手番 Zobrist key と table。
 - `rust/reversi-ai/src/search/negascout.rs:175-233` — 深さ/bound 判定と TT move ordering。
-- `rust/reversi-ai/src/search/mod.rs:106-169` — evaluator/config fingerprint と探索。
+- `rust/reversi-ai/src/search/mod.rs:106-169` と `search/endgame.rs:219-243,568-586` — evaluator/config fingerprint、完全読みの別表と探索。
+- `rust/reversi-ai/src/eval/novice.rs:27-33` — 絶対色 bitboard 由来の noise。色交換で同じ score とは限らない。
 - `rust/reversi-ai/src/eval/pattern.rs:190-207,240-298` — 特徴量用 D4 と色相対符号化。TT と同じ正規化ではない。
 - `tools/reversi-ai-benchmark/positions-v1.jsonl` と `docs/references/reversi-ai-search-performance-0020-closeout.md` — 意味と時間の比較入力。
 - Edax `src/board.c`, `src/hash.c`: https://github.com/abulmo/edax-reversi/tree/14f048c05ddfa385b6bf954a9c2905bbe677e9d3/src
@@ -22,16 +23,16 @@ Edax と Egaroucid の現行公開 source は手番側/相手側の bitboard を
 ## 変更マップ
 
 - (MODIFY) `docs/specs/reversi-ai.md` — 先に TT identity、score 視点、対称手の逆変換、採否条件を規定する。
-- (MODIFY) `rust/reversi-ai/src/search/tt.rs`, `search/negascout.rs` と関連テスト — 手番側表現 variant、D4 variant を互いに独立に切り替え可能な実験とする。
+- (MODIFY) `rust/reversi-ai/src/search/tt.rs`, `search/negascout.rs`, `search/endgame.rs`, `search/mod.rs` と関連テスト — 通常探索と 0035 で確定した完全読み表の両方に手番側表現 variant、D4 variant を互いに独立に切り替え可能な実験とし、search semantics version を更新する。
 - (MODIFY/NEW) `tools/reversi-ai-benchmark/` と `docs/references/` — 同一ホスト raw samples、意味照合、各 variant の原因分析と結論。
 - (MODIFY) `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md` — 採用が決まるまで実験 variant で新たな本番 manifest を凍結しない。
 
 ## ブラックボックス契約と作業
 
-1. 現行 raw key を対照とし、(A) 手番側/相手側のみ、(B) A に D4 を追加、を独立に比較する。黒白を同時に交換した同値局面は A/B で同じ key とし、異なる手番の同一絶対盤面は混同しない。D4 の候補は常に合法座標へ逆変換し、pass、PV、bound、score 符号と exact/heuristic の区別を保つ。hash 衝突時は完全な局面 identity を照合し、誤 hit を許さない。
+1. 現行 raw key を対照とし、(A) 手番側/相手側のみ、(B) A に D4 を追加、を独立に比較する。黒白を同時に交換した同値局面は A/B で同じ key とし、異なる手番の同一絶対盤面は混同しない。D4 の候補は常に合法座標へ逆変換し、pass、PV、bound、score 符号と exact/heuristic の区別を保つ。hash 衝突時は完全な局面 identity を照合し、誤 hit を許さない。各 evaluator が色交換と D4 に対して点数同値であることを先に証明し、契約を持たない evaluator は raw key に戻す。`NoviceEvaluator` は現行 noise が絶対色に依存するため A/B から除外し、noise を変える作業はこの実験に含めない。
 2. 各 variant は evaluator、探索設定、search semantics version、保持 table の失効条件を同じ方式で扱う。盤面正規化の計算費用、TT hit と有効 cutoff、node 数、time、CPU、RSS を分けて記録する。すでに採用した探索順や exact cache の状態を対照間で揃え、変更効果を混同しない。
 3. 黒/白交換、D4 の8変換、pass、終局、同じ盤面で異なる手番、異なる evaluator、意図的な hash 衝突の局面で着手/点数/PV/完了深さ/完全読みが対照と一致する。独立 oracle の exact score も照合する。
-4. 16 局 corpus の heuristic/exact と固定した全局自己対局で serial 比較する。採用候補には少なくとも一方の workload で 5% 以上の速度改善、他方の重大な後退がないこと、CPU/RSS の欠落がないことを求める。性能が基準を満たさなければ実験と結果を残し、採用コードにしない。基準を満たした場合も採用と PR の扱いは人間が決める。
+4. 既存の 16 局 corpus の heuristic/exact 契約に従い、warm-up 後に最低 5 回の交互測定、full-depth 成功、子プロセスごとの CPU/RSS、局面別 median と workload 別幾何平均を記録する。全局側は 0035 の固定 8 局（4 開局×両色）・manifest/seed/artifact/config/プロセス寿命/資源上限を同一にし、各 variant を最低 5 回交互に測り、各局の wall/CPU/RSS と完了状態を保存する。全局の局別 median と幾何平均も再計算する。採用候補には heuristic または exact workload で 5% 以上の改善、もう一方と全局 workload で 5% 以上の後退がないこと、CPU/RSS の欠落がないことを求める。性能が基準を満たさなければ実験と結果を残し、採用コードにしない。基準を満たした場合も採用と PR の扱いは人間が決める。
 
 ## 依存関係と順序
 
