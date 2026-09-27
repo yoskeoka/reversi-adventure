@@ -189,21 +189,25 @@ zero weights are diagnostics, not a playing-strength claim. The separate 0019
 cycle uses the exact baseline and validation digests; 0018 acceptance openings
 remain unread until their own gate.
 
-The offline reinforcement producer accepts a versioned, immutable manifest. It
-pins the source commit and producer code digests, baseline artifact SHA-256 and
-artifact identity, and project-owned candidate executable SHA-256. It also pins
-the trained evaluator, all three search depths, exact-solver threshold,
-disabled book, seed, even game count, opening plies, D4 rotation and
-color-pairing policy, per-decision timeout, maximum decisions, update rule,
-and disjoint validation position input and digest.
+The offline reinforcement producer accepts a version-2, immutable manifest.
+It records the baseline artifact identity and SHA-256, candidate executable
+SHA-256, trainer and update-rule versions, feature contract, trained evaluator,
+all three search depths, exact-solver threshold, disabled book, self-play and
+match limits, D4/color-pairing policy, per-decision timeout, maximum decisions,
+and an actual random seed. These identify the method and the compared inputs;
+the producer source commit and reproducing the generated openings from a seed
+are not acceptance gates. Version-1 manifests and reports are never evidence
+for version-2 candidate selection, although version-1 baseline artifacts remain
+valid inputs.
 
 The `strong-engine-hcap-v1` candidate label requires all three depths to be
 12 and the exact-solver threshold to be 16. Its decision protocol timeout must
 exceed the candidate search time limit. Corpus regret uses that frozen timeout.
 
-The producer rejects changed inputs before any game. A human starts the
-production command in a separate terminal. An agent may prepare the manifest
-and validate completed files without running or monitoring that command.
+The producer validates the recorded artifact and executable identities before
+any game. A human starts the production command in a separate terminal. An
+agent may prepare the manifest and validate completed files without running or
+monitoring that command.
 
 The reinforcement `run` command writes flushed diagnostic progress only to
 stderr. It writes `stage NAME start elapsed=S.s` and `stage NAME done
@@ -217,7 +221,7 @@ multiples and at the final game. These monotonic-clock diagnostics do not
 enter the candidate protocol, manifest, reports, records, digests, or output
 bytes, and cannot make a failed or interrupted cycle valid.
 
-- Each seeded opening is generated from legal moves and yields exactly two
+- Each self-play opening is generated from a separate random stream and yields exactly two
   games: one original position and one color-swapped D4 rotation. The report
   records the opening, every decision and pass, terminal board and disc counts,
   final score, and a digest for each game. Any illegal move, timeout, malformed
@@ -228,18 +232,28 @@ bytes, and cannot make a failed or interrupted cycle valid.
   to `-1..=1`. Updates are simultaneous against baseline predictions. The
   resulting sparse artifact retains the existing 64-feature, 60-phase,
   `-64..=64` score and canonical digest contracts.
-- Validation positions have a canonical board-and-side key disjoint from every
-  tuning position. The report includes those keys so 0018 can compare its
-  opening suite against both validation and tuning positions before use. The
-  baseline and updated artifact are both measured on the same validation
-  records by mean squared error. The updated artifact is selected only on a
-  strict improvement; ties and failed gates select the baseline. The immutable
-  report retains both metrics and the selected artifact digest.
-- The command writes candidate artifact, complete report, and game records
-  atomically at cycle completion. A report is valid only when its manifest,
-  baseline, candidate, selected, game-record and validation-input digests
-  recompute and every declared pair and game is present. Partial files are not
-  evidence. Identical frozen inputs produce byte-identical outputs.
+- Validation positions that share a canonical board-and-side key with tuning
+  are excluded from MSE diagnostics and their IDs and remaining count are
+  reported. An empty remainder makes MSE unavailable, not a failed run; MSE is
+  never a selection metric and validation data never enters the update.
+- Candidate-comparison openings come from another random stream. Roots that
+  occur in tuning are excluded, with the pool attempts and exclusions recorded,
+  before complete color-swapped D4 pairs are admitted. Coincident positions
+  reached later in independent games are valid. The baseline and candidate use
+  identical CLI/search/resource settings. At 25 complete pairs (50 games),
+  candidate match points must exceed 25 to continue for 75 more pairs. At 100
+  complete pairs (200 games), candidate match points must exceed 100 to be
+  selected; ties select the baseline. A non-continuing 50-game result selects
+  the baseline.
+- The 50-game result is written as an atomic version-2 checkpoint containing
+  manifest identity, game digests, aggregate and continuation decision. It is
+  diagnostic evidence, not resume input. A run accepts only a nonexistent or
+  empty output directory; it rejects checkpoints, partial files, and temporary
+  files without overwrite. A completed report and selected artifact are
+  published atomically only after the selected comparison completes. The
+  independent verifier replays every game and recomputes updates, MSE
+  diagnostics, pairings, match result, decision, and all digests; it rejects a
+  checkpoint-only or mismatched output.
 - Corpus regret under `strong-engine-hcap-v1` is a separate evaluation-only
   report for the selected artifact. The 0018 held-out opening suite is not read
   during generation, update, selection, or corpus regret.
