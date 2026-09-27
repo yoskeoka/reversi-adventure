@@ -4,6 +4,13 @@
 
 > **Superseded selection contract**: 0034 implements version-2 method/config recording and baseline-versus-candidate matches. Do not freeze another production run from this version-1 contract. The failed version-1 run is not candidate evidence.
 
+> **New production freeze prerequisite**: 0035 records whole-game oracle and
+> project CLI timing before a new version-2 manifest is frozen. Select and pin
+> the self-play-only midgame depth (12 or 8), exact threshold, and accepted CLI
+> digest from that evidence. Candidate matches and 0018 retain their separate
+> 12/12/12 search settings. The stopped version-2 run's partial files are not
+> candidate or timing evidence; use a fresh manifest and output directory.
+
 ## Objective and completion boundary
 
 Produce exactly one reproducible, project-owned candidate pattern artifact by

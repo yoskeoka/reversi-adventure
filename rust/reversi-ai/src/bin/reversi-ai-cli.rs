@@ -5,16 +5,15 @@ use reversi_ai::eval::novice::NoviceEvaluator;
 use reversi_ai::eval::strategic::StrategicEvaluator;
 use reversi_ai::eval::trained::TrainedEvaluator;
 use reversi_ai::eval::BoardEvaluator;
-use reversi_ai::search::{SearchBudget, SearchEngine, SearchOutcome};
+use reversi_ai::search::{SearchBudget, SearchEngine, SearchOutcome, SearchResult};
 use reversi_engine::board::Board;
-use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice|trained] [--trained-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
-[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N]\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass"
+[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope game|turn]\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -47,6 +46,7 @@ struct CliArgs {
     config: AiConfig,
     time_limit: Duration,
     node_limit: Option<u64>,
+    exact_cache_scope: String,
 }
 
 fn parse_args() -> Result<CliArgs, String> {
@@ -57,6 +57,7 @@ fn parse_args() -> Result<CliArgs, String> {
     let mut exact_solver_empty_squares = AiConfig::DEFAULT_EXACT_SOLVER_EMPTY_SQUARES;
     let mut time_limit = Duration::from_secs(30);
     let mut node_limit = None;
+    let mut exact_cache_scope = String::from("game");
     let mut profile = None;
     let mut has_explicit_config = false;
     let mut trained_artifact = None;
@@ -94,6 +95,7 @@ fn parse_args() -> Result<CliArgs, String> {
                 time_limit = Duration::from_millis(parse_u64(&value()?, "--time-limit-ms")?)
             }
             "--node-limit" => node_limit = Some(parse_u64(&value()?, "--node-limit")?),
+            "--exact-cache-scope" => exact_cache_scope = value()?,
             "--profile" => profile = Some(value()?),
             _ => return Err(format!("unknown option {option}\n{}", usage())),
         }
@@ -107,6 +109,9 @@ fn parse_args() -> Result<CliArgs, String> {
     }
     if evaluator != "trained" && trained_artifact.is_some() {
         return Err("--trained-artifact requires --evaluator trained".to_string());
+    }
+    if !matches!(exact_cache_scope.as_str(), "game" | "turn") {
+        return Err("--exact-cache-scope must be game or turn".to_string());
     }
     let config = match profile.as_deref() {
         None => AiConfig::new(opening_depth, midgame_depth, endgame_depth)
@@ -123,6 +128,7 @@ fn parse_args() -> Result<CliArgs, String> {
         config,
         time_limit,
         node_limit,
+        exact_cache_scope,
     })
 }
 
@@ -159,22 +165,17 @@ fn choose_move<E: BoardEvaluator + ?Sized>(
     config: &AiConfig,
     time_limit: Duration,
     node_limit: Option<u64>,
-) -> String {
-    if !moves::has_legal_move(board, color) {
-        return "pass".to_string();
-    }
-
+) -> (String, SearchResult) {
     let mut budget = SearchBudget::with_time_limit(time_limit);
     if let Some(limit) = node_limit {
         budget = budget.with_node_limit(limit);
     }
-    match engine
-        .search_with_budget(board, color, evaluator, config, &budget)
-        .outcome
-    {
+    let result = engine.search_with_budget(board, color, evaluator, config, &budget);
+    let selected = match result.outcome {
         SearchOutcome::Move(position) => move_name(position),
         SearchOutcome::Pass | SearchOutcome::GameOver => "pass".to_string(),
-    }
+    };
+    (selected, result)
 }
 
 fn main() -> Result<(), String> {
@@ -214,7 +215,11 @@ fn main() -> Result<(), String> {
         }
         let board = board_from_flat_string(fields[1])?;
         let color = parse_color(fields[2])?;
-        let move_name = choose_move(
+        if args.exact_cache_scope == "turn" {
+            engine.clear_exact_cache();
+        }
+        let decision_started = Instant::now();
+        let (move_name, search_result) = choose_move(
             &mut engine,
             evaluator.as_ref(),
             &board,
@@ -223,6 +228,27 @@ fn main() -> Result<(), String> {
             args.time_limit,
             args.node_limit,
         );
+        let outcome = match search_result.outcome {
+            SearchOutcome::Move(_) => "move",
+            SearchOutcome::Pass => "pass",
+            SearchOutcome::GameOver => "game_over",
+        };
+        eprintln!(
+            "search_diagnostic_v1\tposition_id={}\telapsed_us={}\tnodes={}\texact={}\tscore={}\tcompleted_depth={}\toutcome={}\tcache_probes={}\tcache_hits={}\tcache_stores={}",
+            fields[0],
+            decision_started.elapsed().as_micros(),
+            search_result.nodes_searched,
+            search_result.exact,
+            search_result.score.map_or_else(|| "none".to_string(), |score| score.to_string()),
+            search_result.completed_depth,
+            outcome,
+            search_result.exact_cache.probes,
+            search_result.exact_cache.hits,
+            search_result.exact_cache.stores,
+        );
+        io::stderr()
+            .flush()
+            .map_err(|error| format!("stderr: {error}"))?;
         writeln!(stdout, "{}\t{}", fields[0], move_name)
             .map_err(|error| format!("stdout: {error}"))?;
         stdout.flush().map_err(|error| format!("stdout: {error}"))?;

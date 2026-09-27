@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use reversi_engine::board::Board;
 use reversi_engine::moves;
 use reversi_engine::types::{Color, Position};
@@ -166,6 +164,68 @@ struct ExactEntry {
     pv: Vec<Position>,
 }
 
+#[derive(Clone)]
+struct StoredExactEntry {
+    hash: u64,
+    board: Board,
+    color: Color,
+    value: ExactEntry,
+}
+
+/// Fixed-size exact table. A hash chooses a slot, but a hit requires the full
+/// board and side to move so a collision can only evict, never change a score.
+pub(crate) struct ExactTable {
+    entries: Vec<Option<StoredExactEntry>>,
+}
+
+impl ExactTable {
+    pub(crate) fn new(capacity: usize) -> Self {
+        assert!(capacity > 0);
+        Self {
+            entries: vec![None; capacity],
+        }
+    }
+
+    fn get(&self, hash: u64, board: &Board, color: Color) -> Option<&ExactEntry> {
+        self.entries[(hash as usize) % self.entries.len()]
+            .as_ref()
+            .filter(|entry| entry.hash == hash && entry.board == *board && entry.color == color)
+            .map(|entry| &entry.value)
+    }
+
+    fn insert(&mut self, hash: u64, board: &Board, color: Color, value: ExactEntry) -> bool {
+        let slot = (hash as usize) % self.entries.len();
+        if self.entries[slot].as_ref().is_some_and(|entry| {
+            entry.hash == hash
+                && entry.board == *board
+                && entry.color == color
+                && entry.value.bound == Bound::Exact
+        }) {
+            // A later null-window probe must not replace a completed proof or PV.
+            return false;
+        }
+        self.entries[slot] = Some(StoredExactEntry {
+            hash,
+            board: *board,
+            color,
+            value,
+        });
+        true
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.fill(None);
+    }
+}
+
+/// Per-search exact table activity; counts include probes within one solve.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExactCacheDiagnostics {
+    pub probes: u64,
+    pub hits: u64,
+    pub stores: u64,
+}
+
 struct NodeResult {
     score: i32,
     pv: Vec<Position>,
@@ -201,6 +261,14 @@ impl SmallResult {
             pv: self.pv[..self.len as usize].to_vec(),
         }
     }
+
+    fn from_exact_entry(entry: &ExactEntry) -> Self {
+        debug_assert!(entry.pv.len() <= 4);
+        let mut result = Self::empty(entry.score);
+        result.pv[..entry.pv.len()].copy_from_slice(&entry.pv);
+        result.len = entry.pv.len() as u8;
+        result
+    }
 }
 
 /// Completed result from the evaluator-independent exact endgame solver.
@@ -214,13 +282,14 @@ pub(crate) struct CompletedEndgame {
 
 /// Exact, pass-aware negamax for the final placements of a game.
 ///
-/// Its transposition entries deliberately live only for one solve. They never
-/// share the heuristic search table, whose values have different semantics.
+/// Its transposition entries are independent of the heuristic search table,
+/// whose values have different semantics.
 pub(crate) struct EndgameSolver<'a> {
     zobrist: &'a ZobristKeys,
-    table: HashMap<u64, ExactEntry>,
+    table: &'a mut ExactTable,
     nodes_searched: &'a mut u64,
     diagnostics: ExactPvsDiagnostics,
+    cache_diagnostics: ExactCacheDiagnostics,
 }
 
 /// Counters for exact null-window probes and their outcomes.
@@ -232,17 +301,26 @@ pub struct ExactPvsDiagnostics {
 }
 
 impl<'a> EndgameSolver<'a> {
-    pub(crate) fn new(zobrist: &'a ZobristKeys, nodes_searched: &'a mut u64) -> Self {
+    pub(crate) fn new(
+        zobrist: &'a ZobristKeys,
+        table: &'a mut ExactTable,
+        nodes_searched: &'a mut u64,
+    ) -> Self {
         Self {
             zobrist,
-            table: HashMap::new(),
+            table,
             nodes_searched,
             diagnostics: ExactPvsDiagnostics::default(),
+            cache_diagnostics: ExactCacheDiagnostics::default(),
         }
     }
 
     pub(crate) fn diagnostics(&self) -> ExactPvsDiagnostics {
         self.diagnostics
+    }
+
+    pub(crate) fn cache_diagnostics(&self) -> ExactCacheDiagnostics {
+        self.cache_diagnostics
     }
 
     pub(crate) fn solve(
@@ -438,6 +516,25 @@ impl<'a> EndgameSolver<'a> {
             ],
         );
 
+        let hash = self.zobrist.hash(board, color);
+        self.cache_diagnostics.probes += 1;
+        let entry = self.table.get(hash, board, color);
+        self.cache_diagnostics.hits += u64::from(entry.is_some());
+        if let Some(entry) = entry {
+            match entry.bound {
+                Bound::Exact => return Ok(SmallResult::from_exact_entry(entry)),
+                Bound::LowerBound if entry.score >= beta => {
+                    return Ok(SmallResult::empty(entry.score));
+                }
+                Bound::UpperBound if entry.score <= alpha => {
+                    return Ok(SmallResult::empty(entry.score));
+                }
+                Bound::LowerBound if entry.score > alpha => alpha = entry.score,
+                _ => {}
+            }
+        }
+        let original_alpha = alpha;
+
         #[cfg(feature = "cost-diagnostics")]
         let legal = crate::cost_diagnostics::measure("exact_small_legal", || {
             moves::legal_moves(board, color)
@@ -448,14 +545,39 @@ impl<'a> EndgameSolver<'a> {
             #[cfg(feature = "cost-diagnostics")]
             crate::cost_diagnostics::event(13, &[]);
             if !moves::has_legal_move(board, color.opponent()) {
-                return Ok(SmallResult::empty(terminal_score(board, color)));
+                let result = SmallResult::empty(terminal_score(board, color));
+                self.cache_diagnostics.stores += u64::from(self.table.insert(
+                    hash,
+                    board,
+                    color,
+                    ExactEntry {
+                        score: result.score,
+                        bound: Bound::Exact,
+                        pv: Vec::new(),
+                    },
+                ));
+                return Ok(result);
             }
             let child =
                 self.small_with_regions(board, color.opponent(), -beta, -alpha, budget, regions)?;
-            return Ok(SmallResult {
+            let result = SmallResult {
                 score: -child.score,
                 ..child
-            });
+            };
+            // A full-width pass proves the side-to-move score and played PV.
+            if original_alpha == -65 && beta == 65 {
+                self.cache_diagnostics.stores += u64::from(self.table.insert(
+                    hash,
+                    board,
+                    color,
+                    ExactEntry {
+                        score: result.score,
+                        bound: Bound::Exact,
+                        pv: result.pv[..result.len as usize].to_vec(),
+                    },
+                ));
+            }
+            return Ok(result);
         }
 
         #[cfg(feature = "cost-diagnostics")]
@@ -531,6 +653,27 @@ impl<'a> EndgameSolver<'a> {
                 break;
             }
         }
+        let bound = if best.score <= original_alpha {
+            Bound::UpperBound
+        } else if best.score >= beta {
+            Bound::LowerBound
+        } else {
+            Bound::Exact
+        };
+        self.cache_diagnostics.stores += u64::from(self.table.insert(
+            hash,
+            board,
+            color,
+            ExactEntry {
+                score: best.score,
+                bound,
+                pv: if bound == Bound::Exact {
+                    best.pv[..best.len as usize].to_vec()
+                } else {
+                    Vec::new()
+                },
+            },
+        ));
         Ok(best)
     }
 
@@ -566,10 +709,14 @@ impl<'a> EndgameSolver<'a> {
             crate::cost_diagnostics::measure("exact_hash", || self.zobrist.hash(board, color));
         #[cfg(not(feature = "cost-diagnostics"))]
         let hash = self.zobrist.hash(board, color);
+        self.cache_diagnostics.probes += 1;
         #[cfg(feature = "cost-diagnostics")]
-        let entry = crate::cost_diagnostics::measure("exact_table_probe", || self.table.get(&hash));
+        let entry = crate::cost_diagnostics::measure("exact_table_probe", || {
+            self.table.get(hash, board, color)
+        });
         #[cfg(not(feature = "cost-diagnostics"))]
-        let entry = self.table.get(&hash);
+        let entry = self.table.get(hash, board, color);
+        self.cache_diagnostics.hits += u64::from(entry.is_some());
         #[cfg(feature = "cost-diagnostics")]
         crate::cost_diagnostics::event(
             17,
@@ -727,9 +874,11 @@ impl<'a> EndgameSolver<'a> {
             &[hash, best_score as u64, u64::from(bound == Bound::Exact)],
         );
         #[cfg(feature = "cost-diagnostics")]
-        crate::cost_diagnostics::measure("exact_table_store", || {
+        let stored = crate::cost_diagnostics::measure("exact_table_store", || {
             self.table.insert(
                 hash,
+                board,
+                color,
                 ExactEntry {
                     score: best_score,
                     bound,
@@ -742,8 +891,10 @@ impl<'a> EndgameSolver<'a> {
             )
         });
         #[cfg(not(feature = "cost-diagnostics"))]
-        self.table.insert(
+        let stored = self.table.insert(
             hash,
+            board,
+            color,
             ExactEntry {
                 score: best_score,
                 bound,
@@ -754,6 +905,7 @@ impl<'a> EndgameSolver<'a> {
                 },
             },
         );
+        self.cache_diagnostics.stores += u64::from(stored);
         Ok(NodeResult {
             score: best_score,
             pv: best_pv,
@@ -883,8 +1035,9 @@ mod tests {
 
     fn solve(board: &Board, color: Color) -> (CompletedEndgame, u64) {
         let keys = ZobristKeys::new();
+        let mut table = ExactTable::new(1 << 18);
         let mut nodes = 0;
-        let result = EndgameSolver::new(&keys, &mut nodes).solve(
+        let result = EndgameSolver::new(&keys, &mut table, &mut nodes).solve(
             board,
             color,
             &SearchBudget::with_time_limit(Duration::from_secs(30)),
@@ -1111,8 +1264,9 @@ mod tests {
     fn null_window_diagnostics_include_research() {
         let board = sixteen_empty_board();
         let keys = ZobristKeys::new();
+        let mut table = ExactTable::new(1 << 18);
         let mut nodes = 0;
-        let mut solver = EndgameSolver::new(&keys, &mut nodes);
+        let mut solver = EndgameSolver::new(&keys, &mut table, &mut nodes);
         let completed = solver.solve(
             &board,
             Color::Black,
@@ -1129,8 +1283,9 @@ mod tests {
     fn interruption_after_research_started_discards_exact_attempt() {
         let board = sixteen_empty_board();
         let keys = ZobristKeys::new();
+        let mut table = ExactTable::new(1 << 18);
         let mut nodes = 0;
-        let mut solver = EndgameSolver::new(&keys, &mut nodes);
+        let mut solver = EndgameSolver::new(&keys, &mut table, &mut nodes);
         let result = solver.solve(
             &board,
             Color::Black,
@@ -1149,13 +1304,17 @@ mod tests {
         )
         .unwrap();
         let keys = ZobristKeys::new();
+        let mut table = ExactTable::new(1 << 18);
         let mut nodes = 0;
-        let mut solver = EndgameSolver::new(&keys, &mut nodes);
+        let mut solver = EndgameSolver::new(&keys, &mut table, &mut nodes);
         let budget = SearchBudget::with_time_limit(Duration::from_secs(30));
         solver
             .negamax(&board, Color::Black, -1, 0, &budget)
             .unwrap();
-        let entry = solver.table.get(&keys.hash(&board, Color::Black)).unwrap();
+        let entry = solver
+            .table
+            .get(keys.hash(&board, Color::Black), &board, Color::Black)
+            .unwrap();
         assert_ne!(entry.bound, Bound::Exact);
         assert!(entry.pv.is_empty());
         let complete = solver
@@ -1206,8 +1365,9 @@ mod tests {
     fn interruption_never_claims_exactness() {
         let board = sixteen_empty_board();
         let keys = ZobristKeys::new();
+        let mut table = ExactTable::new(1 << 18);
         let mut nodes = 0;
-        let result = EndgameSolver::new(&keys, &mut nodes).solve(
+        let result = EndgameSolver::new(&keys, &mut table, &mut nodes).solve(
             &board,
             Color::Black,
             &SearchBudget::with_time_limit(Duration::from_secs(30)).with_node_limit(1),
@@ -1222,8 +1382,9 @@ mod tests {
         let board = sixteen_empty_board();
         let interrupted = |budget: SearchBudget| {
             let keys = ZobristKeys::new();
+            let mut table = ExactTable::new(1 << 18);
             let mut nodes = 0;
-            EndgameSolver::new(&keys, &mut nodes).solve(&board, Color::Black, &budget)
+            EndgameSolver::new(&keys, &mut table, &mut nodes).solve(&board, Color::Black, &budget)
         };
 
         let expired = interrupted(SearchBudget::new(Instant::now()));
@@ -1352,6 +1513,62 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 4);
+    }
+
+    #[test]
+    fn bounded_exact_table_checks_full_identity_and_preserves_proof() {
+        let board = sixteen_empty_board();
+        let changed = Board::from_string(&format_board(
+            "..B.W.B...BBW.BB.B.WWWBW.WWWBBWWB.WBBWWWWWWWWBW.WWBWBBB.BBBBBBB.",
+        ))
+        .unwrap();
+        let mut table = ExactTable::new(1);
+        let exact = ExactEntry {
+            score: 6,
+            bound: Bound::Exact,
+            pv: Vec::new(),
+        };
+        assert!(table.insert(7, &board, Color::Black, exact.clone()));
+        assert!(table.get(7, &board, Color::Black).is_some());
+        assert!(table.get(7, &board, Color::White).is_none());
+        assert!(table.get(7, &changed, Color::Black).is_none());
+        assert!(!table.insert(
+            7,
+            &board,
+            Color::Black,
+            ExactEntry {
+                score: 8,
+                bound: Bound::LowerBound,
+                pv: Vec::new()
+            }
+        ));
+        assert_eq!(table.get(7, &board, Color::Black).unwrap().score, 6);
+        assert!(table.insert(7, &changed, Color::Black, exact));
+        assert!(table.get(7, &board, Color::Black).is_none());
+        assert!(table.get(7, &changed, Color::Black).is_some());
+    }
+
+    #[test]
+    fn repeated_root_reuses_complete_exact_result() {
+        let board = Board::from_string(&format_board(
+            "..B.W.B...BBW.BB.B.WWWBW.WWWBBWWB.WBWWWWWWWWWWW.WWBWBBW.BBBBBBBW",
+        ))
+        .unwrap();
+        let keys = ZobristKeys::new();
+        let mut table = ExactTable::new(1 << 18);
+        let budget = SearchBudget::with_time_limit(Duration::from_secs(30));
+        let first = {
+            let mut nodes = 0;
+            EndgameSolver::new(&keys, &mut table, &mut nodes).solve(&board, Color::Black, &budget)
+        };
+        let mut nodes = 0;
+        let mut solver = EndgameSolver::new(&keys, &mut table, &mut nodes);
+        let repeated = solver.solve(&board, Color::Black, &budget);
+        assert!(first.exact && repeated.exact);
+        assert_eq!(first.score, repeated.score);
+        assert_eq!(first.outcome, repeated.outcome);
+        assert_eq!(first.pv, repeated.pv);
+        assert!(solver.cache_diagnostics().hits > 0);
     }
 
     fn sixteen_empty_board() -> Board {

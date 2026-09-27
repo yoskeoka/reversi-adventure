@@ -60,6 +60,9 @@ class ReinforcementTests(unittest.TestCase):
             self.assertEqual(outputs[0], outputs[1])
             report = json.loads(outputs[0]["report.json"])
             self.assertEqual(report["self_play_game_count"], 2)
+            self.assertEqual(report["self_play_search"]["midgame_depth"], 12)
+            self.assertEqual(report["candidate_executable_sha256"],
+                             reinforcement.sha(root / "candidate"))
             self.assertEqual(report["match"]["games"], 50)
             self.assertFalse(report["continued"])
             self.assertGreater(report["decisions"], 0)
@@ -149,6 +152,35 @@ class ReinforcementTests(unittest.TestCase):
             manifest["schema_version"] = 1
             manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
             with self.assertRaisesRegex(training.TrainingError, "unsupported reinforcement manifest"):
+                reinforcement.validate_manifest(manifest_path)
+
+    def test_old_version_two_manifest_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.prepare_fixture(root)
+            manifest = training.read_json(manifest_path)
+            manifest.pop("self_play_search")
+            manifest["producer_version"] = "reversi-ai-pattern-reinforcement-v2"
+            manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
+            with self.assertRaises(training.TrainingError):
+                reinforcement.validate_manifest(manifest_path)
+
+    def test_self_play_midgame_depth_is_frozen_separately(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.prepare_fixture(root)
+            manifest = training.read_json(manifest_path)
+            manifest["self_play_search"]["midgame_depth"] = 8
+            manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
+            reinforcement.validate_manifest(manifest_path)
+            self.assertEqual(manifest["candidate"]["midgame_depth"], 12)
+            output = root / "depth-eight-output"
+            reinforcement.run(manifest_path, output, progress_every=1000)
+            reinforcement.verify(manifest_path, output)
+            self.assertEqual(training.read_json(output / "report.json")["self_play_search"]["midgame_depth"], 8)
+            manifest["self_play_search"]["midgame_depth"] = 7
+            manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
+            with self.assertRaisesRegex(training.TrainingError, "12/8/12 or 12/12/12"):
                 reinforcement.validate_manifest(manifest_path)
 
     def test_profile_and_timeout_are_frozen_and_consistent(self):

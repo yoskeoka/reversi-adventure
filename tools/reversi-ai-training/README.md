@@ -91,12 +91,19 @@ Freeze a manifest. The Make defaults record 64 self-play games in 32
 color-swapped D4 pairs and a separately generated 50-game candidate match;
 only a result above 25 match points continues to 200 games. The production
 seed is newly generated and recorded in the manifest. It also records six opening plies, the
-accepted 12/12/12 depth and 16-empty exact threshold, disabled book, a
+accepted 12/12/12 match depth and 16-empty exact threshold, disabled book, a
 five-minute per-move search limit, ten-million-node cap, 310-second protocol
 timeout, and 7,680 total decisions.
 
+Set `REINFORCEMENT_SELF_PLAY_MIDGAME_DEPTH=8` only after the separate
+whole-game timing and semantic evidence supports that self-play workload.
+The default remains 12. Self-play uses 12/8/12 or 12/12/12; candidate matches,
+corpus regret, and later 0018 acceptance keep their own 12/12/12 settings.
+The manifest and report freeze the self-play setting and CLI SHA-256. Old
+version-2 manifests without this field are rejected for a new production run.
+
 Set time and node caps explicitly if the host needs different limits. The
-profile still requires depths 12/12/12 and the 16-empty threshold. The
+match profile still requires depths 12/12/12 and the 16-empty threshold. The
 protocol timeout must exceed the search time limit. The resulting manifest is
 immutable.
 

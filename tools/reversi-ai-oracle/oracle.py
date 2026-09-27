@@ -125,6 +125,24 @@ SEARCH_PERFORMANCE_REFERENCE_V1 = OracleProfile(
     candidate_depth=12,
     candidate_exact_solver_empty_squares=16,
 )
+WHOLE_GAME_DEPTH_12_EXACT_16 = OracleProfile(
+    name="whole-game-depth-12-exact-16",
+    hash_level=25,
+    depth_ranges=(DepthProbabilityRange(1, 44, 12, "100"),
+                  DepthProbabilityRange(45, 60, 16, "100")),
+    candidate_depth=12,
+    candidate_exact_solver_empty_squares=16,
+)
+WHOLE_GAME_DEPTH_8_EXACT_16 = OracleProfile(
+    name="whole-game-depth-8-exact-16",
+    hash_level=25,
+    depth_ranges=(DepthProbabilityRange(1, 17, 12, "100"),
+                  DepthProbabilityRange(18, 41, 8, "100"),
+                  DepthProbabilityRange(42, 44, 12, "100"),
+                  DepthProbabilityRange(45, 60, 16, "100")),
+    candidate_depth=12,
+    candidate_exact_solver_empty_squares=16,
+)
 PROFILES = {
     profile.name: profile
     for profile in (
@@ -132,6 +150,8 @@ PROFILES = {
         STRONG_ENGINE_HCAP_V1,
         SEARCH_PERFORMANCE_SELF_PLAY_V1,
         SEARCH_PERFORMANCE_REFERENCE_V1,
+        WHOLE_GAME_DEPTH_12_EXACT_16,
+        WHOLE_GAME_DEPTH_8_EXACT_16,
     )
 }
 

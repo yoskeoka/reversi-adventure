@@ -11,7 +11,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use self::endgame::{EndgameSolver, ExactPvsDiagnostics};
+use self::endgame::{EndgameSolver, ExactCacheDiagnostics, ExactPvsDiagnostics, ExactTable};
 use self::negascout::Negascout;
 use self::tt::{TranspositionTable, ZobristKeys};
 use crate::config::AiConfig;
@@ -29,6 +29,7 @@ pub struct SearchResult {
     pub elapsed: Duration,
     pub exact: bool,
     pub exact_pvs: ExactPvsDiagnostics,
+    pub exact_cache: ExactCacheDiagnostics,
 }
 
 /// Root outcome selected by a bounded search.
@@ -106,6 +107,7 @@ impl SearchBudget {
 /// Search engine wrapping Negascout with transposition table.
 pub struct SearchEngine {
     tt: TranspositionTable,
+    exact_table: ExactTable,
     zobrist: ZobristKeys,
     context_fingerprint: Option<u64>,
 }
@@ -124,6 +126,7 @@ impl SearchEngine {
     pub fn new() -> Self {
         Self {
             tt: TranspositionTable::new(1 << 20), // ~1M entries
+            exact_table: ExactTable::new(1 << 18),
             zobrist: ZobristKeys::new(),
             context_fingerprint: None,
         }
@@ -142,6 +145,7 @@ impl SearchEngine {
         let context_fingerprint = search_context_fingerprint(evaluator, config);
         if self.context_fingerprint != Some(context_fingerprint) {
             self.tt.clear();
+            self.exact_table.clear();
             self.context_fingerprint = Some(context_fingerprint);
         }
 
@@ -150,9 +154,11 @@ impl SearchEngine {
 
         if board.empty_cells().count_ones() <= config.exact_solver_empty_squares {
             let mut nodes_searched = 0;
-            let mut solver = EndgameSolver::new(&self.zobrist, &mut nodes_searched);
+            let mut solver =
+                EndgameSolver::new(&self.zobrist, &mut self.exact_table, &mut nodes_searched);
             let completed = solver.solve(board, color, budget);
             let exact_pvs = solver.diagnostics();
+            let exact_cache = solver.cache_diagnostics();
             return SearchResult {
                 outcome: completed.outcome,
                 score: completed.score,
@@ -163,6 +169,7 @@ impl SearchEngine {
                 elapsed: started.elapsed(),
                 exact: completed.exact,
                 exact_pvs,
+                exact_cache,
             };
         }
 
@@ -179,6 +186,7 @@ impl SearchEngine {
             elapsed: started.elapsed(),
             exact: completed.exact,
             exact_pvs: ExactPvsDiagnostics::default(),
+            exact_cache: ExactCacheDiagnostics::default(),
         }
     }
 
@@ -202,6 +210,12 @@ impl SearchEngine {
     /// Clear the transposition table.
     pub fn clear_tt(&mut self) {
         self.tt.clear();
+        self.exact_table.clear();
+    }
+
+    /// Drop exact proofs between diagnostic turns without changing heuristic TT state.
+    pub fn clear_exact_cache(&mut self) {
+        self.exact_table.clear();
     }
 }
 
