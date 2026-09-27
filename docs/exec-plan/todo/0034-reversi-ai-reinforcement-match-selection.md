@@ -21,7 +21,7 @@
 - `tools/reversi-ai-training/tests/test_reinforcement.py:20-195` -- tiny fixture と version-1 検証。
 - `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md:1-110` -- 現在の実行計画。
 - `docs/exec-plan/todo/0018-reversi-ai-strong-engine-acceptance.md:1-95` -- 外部 oracle に対する最終目標。
-- PR #226 (`https://github.com/yoskeoka/reversi-adventure/pull/226`) は旧重複エラーを早く出す draft。重複を正常に扱う本計画で置き換える。
+- PR #226 (`https://github.com/yoskeoka/reversi-adventure/pull/226`) は旧重複エラーを早く出す draft。重複を正常に扱う本計画で置き換える。ただし、失敗した局の棋譜と位置をエラーに出す診断要件は本計画に引き継ぐ。
 
 ## 変更マップ
 
@@ -40,6 +40,7 @@
 4. 同じ候補 CLI、探索設定、リソース上限でベースライン対候補を対戦させる。開局ごとに両色を受け持つペアを作り、先手有利を相殺する。まず完全な 25 ペア、50 局を実施し、候補視点の勝・敗・引分と match points（勝ち 1、引分 0.5）を記録する。50 局時点で候補の match points が 25 を超えたときだけ、同じ条件でさらに 75 ペアを実施し、累計 200 局で最終判定する。25 点以下なら 50 局の完成結果でベースラインを選ぶ。200 局を完了した場合は候補の match points が 100 を超えるときだけ候補を選び、同点以下ならベースラインを選ぶ。失敗または不完了なら結果全体を不成立とし、選択 artifact は公開しない。この選択は標本上の優位であり、0018 の目標達成を主張しない。
 5. 50 局の途中結果を `schema_version=2` と producer version を含む原子的な checkpoint として保存し、継続判断とその根拠を示す。200 局へ進んで失敗した場合、checkpoint は診断証拠として残すが選択 artifact にはしない。最終 report は学習と候補比較の全対局・条件・選択理由を含み、最後に原子的に公開する。独立 verifier は記録された対局を合法再生し、候補の更新、50 局判断、200 局判断、対戦勝敗、集計、選択と digest を再計算する。乱数局面の再生成、checkout の clean 状態、HEAD/source commit の一致を要求しない。進捗ログは人間の terminal に出し、report や candidate protocol に混ぜない。
    候補重みの `format_version=1` と特徴契約は維持し、`provenance.trainer_version` を `reversi-ai-pattern-reinforcement-v2` とする。Python/Rust の両 validator はこの新しい producer と `bounded_td_v1` を認め、artifact digest を引き続き検証する。artifact に記録された実際の seed は来歴であり、同じ棋譜の再生成を要求しない。version-1 の重み artifact は従来の検証規則で読み取れるが、version-1 の run report から version-2 の selected candidate を凍結しない。
+   `run` と `verify` の失敗は、原因を示す既存のエラー文とともに、manifest path、処理段階、対象を stderr に即時 flush して出す。対局に紐づく失敗では、自己対局・候補比較の種別、1 始まりの局番号/その段階の予定総数、pair/member、opening ID、手数または decision ID、手番・対戦側、開局着手と失敗直前までの着手を `f5d4...` 形式の短い棋譜（pass は `--`）で示す。CLI の timeout・異常終了・不正応答・違法着手、decision/turn 上限、合法再生・終局点数・game digest の不一致を含み、問題の応答があればその値も示す。検証時に記録から局を特定できる場合も同じ文脈を付ける。validation 行・opening pool・artifact・report・公開処理など局に紐づかない失敗は、段階と record ID またはファイル名、可能なら期待値/実際値を示し、架空の局番号を出さない。途中で失敗しても完了 report や選択 artifact は公開せず、診断は checkpoint/report/digest/protocol/stdout に混ぜない。
 6. 0018 は選択された候補と設定を固定し、独立に用意した未利用の開局で、既存の制限付き oracle profile と対戦する。学習・候補比較に使った開局 root を候補 pool から除外し、必要な完全ペア数を確保してから suite を固定する。`wins / all games >= 0.50`、事前の件数・信頼条件、book/深さ/完全読みのハンデは維持する。0018 の対局結果を 0019 の更新や候補選択に戻さない。異なる対局が途中で同一局面に到達しただけでは失敗させない。
 
 ## 依存関係と順序
@@ -55,6 +56,7 @@
 - 手法・探索条件・artifact/CLI digest の不一致、違法着手、欠けたゲーム、誤った勝敗/集計/選択、部分 report は失敗する。
 - version-1 manifest/report を新しい run/verify が拒否し、version-1 baseline artifact と version-2 候補 artifact を Python/Rust の両方で正しく受理する。version や provenance を偽装した artifact は拒否する。
 - 50 局後の停止・200 局への継続、200 局の勝ち越し・同点・負け越し・引分・先後交替を小さな固定対局で検証する。候補とベースラインの同条件、学習更新と候補比較の分離を確認する。
+- 自己対局・候補比較・`verify` で局中または記録の検証が失敗する fixture を作り、エラーに manifest、段階、正しい 1 始まりの局番号/総数、pair/member、手数、手番、短い棋譜、元の失敗理由が出ることを確認する。CLI timeout・違法着手・game digest 不一致を代表例にする。validation の不正行など局外の失敗では record ID またはファイル名が出て、局番号を捏造しないことを確認する。失敗時に完成成果物を公開しないことも確認する。
 - 旧 0032 baseline を `TrainedEvaluator` と候補 CLI で読み込めることを確認する。tiny fixture で独立 verifier と artifact digest を照合する。
 - Python/Rust の該当 tests、Clippy、GDExtension build、workflow lint、`git diff --check` を通す。生産長時間 run はテストゲートにしない。
 
