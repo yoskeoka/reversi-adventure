@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
-import { accessSync, constants, readFileSync, realpathSync } from 'node:fs';
+import { accessSync, constants, realpathSync } from 'node:fs';
 import { resolve, dirname, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Session, catalog, verifyConfig } from './session.mjs';
+import { loadLocalConfig } from './config.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
@@ -14,8 +15,13 @@ function external(path) {
   if (real === checkout || real.startsWith(checkout + sep)) throw new Error('artifact/oracle path must be outside checkout');
   return real;
 }
-const local = process.env.PLAYGROUND_CONFIG ? JSON.parse(readFileSync(process.env.PLAYGROUND_CONFIG, 'utf8')) : {};
 const unavailable = {};
+const { local, error: configError } = loadLocalConfig(process.env.PLAYGROUND_CONFIG);
+if (configError) {
+  unavailable.trained = `optional config unavailable: ${configError}`;
+  unavailable.oracle = `optional config unavailable: ${configError}`;
+  console.error(unavailable.trained);
+}
 function optional(name, create) {
   try { return create(); }
   catch (error) { unavailable[name] = String(error.message); console.error(`${name} unavailable: ${error.message}`); return null; }
