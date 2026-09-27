@@ -407,13 +407,15 @@ def match_openings(manifest: dict, tuning: list[dict]) -> tuple[list[tuple[str, 
     pool, excluded = [], 0
     # This stream is deliberately independent of self-play. Recorded openings,
     # not seed regeneration, are verifier input.
-    for opening in openings(manifest["seed"] ^ 0x9E3779B97F4A7C15, attempts * 2, manifest["opening_plies"]):
+    for attempted, opening in enumerate(
+            openings(manifest["seed"] ^ 0x9E3779B97F4A7C15, attempts * 2,
+                     manifest["opening_plies"]), start=1):
         if training.canonical_position_key(opening[0], opening[1]) in forbidden:
             excluded += 1
         else:
             pool.append(opening)
         if len(pool) == needed:
-            return pool, attempts, excluded
+            return pool, attempted, excluded
     fail("match opening pool could not provide complete disjoint pairs")
 
 
