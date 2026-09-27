@@ -17,7 +17,8 @@ use crate::eval::pattern::{
 
 const TRAINED_EVALUATOR_VERSION: u64 = 1;
 const TRAINER_VERSION: &str = "reversi-ai-pattern-training-v1";
-const REINFORCEMENT_VERSION: &str = "reversi-ai-pattern-reinforcement-v1";
+const REINFORCEMENT_V1_VERSION: &str = "reversi-ai-pattern-reinforcement-v1";
+const REINFORCEMENT_VERSION: &str = "reversi-ai-pattern-reinforcement-v2";
 
 #[derive(Debug)]
 pub enum TrainedEvaluatorError {
@@ -208,8 +209,10 @@ fn validate_feature_contract(value: &Value) -> Result<(), TrainedEvaluatorError>
 fn validate_provenance(value: &Value) -> Result<(), TrainedEvaluatorError> {
     let provenance = object(value, "provenance")?;
     let trainer_version = string(provenance, "trainer_version")?;
-    if !matches!(trainer_version, TRAINER_VERSION | REINFORCEMENT_VERSION)
-        || u64_value(provenance, "seed").is_err()
+    if !matches!(
+        trainer_version,
+        TRAINER_VERSION | REINFORCEMENT_V1_VERSION | REINFORCEMENT_VERSION
+    ) || u64_value(provenance, "seed").is_err()
     {
         return invalid("provenance is incomplete");
     }

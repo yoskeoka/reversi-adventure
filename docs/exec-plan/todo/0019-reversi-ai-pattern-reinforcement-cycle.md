@@ -2,7 +2,7 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
-> **Revision pending**: `0034-reversi-ai-reinforcement-match-selection.md` replaces the source/seed replay and validation-MSE selection conditions below with method/config recording and baseline-versus-candidate matches. Do not freeze another production run from this version-1 contract. The failed version-1 run is not candidate evidence.
+> **Superseded selection contract**: 0034 implements version-2 method/config recording and baseline-versus-candidate matches. Do not freeze another production run from this version-1 contract. The failed version-1 run is not candidate evidence.
 
 ## Objective and completion boundary
 

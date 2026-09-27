@@ -43,7 +43,7 @@ class ReinforcementTests(unittest.TestCase):
                 "--seed", str(seed), "--game-count", "2", "--opening-plies", "2",
                 "--opening-depth", "12", "--midgame-depth", "12", "--endgame-depth", "12",
                 "--exact-solver-empty-squares", "16", "--time-limit-ms", "1000",
-                "--node-limit", "1000", "--decision-timeout-seconds", "5", "--max-decisions", "120"]
+                "--node-limit", "1000", "--decision-timeout-seconds", "5", "--max-decisions", "10000"]
         self.assertEqual(reinforcement.main(argv), 0)
         return manifest
 
@@ -59,8 +59,9 @@ class ReinforcementTests(unittest.TestCase):
                 outputs.append({item: (directory / item).read_bytes() for item in reinforcement.OUTPUTS})
             self.assertEqual(outputs[0], outputs[1])
             report = json.loads(outputs[0]["report.json"])
-            self.assertEqual(report["game_count"], 2)
-            self.assertEqual(report["pair_count"], 1)
+            self.assertEqual(report["self_play_game_count"], 2)
+            self.assertEqual(report["match"]["games"], 50)
+            self.assertFalse(report["continued"])
             self.assertGreater(report["decisions"], 0)
             self.assertEqual(report["validation_position_keys"],
                              [training.canonical_position_key(reinforcement.INITIAL, "B")])
@@ -85,7 +86,7 @@ class ReinforcementTests(unittest.TestCase):
             self.assertEqual(["1/2" in line for line in default_lines], [True, False])
             self.assertEqual(len(limited_lines), 1)
             self.assertIn("2/2", limited_lines[0])
-            for stage in ("self-play", "replay-tuning-extraction", "validation", "artifact-update", "metrics-selection", "report-serialization", "atomic-output-publication"):
+            for stage in ("self-play", "replay-tuning-extraction", "validation", "artifact-update", "metrics", "candidate-match", "report-serialization", "atomic-output-publication"):
                 self.assertIn(f"stage {stage} start", default_log.getvalue())
                 self.assertIn(f"stage {stage} done", default_log.getvalue())
             self.assertEqual({name: (root / "default" / name).read_bytes() for name in reinforcement.OUTPUTS},
@@ -111,7 +112,7 @@ class ReinforcementTests(unittest.TestCase):
         self.assertEqual(paired.count("B"), board.count("W"))
         self.assertEqual(paired.count("W"), board.count("B"))
 
-    def test_update_bounds_and_tie_selects_baseline(self):
+    def test_update_bounds_and_match_threshold_selects(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest_path = self.prepare_fixture(root)
@@ -123,10 +124,8 @@ class ReinforcementTests(unittest.TestCase):
             training.validate_artifact(artifact)
             self.assertTrue(all(abs(value) <= 1 for tables in artifact["weights"].values() for table in tables for value in table.values()))
             self.assertEqual(reinforcement.mse(baseline, [{"board": board, "side": "B", "target": 0}])["sum_squared_error"], 0)
-            self.assertIs(reinforcement.select_artifact(baseline, artifact,
-                          {"sum_squared_error": 5}, {"sum_squared_error": 5}), baseline)
-            self.assertIs(reinforcement.select_artifact(baseline, artifact,
-                          {"sum_squared_error": 5}, {"sum_squared_error": 4}), artifact)
+            self.assertEqual(reinforcement.selected_from_match({"match_points": 100}, True), "baseline")
+            self.assertEqual(reinforcement.selected_from_match({"match_points": 100.5}, True), "candidate")
 
     def test_partial_and_corrupt_output_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -142,15 +141,15 @@ class ReinforcementTests(unittest.TestCase):
             with self.assertRaises(training.TrainingError):
                 reinforcement.verify(manifest, directory)
 
-    def test_changed_producer_digest_fails_before_cycle(self):
+    def test_version_one_manifest_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest_path = self.prepare_fixture(root)
             manifest = training.read_json(manifest_path)
-            manifest["producer_sources"]["reinforcement.py"] = "0" * 64
+            manifest["schema_version"] = 1
             manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
-            with self.assertRaisesRegex(training.TrainingError, "producer source digest mismatch"):
-                reinforcement.cycle(manifest_path)
+            with self.assertRaisesRegex(training.TrainingError, "unsupported reinforcement manifest"):
+                reinforcement.validate_manifest(manifest_path)
 
     def test_profile_and_timeout_are_frozen_and_consistent(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -189,7 +188,7 @@ class ReinforcementTests(unittest.TestCase):
             with self.assertRaisesRegex(training.TrainingError, "report metadata"):
                 reinforcement.verify(manifest_path, directory)
 
-    def test_validation_split_leakage_fails(self):
+    def test_validation_overlap_is_excluded_from_mse(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = self.prepare_fixture(root)
@@ -202,8 +201,11 @@ class ReinforcementTests(unittest.TestCase):
             data = training.read_json(manifest)
             data["validation"] = {"path": str(validation), "sha256": reinforcement.sha(validation), "source": "test-v1"}
             manifest.write_bytes(training.canonical_json(data) + b"\n")
-            with self.assertRaises(training.TrainingError):
-                reinforcement.cycle(manifest)
+            output = root / "out"
+            reinforcement.run(manifest, output)
+            report = training.read_json(output / "report.json")
+            self.assertEqual(report["validation"]["remaining_records"], 0)
+            self.assertEqual(report["validation"]["baseline"]["status"], "unavailable")
 
     def test_partial_candidate_line_obeys_timeout(self):
         with tempfile.TemporaryDirectory() as temporary:

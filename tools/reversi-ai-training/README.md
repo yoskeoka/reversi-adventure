@@ -87,8 +87,10 @@ suite.
 A versioned tiny validation input and fake CLI under `fixtures/` exercise the
 protocol in unit tests. They are too small for strength evidence.
 
-On the clean source checkout, freeze a manifest. The Make defaults record 64
-games in 32 color-swapped D4 pairs, seed `20260926`, six opening plies, the
+Freeze a manifest. The Make defaults record 64 self-play games in 32
+color-swapped D4 pairs and a separately generated 50-game candidate match;
+only a result above 25 match points continues to 200 games. The production
+seed is newly generated and recorded in the manifest. It also records six opening plies, the
 accepted 12/12/12 depth and 16-empty exact threshold, disabled book, a
 five-minute per-move search limit, ten-million-node cap, 310-second protocol
 timeout, and 7,680 total decisions.
@@ -109,8 +111,9 @@ make pattern-reinforcement-prepare \
 
 A human starts the following long-running command in another terminal. Stop it
 by terminating that process. A failed or interrupted cycle has no valid
-`report.json`; start over with a fresh output directory and the same frozen
-manifest.
+`report.json`; its 50-game checkpoint is diagnostic only, never resume input.
+Start over from self-play in a fresh output directory. `run` rejects a
+nonempty directory, including one containing a checkpoint.
 
 An agent and the test targets leave this run to the human operator.
 
@@ -129,14 +132,15 @@ Progress is not part of the candidate protocol or any output artifact and does
 not replace final verification.
 
 After the human run finishes, a later task validates the immutable outputs and
-records the SHA-256 of the manifest, four output files, and regret report. The
+records the SHA-256 of the manifest, five output files, and regret report. The
 verifier replays every legal move, recomputes each game digest and the bounded
-update, checks the disjoint validation input, and recomputes selection metrics.
+update, checks validation exclusions, the checkpoint, match points, and selection.
 The report includes validation position keys for 0018 to compare with its
 acceptance suite and the replayed self-play positions.
 
-Only a strictly lower validation mean squared error selects the candidate.
-The baseline wins a tie.
+Validation MSE is diagnostic only. The candidate is selected only after more
+than 25 match points at 50 games and more than 100 at 200 games; otherwise the
+baseline wins.
 
 ```sh
 make pattern-reinforcement-verify \

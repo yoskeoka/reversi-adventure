@@ -19,9 +19,9 @@ from pathlib import Path
 
 import training
 
-VERSION = "reversi-ai-pattern-reinforcement-v1"
+VERSION = "reversi-ai-pattern-reinforcement-v2"
 PAIRING = "color_swap_d4_v1"
-OUTPUTS = ("candidate-artifact.json", "selected-artifact.json", "games.jsonl", "report.json")
+OUTPUTS = ("candidate-artifact.json", "selected-artifact.json", "games.jsonl", "checkpoint.json", "report.json")
 
 
 def positive_interval(value: str) -> int:
@@ -158,22 +158,9 @@ def openings(seed: int, count: int, plies: int) -> list[tuple[str, str, list[str
 
 def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
     manifest = training.read_json(path)
-    require_keys(manifest, {"schema_version", "producer_version", "source_commit", "producer_sources", "baseline_artifact", "candidate", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation"}, "manifest")
-    if manifest["schema_version"] != 1 or manifest["producer_version"] != VERSION:
+    require_keys(manifest, {"schema_version", "producer_version", "baseline_artifact", "candidate", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match"}, "manifest")
+    if manifest["schema_version"] != 2 or manifest["producer_version"] != VERSION:
         fail("unsupported reinforcement manifest")
-    if not isinstance(manifest["source_commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", manifest["source_commit"]):
-        fail("source_commit must be a complete commit SHA")
-    root_repo = Path(__file__).resolve().parents[2]
-    status = subprocess.run(["git", "status", "--porcelain"], cwd=root_repo, capture_output=True, text=True, check=True).stdout
-    if status:
-        fail("source worktree is dirty; frozen source is required")
-    source = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root_repo, capture_output=True, text=True, check=True).stdout.strip()
-    if source != manifest["source_commit"]:
-        fail("source commit mismatch")
-    sources = require_keys(manifest["producer_sources"], {"reinforcement.py", "training.py"}, "producer_sources")
-    for name, path_source in (("reinforcement.py", Path(__file__)), ("training.py", Path(training.__file__))):
-        if not isinstance(sources[name], str) or not HEX.fullmatch(sources[name]) or sources[name] != sha(path_source):
-            fail(f"producer source digest mismatch: {name}")
     root = path.parent
     baseline_entry = require_keys(manifest["baseline_artifact"], {"path", "sha256", "artifact_digest"}, "baseline_artifact")
     baseline = checked_file(root, {key: baseline_entry[key] for key in ("path", "sha256")}, "baseline artifact")
@@ -203,6 +190,10 @@ def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
     training.require_int(manifest["max_decisions"], "max_decisions", 1, 256 * 120)
     if manifest["pairing"] != PAIRING or manifest["update_rule"] != {"name": "bounded_td_v1", "normalization_divisor": 64}:
         fail("unsupported pairing or update rule")
+    match = require_keys(manifest["match"], {"first_pairs", "continuation_pairs", "max_opening_attempts"}, "match")
+    if training.require_int(match["first_pairs"], "first match pairs", 1) != 25 or training.require_int(match["continuation_pairs"], "continuation match pairs", 0) != 75:
+        fail("match requires 25 initial and 75 continuation pairs")
+    training.require_int(match["max_opening_attempts"], "match opening attempts", 25)
     validation_entry = require_keys(manifest["validation"], {"path", "sha256", "source"}, "validation")
     if not isinstance(validation_entry["source"], str) or not validation_entry["source"]:
         fail("validation source must be named")
@@ -264,8 +255,8 @@ class Candidate:
         self.process.communicate()
 
 
-def play(pair: int, member: int, board: str, side: str, opening: list[str], rotation: int,
-         candidate: Candidate, remaining: list[int]) -> dict:
+def play(kind: str, pair: int, member: int, board: str, side: str, opening: list[str], rotation: int,
+         players: dict[str, Candidate], sides: dict[str, str], remaining: list[int]) -> dict:
     start_board, start_side = board, side
     decisions = []
     for turn in range(121):
@@ -275,8 +266,9 @@ def play(pair: int, member: int, board: str, side: str, opening: list[str], rota
         if remaining[0] == 0:
             fail("maximum decision count exceeded")
         remaining[0] -= 1
-        identifier = f"p{pair}-m{member}-t{turn}"
-        move = candidate.choose(identifier, board, side) if legal else "pass"
+        player = sides[side]
+        identifier = f"{kind}-p{pair}-m{member}-t{turn}"
+        move = players[player].choose(identifier, board, side) if legal else "pass"
         if legal and move not in legal or not legal and move != "pass":
             fail(f"illegal candidate response at {identifier}: {move}")
         decisions.append({"id": identifier, "board": board, "side": side, "move": move})
@@ -286,7 +278,7 @@ def play(pair: int, member: int, board: str, side: str, opening: list[str], rota
     else:
         fail("game exceeded 120 turns")
     counts = {"B": board.count("B"), "W": board.count("W")}
-    game = {"pair": pair, "member": member, "opening": opening, "rotation": rotation,
+    game = {"kind": kind, "pair": pair, "member": member, "players": sides, "opening": opening, "rotation": rotation,
             "start_board": start_board, "start_side": start_side, "decisions": decisions,
             "terminal_board": board, "disc_counts": counts, "final_score_black": counts["B"] - counts["W"], "failure": None}
     game["game_digest"] = training.digest(game)
@@ -319,12 +311,12 @@ def replay(game: dict) -> list[dict]:
     return tuning
 
 
-def validate_positions(path: Path, tuning: list[dict], source: str) -> list[dict]:
+def validate_positions(path: Path, tuning: list[dict], source: str) -> tuple[list[dict], list[str]]:
     records = training.read_jsonl(path)
     if not records:
         fail("validation input is empty")
     seen = {training.canonical_position_key(row["board"], row["side"]) for row in tuning}
-    validated = []
+    validated, excluded = [], []
     for row in records:
         if row.get("schema_version") != 1 or row.get("split") != "validation" or not isinstance(row.get("record_id"), str):
             fail("validation record schema or split mismatch")
@@ -333,10 +325,11 @@ def validate_positions(path: Path, tuning: list[dict], source: str) -> list[dict
         board, side, target = training.parse_position(row, f"validation {row['record_id']}")
         key = training.canonical_position_key(board, side)
         if key in seen:
-            fail("validation position overlaps tuning records")
+            excluded.append(row["record_id"])
+            continue
         seen.add(key)
         validated.append({"id": row["record_id"], "board": board, "side": side, "target": target})
-    return validated
+    return validated, sorted(excluded)
 
 
 def validation_keys(rows: list[dict]) -> list[str]:
@@ -374,23 +367,67 @@ def updated_artifact(baseline: dict, tuning: list[dict], manifest: dict) -> dict
 
 
 def mse(artifact: dict, rows: list[dict]) -> dict:
+    if not rows:
+        return {"records": 0, "status": "unavailable"}
     errors = [training.predict(artifact["weights"], row["board"], row["side"]) - row["target"] for row in rows]
-    return {"records": len(rows), "sum_squared_error": sum(error * error for error in errors),
+    return {"records": len(rows), "status": "available", "sum_squared_error": sum(error * error for error in errors),
             "mean_squared_error": sum(error * error for error in errors) / len(rows)}
 
 
-def select_artifact(baseline: dict, candidate: dict, base_metrics: dict, candidate_metrics: dict) -> dict:
-    return candidate if candidate_metrics["sum_squared_error"] < base_metrics["sum_squared_error"] else baseline
-
-
-def output_bytes(artifact: dict, selected: dict, games: list[dict], report: dict) -> dict[str, bytes]:
+def output_bytes(artifact: dict, selected: dict, games: list[dict], checkpoint: dict, report: dict) -> dict[str, bytes]:
     return {"candidate-artifact.json": training.canonical_json(artifact) + b"\n",
             "selected-artifact.json": training.canonical_json(selected) + b"\n",
             "games.jsonl": b"".join(training.canonical_json(game) + b"\n" for game in games),
+            "checkpoint.json": training.canonical_json(checkpoint) + b"\n",
             "report.json": training.canonical_json(report) + b"\n"}
 
 
-def cycle(manifest_path: Path, progress: Progress | None = None) -> dict[str, bytes]:
+def match_summary(games: list[dict]) -> dict:
+    wins = losses = draws = 0
+    for game in games:
+        score = game["final_score_black"] * (1 if game["players"]["B"] == "candidate" else -1)
+        if score > 0:
+            wins += 1
+        elif score < 0:
+            losses += 1
+        else:
+            draws += 1
+    return {"games": len(games), "wins": wins, "losses": losses, "draws": draws,
+            "match_points": wins + draws * 0.5}
+
+
+def selected_from_match(summary: dict, continued: bool) -> str:
+    return "candidate" if continued and summary["match_points"] > 100 else "baseline"
+
+
+def match_openings(manifest: dict, tuning: list[dict]) -> tuple[list[tuple[str, str, list[str], int]], int, int]:
+    needed = manifest["match"]["first_pairs"] + manifest["match"]["continuation_pairs"]
+    attempts = manifest["match"]["max_opening_attempts"]
+    forbidden = {training.canonical_position_key(row["board"], row["side"]) for row in tuning}
+    pool, excluded = [], 0
+    # This stream is deliberately independent of self-play. Recorded openings,
+    # not seed regeneration, are verifier input.
+    for opening in openings(manifest["seed"] ^ 0x9E3779B97F4A7C15, attempts * 2, manifest["opening_plies"]):
+        if training.canonical_position_key(opening[0], opening[1]) in forbidden:
+            excluded += 1
+        else:
+            pool.append(opening)
+        if len(pool) == needed:
+            return pool, attempts, excluded
+    fail("match opening pool could not provide complete disjoint pairs")
+
+
+def atomic_write(directory: Path, name: str, data: bytes) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=directory, prefix=f".{name}.", delete=False) as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    os.replace(temporary, directory / name)
+
+
+def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_callback=None) -> dict[str, bytes]:
     manifest, baseline_path, executable, validation_path = validate_manifest(manifest_path)
     progress = progress or Progress(1)
     baseline = training.read_json(baseline_path)
@@ -402,11 +439,11 @@ def cycle(manifest_path: Path, progress: Progress | None = None) -> dict[str, by
     try:
         for pair, (board, side, opening, rotation) in enumerate(generated):
             game_started = time.monotonic()
-            games.append(play(pair, 0, board, side, opening, 0, candidate, remaining))
+            games.append(play("self-play", pair, 0, board, side, opening, 0, {"baseline": candidate}, {"B": "baseline", "W": "baseline"}, remaining))
             progress.game(pair, 0, len(games), manifest["game_count"], game_started)
             paired_board, paired_side = rotated_pair(board, side, rotation)
             game_started = time.monotonic()
-            games.append(play(pair, 1, paired_board, paired_side, opening, rotation, candidate, remaining))
+            games.append(play("self-play", pair, 1, paired_board, paired_side, opening, rotation, {"baseline": candidate}, {"B": "baseline", "W": "baseline"}, remaining))
             progress.game(pair, 1, len(games), manifest["game_count"], game_started)
     finally:
         candidate.close()
@@ -415,48 +452,79 @@ def cycle(manifest_path: Path, progress: Progress | None = None) -> dict[str, by
     tuning = [row for game in games for row in replay(game)]
     progress.stage_done("replay-tuning-extraction", stage)
     stage = progress.stage_start("validation")
-    validation = validate_positions(validation_path, tuning, manifest["validation"]["source"])
+    validation, excluded_validation_ids = validate_positions(validation_path, tuning, manifest["validation"]["source"])
     progress.stage_done("validation", stage)
     stage = progress.stage_start("artifact-update")
     artifact = updated_artifact(baseline, tuning, manifest)
     training.validate_artifact(artifact)
     progress.stage_done("artifact-update", stage)
-    stage = progress.stage_start("metrics-selection")
+    stage = progress.stage_start("metrics")
     base_metrics, candidate_metrics = mse(baseline, validation), mse(artifact, validation)
-    selected = select_artifact(baseline, artifact, base_metrics, candidate_metrics)
-    progress.stage_done("metrics-selection", stage)
+    progress.stage_done("metrics", stage)
+    match_pool, attempts, excluded_openings = match_openings(manifest, tuning)
+    with tempfile.NamedTemporaryFile(prefix="reversi-ai-candidate-", suffix=".json", delete=False) as handle:
+        handle.write(training.canonical_json(artifact) + b"\n")
+        candidate_path = Path(handle.name)
+    match_games = []
+    stage = progress.stage_start("candidate-match")
+    baseline_player = Candidate(executable, baseline_path, manifest["candidate"], manifest["decision_timeout_seconds"])
+    candidate_player = Candidate(executable, candidate_path, manifest["candidate"], manifest["decision_timeout_seconds"])
+    try:
+        for pair, (board, side, opening, rotation) in enumerate(match_pool):
+            for member, (match_board, match_side, match_rotation, sides) in enumerate(((board, side, 0, {"B": "candidate", "W": "baseline"}), (rotated_pair(board, side, rotation)[0], rotated_pair(board, side, rotation)[1], rotation, {"B": "baseline", "W": "candidate"}))):
+                started = time.monotonic()
+                match_games.append(play("candidate-match", pair, member, match_board, match_side, opening, match_rotation, {"baseline": baseline_player, "candidate": candidate_player}, sides, remaining))
+                progress.game(pair, member, len(match_games), 200, started)
+            if pair + 1 == 25:
+                first = match_summary(match_games)
+                continued = first["match_points"] > 25
+                checkpoint = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games], "match": first, "continued": continued}
+                checkpoint["checkpoint_digest"] = training.digest(checkpoint)
+                if checkpoint_callback:
+                    checkpoint_callback(training.canonical_json(checkpoint) + b"\n")
+                if not continued:
+                    break
+    finally:
+        baseline_player.close()
+        candidate_player.close()
+        candidate_path.unlink(missing_ok=True)
+    progress.stage_done("candidate-match", stage)
+    first = match_summary(match_games[:50])
+    continued = first["match_points"] > 25
+    checkpoint = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
+    checkpoint["checkpoint_digest"] = training.digest(checkpoint)
+    final_match = match_summary(match_games)
+    selected_name = selected_from_match(final_match, continued)
+    selected = artifact if selected_name == "candidate" else baseline
     stage = progress.stage_start("report-serialization")
-    report = {"schema_version": 1, "producer_version": VERSION, "source_commit": manifest["source_commit"],
-              "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
+    report = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": artifact["artifact_digest"],
-              "selected_artifact_digest": selected["artifact_digest"], "selected": "candidate" if selected is artifact else "baseline",
-              "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics},
+              "selected_artifact_digest": selected["artifact_digest"], "selected": selected_name,
+              "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics, "excluded_ids": excluded_validation_ids, "remaining_records": len(validation)},
               "validation_position_keys": validation_keys(validation),
-              "game_count": len(games), "pair_count": len(games) // 2, "game_digests": [game["game_digest"] for game in games],
-              "decisions": manifest["max_decisions"] - remaining[0], "failures": [], "output_sha256": {}}
-    partial = output_bytes(artifact, selected, games, report)
+              "self_play_game_count": len(games), "self_play_game_digests": [game["game_digest"] for game in games],
+              "match": final_match, "first_match": first, "continued": continued, "match_opening_attempts": attempts, "match_opening_excluded": excluded_openings,
+              "game_digests": [game["game_digest"] for game in games + match_games], "decisions": manifest["max_decisions"] - remaining[0], "failures": [], "output_sha256": {}}
+    all_games = games + match_games
+    partial = output_bytes(artifact, selected, all_games, checkpoint, report)
     report["output_sha256"] = {name: hashlib.sha256(partial[name]).hexdigest() for name in OUTPUTS[:-1]}
     report["report_digest"] = training.digest(report)
-    data = output_bytes(artifact, selected, games, report)
+    data = output_bytes(artifact, selected, all_games, checkpoint, report)
     progress.stage_done("report-serialization", stage)
     return data
 
 
 def run(manifest: Path, directory: Path, progress_every: int = 1) -> None:
-    if any((directory / name).exists() for name in OUTPUTS):
-        fail("output paths already exist; choose a fresh directory")
+    if directory.exists() and any(directory.iterdir()):
+        fail("output directory must be nonexistent or empty; refusing resume or overwrite")
     progress = Progress(progress_every)
-    data = cycle(manifest, progress)
-    directory.mkdir(parents=True, exist_ok=True)
+    data = cycle(manifest, progress, lambda checkpoint: atomic_write(directory, "checkpoint.json", checkpoint))
     temporary = {}
     stage = progress.stage_start("atomic-output-publication")
     try:
         for name in OUTPUTS:
             with tempfile.NamedTemporaryFile(dir=directory, prefix=f".{name}.", delete=False) as handle:
-                handle.write(data[name])
-                handle.flush()
-                os.fsync(handle.fileno())
-                temporary[name] = Path(handle.name)
+                handle.write(data[name]); handle.flush(); os.fsync(handle.fileno()); temporary[name] = Path(handle.name)
         for name in OUTPUTS:
             os.replace(temporary[name], directory / name)
     finally:
@@ -478,19 +546,21 @@ def verify(manifest_path: Path, directory: Path) -> None:
         if report.get("output_sha256", {}).get(name) != hashlib.sha256(raw[name]).hexdigest():
             fail(f"{name} digest mismatch")
     games = training.read_jsonl(directory / "games.jsonl")
-    if len(games) != manifest["game_count"] or report.get("game_count") != len(games) or report.get("pair_count") != len(games) // 2:
+    self_games, match_games = games[:manifest["game_count"]], games[manifest["game_count"]:]
+    if len(self_games) != manifest["game_count"] or len(match_games) not in (50, 200):
         fail("incomplete game set")
-    generated = openings(manifest["seed"], manifest["game_count"], manifest["opening_plies"])
-    for pair, (board, side, opening, rotation) in enumerate(generated):
-        for member in (0, 1):
-            game = games[2 * pair + member]
-            expected_board, expected_side = (board, side) if member == 0 else rotated_pair(board, side, rotation)
-            if game["pair"] != pair or game["member"] != member or game["start_board"] != expected_board or game["start_side"] != expected_side or game["opening"] != opening or game["rotation"] != (rotation if member else 0) or game["failure"] is not None:
-                fail("game pairing or opening mismatch")
-    tuning = [row for game in games for row in replay(game)]
-    if report.get("game_digests") != [game["game_digest"] for game in games] or report.get("decisions") != len(tuning) or len(tuning) > manifest["max_decisions"] or report.get("failures") != []:
+    for index, game in enumerate(games):
+        if game.get("failure") is not None or game.get("kind") not in ("self-play", "candidate-match") or not isinstance(game.get("players"), dict):
+            fail("game metadata mismatch")
+        replay(game)
+        if index < len(self_games) and (game["kind"] != "self-play" or set(game["players"].values()) != {"baseline"}):
+            fail("self-play game metadata mismatch")
+        if index >= len(self_games) and (game["kind"] != "candidate-match" or set(game["players"].values()) != {"baseline", "candidate"}):
+            fail("match game metadata mismatch")
+    tuning = [row for game in self_games for row in replay(game)]
+    if report.get("game_digests") != [game["game_digest"] for game in games] or report.get("decisions") < len(tuning) or report.get("decisions") > manifest["max_decisions"] or report.get("failures") != []:
         fail("game record or resource metadata mismatch")
-    validation = validate_positions(validation_path, tuning, manifest["validation"]["source"])
+    validation, excluded_ids = validate_positions(validation_path, tuning, manifest["validation"]["source"])
     baseline = training.read_json(baseline_path)
     candidate = training.read_json(directory / "candidate-artifact.json")
     training.validate_artifact(candidate)
@@ -498,14 +568,26 @@ def verify(manifest_path: Path, directory: Path) -> None:
     if candidate != expected:
         fail("candidate update mismatch")
     base_metrics, candidate_metrics = mse(baseline, validation), mse(candidate, validation)
-    selected = select_artifact(baseline, candidate, base_metrics, candidate_metrics)
+    first = match_summary(match_games[:50])
+    continued = first["match_points"] > 25
+    if continued != (len(match_games) == 200):
+        fail("match continuation mismatch")
+    final_match = match_summary(match_games)
+    selected_name = selected_from_match(final_match, continued)
+    selected = candidate if selected_name == "candidate" else baseline
     if training.read_json(directory / "selected-artifact.json") != selected:
         fail("selected artifact mismatch")
-    checks = {"schema_version": 1, "producer_version": VERSION, "source_commit": manifest["source_commit"],
+    checkpoint = training.read_json(directory / "checkpoint.json")
+    expected_checkpoint = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
+    expected_checkpoint["checkpoint_digest"] = training.digest(expected_checkpoint)
+    if checkpoint != expected_checkpoint:
+        fail("checkpoint metadata or decision mismatch")
+    checks = {"schema_version": 2, "producer_version": VERSION,
               "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": candidate["artifact_digest"],
-              "selected_artifact_digest": selected["artifact_digest"], "selected": "candidate" if selected is candidate else "baseline",
-              "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics}}
+              "selected_artifact_digest": selected["artifact_digest"], "selected": selected_name,
+              "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics, "excluded_ids": excluded_ids, "remaining_records": len(validation)},
+              "self_play_game_count": len(self_games), "self_play_game_digests": [game["game_digest"] for game in self_games], "match": final_match, "first_match": first, "continued": continued}
     checks["validation_position_keys"] = validation_keys(validation)
     if any(report.get(key) != value for key, value in checks.items()):
         fail("report metadata or selection mismatch")
@@ -514,12 +596,9 @@ def verify(manifest_path: Path, directory: Path) -> None:
 def prepare(args: argparse.Namespace) -> None:
     if args.manifest.exists():
         fail("manifest already exists; choose a fresh immutable path")
-    root = Path(__file__).resolve().parents[2]
-    source = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
     baseline = training.read_json(args.baseline_artifact)
     training.validate_artifact(baseline)
-    manifest = {"schema_version": 1, "producer_version": VERSION, "source_commit": source,
-                "producer_sources": {"reinforcement.py": sha(Path(__file__)), "training.py": sha(Path(training.__file__))},
+    manifest = {"schema_version": 2, "producer_version": VERSION,
                 "baseline_artifact": {"path": str(args.baseline_artifact.resolve()), "sha256": sha(args.baseline_artifact),
                                       "artifact_digest": baseline["artifact_digest"]},
                 "candidate": {"path": str(args.candidate_executable.resolve()), "sha256": sha(args.candidate_executable),
@@ -532,7 +611,8 @@ def prepare(args: argparse.Namespace) -> None:
                 "max_decisions": args.max_decisions,
                 "update_rule": {"name": "bounded_td_v1", "normalization_divisor": 64},
                 "validation": {"path": str(args.validation_input.resolve()), "sha256": sha(args.validation_input),
-                               "source": args.validation_source}}
+                               "source": args.validation_source},
+                "match": {"first_pairs": args.match_first_pairs, "continuation_pairs": args.match_continuation_pairs, "max_opening_attempts": args.match_max_opening_attempts}}
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_bytes(training.canonical_json(manifest) + b"\n")
     try:
@@ -571,6 +651,9 @@ def main(argv: list[str]) -> int:
     creation.add_argument("--validation-source", required=True)
     for option in ("seed", "game-count", "opening-plies", "opening-depth", "midgame-depth", "endgame-depth", "exact-solver-empty-squares", "time-limit-ms", "node-limit", "decision-timeout-seconds", "max-decisions"):
         creation.add_argument(f"--{option}", type=int, required=True)
+    creation.add_argument("--match-first-pairs", type=int, default=25)
+    creation.add_argument("--match-continuation-pairs", type=int, default=75)
+    creation.add_argument("--match-max-opening-attempts", type=int, default=200)
     for name in ("run", "verify", "regret-command", "regret-timeout"):
         command = commands.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)
