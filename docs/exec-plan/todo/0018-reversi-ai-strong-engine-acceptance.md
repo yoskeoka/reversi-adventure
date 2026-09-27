@@ -2,6 +2,8 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+> **Revision pending**: `0034-reversi-ai-reinforcement-match-selection.md` changes how 0019 selects its candidate and removes exact source/seed replay as a gate. Keep this plan's restricted-oracle profile and win-rate target; freeze its opening suite only after the selected candidate is verified under the revised contract.
+
 ## Objective and completion boundary
 
 Run the final held-out evidence suite for the project-owned strong engine under
