@@ -588,6 +588,14 @@ window. It probes later moves with a one-point window and repeats a probe with
 the full window when the result can raise alpha without proving a cutoff.
 Only proven bounds may be reused from these probes; a bounded result never
 becomes a completed exact root score or a fabricated principal variation.
+Move ordering and strict greater-than tie breaking preserve the chosen move
+and complete principal variation; exact move ordering is independent of
+transposition hits so extra probes cannot change equal-score choices.
+Every probe and retry obeys the same search
+budget; interruption discards the whole exact attempt. Profiler diagnostics
+count exact null-window calls, fail-highs, and full re-searches separately
+from searched nodes. These counts are diagnostic and may change when the
+search tree changes.
 
 ### Whole-game self-play performance
 
@@ -604,7 +612,9 @@ has one process for exactly one game. Process startup and shutdown are measured
 separately from decision time. A second CLI workload keeps the same process
 across all games, matching the reinforcement runner. Runs are serial on one
 host with pinned binary and evaluator artifact SHA-256, search settings,
-timeouts, and resource caps. Each completed game reports wall time, user and
+timeouts, and resource caps.
+
+Each completed game reports wall time, user and
 system CPU, peak RSS, each decision time, search count, and exact-cache probes,
 hits, and stores. Missing CPU or RSS rejects a performance adoption claim.
 Raw per-game data and aggregates are independently recalculable; diagnostics
@@ -621,6 +631,7 @@ state, and timeout or interruption cannot turn a bound or unfinished root into
 an exact answer or principal variation. Capacity and replacement are fixed and
 observable, including when collisions occur; ordinary heuristic TT depth
 semantics are unchanged.
+
 The diagnostic CLI can select a `turn` cache scope, which clears only the
 exact table before each request, or the default `game` scope, which retains
 proofs across requests. Both scopes use the same solver and heuristic TT.
@@ -633,20 +644,14 @@ settings. A version-2 production manifest and report identify the selected
 self-play depths, exact threshold, and executable SHA-256. `prepare`, `run`,
 and `verify` reject a mismatched binary or manifest, including an older
 manifest lacking these identities. Heuristic positions at depth 8 and 12 are
-different workloads. Within one configuration, baseline and candidate must
+different workloads.
+
+Within one configuration, baseline and candidate must
 agree on move, score, and completed exactness for the same positions; exact
 scores are checked against the independent oracle. The report states both
 workload times, measured cause of any improvement, and the available settings
 if the 2–3 minute guide is missed. The guide becomes an acceptance threshold
 only after the oracle's whole-game result has been measured.
-Move ordering and strict greater-than tie breaking preserve the chosen move
-and complete principal variation; exact move ordering is independent of
-transposition hits so extra probes cannot change equal-score choices.
-Every probe and retry obeys the same search
-budget; interruption discards the whole exact attempt. Profiler diagnostics
-count exact null-window calls, fail-highs, and full re-searches separately
-from searched nodes. These counts are diagnostic and may change when the
-search tree changes.
 
 ### SearchEngine
 
@@ -655,6 +660,7 @@ Wrapper around `Negascout` managing the transposition table and Zobrist keys.
 ```rust
 struct SearchEngine {
     tt: TranspositionTable,
+    exact_table: ExactTable,
     zobrist: ZobristKeys,
     context_fingerprint: Option<u64>,
 }
@@ -662,7 +668,8 @@ struct SearchEngine {
 
 - `SearchEngine::new()` — Create with default TT capacity (~1M entries).
 - `SearchEngine::search_with_budget<E: BoardEvaluator + ?Sized>(board: &Board, color: Color, evaluator: &E, config: &AiConfig, budget: &SearchBudget)` — Run iterative deepening search within the supplied budget. Returns `SearchResult`.
-- `SearchEngine::clear_tt()` — Clear all entries in the transposition table. Useful between games to avoid cross-game contamination.
+- `SearchEngine::clear_tt()` — Clear both heuristic and exact tables.
+- `SearchEngine::clear_exact_cache()` — Clear only the exact table for diagnostic turn-scoped comparison.
 
 ### SearchBudget
 
