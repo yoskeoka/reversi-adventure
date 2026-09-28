@@ -18,7 +18,7 @@
 - `tools/reversi-ai-oracle/oracle.py:80-159,213-245,698-705,850-945,1774-1780` — Oracle の着手番号別 `-depthprobrange`、pin 済み source/cache/setup。
 - `rust/reversi-ai/src/eval/trained.rs:42-143`, `tools/reversi-ai-training/training.py:282-343`, `tools/reversi-ai-training/fixtures/tiny-manifest.json`, `tools/reversi-ai-training/README.md:1-15` — TrainedEvaluator の artifact 契約と強さを主張しない小さな fixture。
 - `Makefile:1-9,155-158`, `tools/reversi-ai-playground/README.md:1-49` — 現行の install/start と既存 Oracle setup target。
-- `docs/exec-plan/todo/0040-reversi-ai-advisor-analysis.md`（別 plan PR） — 第1段階の全合法手分析プロトコルと専用フェーズ境界。
+- `docs/exec-plan/todo/0040-reversi-ai-advisor-analysis.md`（PR #240） — 第1段階の全合法手分析プロトコルと専用フェーズ境界。
 
 ## 変更マップ
 
