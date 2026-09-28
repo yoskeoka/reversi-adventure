@@ -4,14 +4,24 @@ Local development UI for live Reversi games. It is not part of the Godot game or
 
 ## Start
 
-Install Node.js 20.19+ or 22.12+, pnpm 10, and the Rust toolchain. From this directory:
+Install Node.js 20.19+ or 22.12+, pnpm 10, and the Rust toolchain. From the repository root, install dependencies and start the playground with:
 
 ```sh
+make playground-install
+make playground
+```
+
+The direct package commands are also available:
+
+```sh
+cd tools/reversi-ai-playground
 pnpm install
 pnpm dev
 ```
 
-`pnpm dev` builds `reversi-ai-cli` in release mode, computes its SHA-256 digest, starts the backend on `127.0.0.1:8787`, and serves the UI at `http://127.0.0.1:5173`. Stop with Ctrl-C. The root `make playground` target starts the same command after installation. No external oracle is required for human, random, strategic, or novice games.
+The manifest and pnpm lockfile belong in `tools/reversi-ai-playground`. Its `node_modules/` and build output are local ignored artifacts. Root-level npm manifests, pnpm lockfiles, and `node_modules/` are not inputs or committed artifacts for this tool.
+
+`pnpm dev` builds `reversi-ai-cli` in release mode, computes its SHA-256 digest, starts the backend on `127.0.0.1:8787`, and serves the UI at `http://127.0.0.1:5173`. Stop with Ctrl-C. No external oracle is required for human, random, strategic, or novice games.
 
 ## Optional local players
 

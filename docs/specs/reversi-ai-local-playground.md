@@ -1,6 +1,8 @@
 # Local Reversi AI playground
 
-This development-only tool runs from `tools/reversi-ai-playground` with `pnpm install` and `pnpm dev`. It binds HTTP and WebSocket to `127.0.0.1`. Startup builds the project CLI in release mode and fixes its SHA-256 digest for the lifetime of the server. The browser sends only stable player IDs, game settings, moves, and a reconnect token. Local configuration, never a WebSocket request, names the trained artifact and external oracle binary/data.
+This development-only tool is owned by `tools/reversi-ai-playground`; its only committed Node manifest and pnpm lockfile are `tools/reversi-ai-playground/package.json` and `tools/reversi-ai-playground/pnpm-lock.yaml`. From the repository root, `make playground-install` resolves dependencies and `make playground` starts the tool, with both commands running pnpm in that package directory. The package's `node_modules/` and build output are local ignored artifacts. Root-level npm manifests, pnpm lockfiles, and `node_modules/` are not inputs or output contracts for the tool.
+
+The tool binds HTTP and WebSocket to `127.0.0.1`. Startup builds the project CLI in release mode and fixes its SHA-256 digest for the lifetime of the server. The browser sends only stable player IDs, game settings, moves, and a reconnect token. Local configuration, never a WebSocket request, names the trained artifact and external oracle binary/data.
 
 ## Session and rules
 
