@@ -1,6 +1,6 @@
 use std::io::{self, BufRead, Write};
 
-use reversi_ai::config::AiConfig;
+use reversi_ai::config::{AiConfig, PlaygroundAnalysisConfig};
 use reversi_ai::eval::novice::NoviceEvaluator;
 use reversi_ai::eval::strategic::StrategicEvaluator;
 use reversi_ai::eval::trained::TrainedEvaluator;
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice|trained] [--trained-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
-[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope game|turn]\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass"
+[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope game|turn]\n\nadvisor mode: --advisor-analysis --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v1)"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -47,6 +47,7 @@ struct CliArgs {
     time_limit: Duration,
     node_limit: Option<u64>,
     exact_cache_scope: String,
+    advisor_config: Option<PlaygroundAnalysisConfig>,
 }
 
 fn parse_args() -> Result<CliArgs, String> {
@@ -60,6 +61,8 @@ fn parse_args() -> Result<CliArgs, String> {
     let mut exact_cache_scope = String::from("game");
     let mut profile = None;
     let mut has_explicit_config = false;
+    let mut has_endgame_depth = false;
+    let mut advisor_analysis = false;
     let mut trained_artifact = None;
     let mut args = std::env::args().skip(1);
 
@@ -85,6 +88,7 @@ fn parse_args() -> Result<CliArgs, String> {
             "--endgame-depth" => {
                 endgame_depth = parse_u8(&value()?, "--endgame-depth")?;
                 has_explicit_config = true;
+                has_endgame_depth = true;
             }
             "--exact-solver-empty-squares" => {
                 exact_solver_empty_squares = parse_u32(&value()?, "--exact-solver-empty-squares")?;
@@ -97,6 +101,7 @@ fn parse_args() -> Result<CliArgs, String> {
             "--node-limit" => node_limit = Some(parse_u64(&value()?, "--node-limit")?),
             "--exact-cache-scope" => exact_cache_scope = value()?,
             "--profile" => profile = Some(value()?),
+            "--advisor-analysis" => advisor_analysis = true,
             _ => return Err(format!("unknown option {option}\n{}", usage())),
         }
     }
@@ -113,6 +118,14 @@ fn parse_args() -> Result<CliArgs, String> {
     if !matches!(exact_cache_scope.as_str(), "game" | "turn") {
         return Err("--exact-cache-scope must be game or turn".to_string());
     }
+    if advisor_analysis && (profile.is_some() || has_endgame_depth) {
+        return Err("advisor mode does not accept --profile or --endgame-depth".into());
+    }
+    let advisor_config = advisor_analysis
+        .then(|| {
+            PlaygroundAnalysisConfig::new(opening_depth, midgame_depth, exact_solver_empty_squares)
+        })
+        .transpose()?;
     let config = match profile.as_deref() {
         None => AiConfig::new(opening_depth, midgame_depth, endgame_depth)
             .with_exact_solver_empty_squares(exact_solver_empty_squares),
@@ -129,6 +142,7 @@ fn parse_args() -> Result<CliArgs, String> {
         time_limit,
         node_limit,
         exact_cache_scope,
+        advisor_config,
     })
 }
 
@@ -217,6 +231,38 @@ fn main() -> Result<(), String> {
         let color = parse_color(fields[2])?;
         if args.exact_cache_scope == "turn" {
             engine.clear_exact_cache();
+        }
+        if let Some(config) = &args.advisor_config {
+            let mut budget = SearchBudget::with_time_limit(args.time_limit);
+            if let Some(limit) = args.node_limit {
+                budget = budget.with_node_limit(limit);
+            }
+            let analysis =
+                engine.analyze_with_budget(&board, color, evaluator.as_ref(), config, &budget)?;
+            let outcome = match analysis.outcome {
+                SearchOutcome::Move(_) => "move",
+                SearchOutcome::Pass => "pass",
+                SearchOutcome::GameOver => "game_over",
+            };
+            let scores = analysis
+                .scores
+                .iter()
+                .map(|score| {
+                    serde_json::json!({
+                        "move": move_name(score.position), "value": score.value,
+                        "completed_depth": score.completed_depth, "exact": score.exact,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let response = serde_json::json!({
+                "schema_version": 1, "position_id": fields[0], "board": fields[1],
+                "side": fields[2], "config_id": analysis.config_id, "outcome": outcome,
+                "completed_depth": analysis.completed_depth, "exact": analysis.exact,
+                "scores": scores,
+            });
+            writeln!(stdout, "{response}").map_err(|error| format!("stdout: {error}"))?;
+            stdout.flush().map_err(|error| format!("stdout: {error}"))?;
+            continue;
         }
         let decision_started = Instant::now();
         let (move_name, search_result) = choose_move(

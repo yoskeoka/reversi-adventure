@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 use self::endgame::{EndgameSolver, ExactCacheDiagnostics, ExactPvsDiagnostics, ExactTable};
 use self::negascout::Negascout;
 use self::tt::{TranspositionTable, ZobristKeys};
-use crate::config::AiConfig;
+use crate::config::{AiConfig, PlaygroundAnalysisConfig};
 use crate::eval::{stable_context_fingerprint, BoardEvaluator, EvalResult};
+use reversi_engine::moves;
 
 /// Search result with PV and explanation data.
 #[derive(Debug, Clone)]
@@ -38,6 +39,23 @@ pub enum SearchOutcome {
     Move(Position),
     Pass,
     GameOver,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalysisScore {
+    pub position: Position,
+    pub value: i32,
+    pub completed_depth: u8,
+    pub exact: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnalysisResult {
+    pub outcome: SearchOutcome,
+    pub completed_depth: u8,
+    pub exact: bool,
+    pub scores: Vec<AnalysisScore>,
+    pub config_id: String,
 }
 
 /// Caller-provided limits for a single search.
@@ -123,6 +141,65 @@ fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(evaluator: &E, config:
 }
 
 impl SearchEngine {
+    pub fn analyze_with_budget<E: BoardEvaluator + ?Sized>(
+        &mut self,
+        board: &Board,
+        color: Color,
+        evaluator: &E,
+        config: &PlaygroundAnalysisConfig,
+        budget: &SearchBudget,
+    ) -> Result<AnalysisResult, String> {
+        let fingerprint = stable_context_fingerprint(&[
+            SEARCH_SEMANTICS_VERSION,
+            evaluator.context_fingerprint(),
+            config.context_fingerprint(),
+        ]);
+        if self.context_fingerprint != Some(fingerprint) {
+            self.tt.clear();
+            self.exact_table.clear();
+            self.context_fingerprint = Some(fingerprint);
+        }
+        let config_id = format!("project-ai-advisor-v1:{fingerprint:016x}");
+        let legal = moves::legal_moves(board, color);
+        if legal == 0 {
+            let outcome = if moves::has_legal_move(board, color.opponent()) {
+                SearchOutcome::Pass
+            } else {
+                SearchOutcome::GameOver
+            };
+            return Ok(AnalysisResult {
+                outcome,
+                completed_depth: 0,
+                exact: false,
+                scores: Vec::new(),
+                config_id,
+            });
+        }
+        let empty = board.empty_cells().count_ones();
+        let (completed_depth, scores) = if empty <= config.exact_solver_empty_squares {
+            let mut nodes = 0;
+            let mut solver = EndgameSolver::new(&self.zobrist, &mut self.exact_table, &mut nodes);
+            let scores = solver.analyze_all(board, color, budget).map_err(|_| {
+                "advisor exact analysis did not complete all legal moves".to_string()
+            })?;
+            (empty as u8, scores)
+        } else {
+            let stones = board.count(Color::Black) + board.count(Color::White);
+            let depth = config.depth_for_stones(stones);
+            let mut search = Negascout::new(evaluator, &mut self.tt, &self.zobrist);
+            search
+                .analyze_all(board, color, depth, budget)
+                .map_err(|_| "advisor analysis did not complete a full depth".to_string())?
+        };
+        let exact = scores.iter().all(|score| score.exact);
+        Ok(AnalysisResult {
+            outcome: SearchOutcome::Move(scores[0].position),
+            completed_depth,
+            exact,
+            scores,
+            config_id,
+        })
+    }
     pub fn new() -> Self {
         Self {
             tt: TranspositionTable::new(1 << 20), // ~1M entries
@@ -228,6 +305,90 @@ impl Default for SearchEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn advisor_returns_complete_common_depth_or_error() {
+        let board = Board::new();
+        let evaluator = crate::eval::strategic::StrategicEvaluator::new();
+        let config = PlaygroundAnalysisConfig::new(2, 4, 0).unwrap();
+        let mut engine = SearchEngine::new();
+        let result = engine
+            .analyze_with_budget(
+                &board,
+                Color::Black,
+                &evaluator,
+                &config,
+                &SearchBudget::with_node_limit_only(100_000),
+            )
+            .unwrap();
+        assert_eq!(
+            result.outcome,
+            SearchOutcome::Move(result.scores[0].position)
+        );
+        assert_eq!(result.scores.len(), 4);
+        assert_eq!(result.completed_depth, 2);
+        assert!(result
+            .scores
+            .iter()
+            .all(|score| score.completed_depth == 2 && !score.exact));
+        assert_eq!(
+            result
+                .scores
+                .iter()
+                .fold(0u64, |set, score| set | score.position.bit_mask()),
+            moves::legal_moves(&board, Color::Black)
+        );
+        assert!(engine
+            .analyze_with_budget(
+                &board,
+                Color::Black,
+                &evaluator,
+                &config,
+                &SearchBudget::with_node_limit_only(1)
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn advisor_exact_and_pass_outcomes() {
+        let evaluator = crate::eval::strategic::StrategicEvaluator::new();
+        let config = PlaygroundAnalysisConfig::new(1, 1, 16).unwrap();
+        let flat = "..B.W.B...BBW.BB.B.WWWBW.WWWBBWWB.WBWWWWWWWWWWW.WWBWBBW.BBBBBBBW";
+        let board = Board::from_string(
+            &flat
+                .as_bytes()
+                .chunks(8)
+                .map(|row| std::str::from_utf8(row).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let result = SearchEngine::new()
+            .analyze_with_budget(
+                &board,
+                Color::Black,
+                &evaluator,
+                &config,
+                &SearchBudget::with_time_limit(Duration::from_secs(30)),
+            )
+            .unwrap();
+        assert!(result.exact);
+        assert_eq!(result.completed_depth, 14);
+        assert!(result.scores.iter().all(|score| score.exact));
+        let mut pass_board = Board::empty();
+        pass_board.set(Position::new(0, 0), Color::Black);
+        pass_board.set(Position::new(0, 1), Color::White);
+        let pass = SearchEngine::new()
+            .analyze_with_budget(
+                &pass_board,
+                Color::White,
+                &evaluator,
+                &config,
+                &SearchBudget::with_node_limit_only(0),
+            )
+            .unwrap();
+        assert_eq!(pass.outcome, SearchOutcome::Pass);
+        assert!(pass.scores.is_empty());
+    }
     use crate::eval::{strategic::StrategicEvaluator, EvalFactors};
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
