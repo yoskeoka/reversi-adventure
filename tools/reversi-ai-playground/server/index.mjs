@@ -16,11 +16,9 @@ function external(path) {
   return real;
 }
 const unavailable = {};
-const { local, error: configError } = loadLocalConfig(process.env.PLAYGROUND_CONFIG);
+const { local, error: configError } = loadLocalConfig(process.env.PLAYGROUND_CONFIG, process.env.PLAYGROUND_PREPARED_CONFIG);
 if (configError) {
-  unavailable.trained = `optional config unavailable: ${configError}`;
-  unavailable.oracle = `optional config unavailable: ${configError}`;
-  console.error(unavailable.trained);
+  console.error(`optional config unavailable: ${configError}`);
 }
 function optional(name, create) {
   try { return create(); }
@@ -31,7 +29,7 @@ const config = verifyConfig({ repoRoot, unavailable,
   trained: null, oracle: null });
 config.trained = local.trained?.artifact ? optional('trained', () => {
   const artifact = external(local.trained.artifact);
-  return verifyConfig({ cli: config.cli, trained: { artifact } }).trained;
+  return { ...verifyConfig({ cli: config.cli, trained: { artifact } }).trained, demo: local.trained.demo === true };
 }) : null;
 config.oracle = local.oracle?.binary && local.oracle?.dataDir ? optional('oracle', () => {
   const binary = external(local.oracle.binary), dataDir = external(local.oracle.dataDir);
@@ -43,7 +41,7 @@ const server = createServer((request, response) => {
   response.writeHead(200, { 'Content-Type': 'text/plain' }); response.end('Reversi AI playground');
 });
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096,
-  verifyClient: ({ origin }) => !origin || origin === 'http://127.0.0.1:5173' || origin === `http://127.0.0.1:${process.env.PLAYGROUND_PORT ?? 8787}` });
+  verifyClient: ({ origin }) => !origin || origin === `http://127.0.0.1:${process.env.PLAYGROUND_WEB_PORT ?? 5173}` || origin === `http://127.0.0.1:${process.env.PLAYGROUND_PORT ?? 8787}` });
 const send = (socket, message) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message)); };
 
 wss.on('connection', socket => {
@@ -71,7 +69,7 @@ wss.on('connection', socket => {
         try { session.open(); } catch (error) { session.close(); throw error; }
         current = { session, socket, timer: null };
         sessions.set(session.token, current);
-        session.publish(true); session.drive();
+        session.publish(true); session.beginAdvisor(); session.drive();
       } catch (error) { send(socket, { type: 'error', message: String(error.message ?? error) }); }
       return;
     }

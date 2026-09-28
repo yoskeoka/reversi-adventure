@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use self::endgame::{EndgameSolver, ExactCacheDiagnostics, ExactPvsDiagnostics, ExactTable};
 use self::negascout::Negascout;
 use self::tt::{TranspositionTable, ZobristKeys};
-use crate::config::{AiConfig, PlaygroundAnalysisConfig};
+use crate::config::{AiConfig, DecisionMoveConfig};
 use crate::eval::{stable_context_fingerprint, BoardEvaluator, EvalResult};
 use reversi_engine::moves;
 
@@ -140,26 +140,44 @@ fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(evaluator: &E, config:
     ])
 }
 
+fn advisor_identity<E: BoardEvaluator + ?Sized>(
+    evaluator: &E,
+    config: &DecisionMoveConfig,
+) -> (u64, String) {
+    let fingerprint = stable_context_fingerprint(&[
+        SEARCH_SEMANTICS_VERSION,
+        evaluator.context_fingerprint(),
+        config.context_fingerprint(),
+    ]);
+    (
+        fingerprint,
+        format!("project-ai-advisor-v1:{fingerprint:016x}"),
+    )
+}
+
 impl SearchEngine {
+    /// Return the exact identity emitted by advisor analysis for these settings.
+    pub fn advisor_config_id<E: BoardEvaluator + ?Sized>(
+        evaluator: &E,
+        config: &DecisionMoveConfig,
+    ) -> String {
+        advisor_identity(evaluator, config).1
+    }
+
     pub fn analyze_with_budget<E: BoardEvaluator + ?Sized>(
         &mut self,
         board: &Board,
         color: Color,
         evaluator: &E,
-        config: &PlaygroundAnalysisConfig,
+        config: &DecisionMoveConfig,
         budget: &SearchBudget,
     ) -> Result<AnalysisResult, String> {
-        let fingerprint = stable_context_fingerprint(&[
-            SEARCH_SEMANTICS_VERSION,
-            evaluator.context_fingerprint(),
-            config.context_fingerprint(),
-        ]);
+        let (fingerprint, config_id) = advisor_identity(evaluator, config);
         if self.context_fingerprint != Some(fingerprint) {
             self.tt.clear();
             self.exact_table.clear();
             self.context_fingerprint = Some(fingerprint);
         }
-        let config_id = format!("project-ai-advisor-v1:{fingerprint:016x}");
         let legal = moves::legal_moves(board, color);
         if legal == 0 {
             let outcome = if moves::has_legal_move(board, color.opponent()) {
@@ -309,7 +327,7 @@ mod tests {
     fn advisor_returns_complete_common_depth_or_error() {
         let board = Board::new();
         let evaluator = crate::eval::strategic::StrategicEvaluator::new();
-        let config = PlaygroundAnalysisConfig::new(2, 4, 0).unwrap();
+        let config = DecisionMoveConfig::new(2, 4, 0).unwrap();
         let mut engine = SearchEngine::new();
         let result = engine
             .analyze_with_budget(
@@ -351,7 +369,7 @@ mod tests {
     #[test]
     fn advisor_exact_and_pass_outcomes() {
         let evaluator = crate::eval::strategic::StrategicEvaluator::new();
-        let config = PlaygroundAnalysisConfig::new(1, 1, 16).unwrap();
+        let config = DecisionMoveConfig::new(1, 1, 16).unwrap();
         let flat = "..B.W.B...BBW.BB.B.WWWBW.WWWBBWWB.WBWWWWWWWWWWW.WWBWBBW.BBBBBBBW";
         let board = Board::from_string(
             &flat

@@ -1,12 +1,15 @@
 PYTHON ?= python3
 PLAYGROUND_DIR := tools/reversi-ai-playground
 
-.PHONY: playground-install playground
+.PHONY: playground-install start-playground playground
 playground-install:
-	cd $(PLAYGROUND_DIR) && pnpm install
+	pnpm --dir $(PLAYGROUND_DIR) install
+	$(PYTHON) $(PLAYGROUND_DIR)/scripts/setup.py install
 
-playground:
-	cd $(PLAYGROUND_DIR) && pnpm dev
+start-playground:
+	$(PYTHON) $(PLAYGROUND_DIR)/scripts/setup.py start
+
+playground: start-playground
 CARGO ?= cargo
 ORACLE_TOOL := tools/reversi-ai-oracle/oracle.py
 ORACLE_CORPUS := tools/reversi-ai-oracle/corpus.jsonl

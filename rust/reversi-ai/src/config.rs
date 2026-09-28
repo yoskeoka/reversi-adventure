@@ -58,15 +58,15 @@ impl AiConfig {
     }
 }
 
-/// Explicit Playground advisor phase policy, independent of match profiles.
+/// Opt-in search phase policy based on the next decision move number.
 #[derive(Debug, Clone, Copy)]
-pub struct PlaygroundAnalysisConfig {
+pub struct DecisionMoveConfig {
     pub opening_depth: u8,
     pub midgame_depth: u8,
     pub exact_solver_empty_squares: u32,
 }
 
-impl PlaygroundAnalysisConfig {
+impl DecisionMoveConfig {
     pub fn new(
         opening_depth: u8,
         midgame_depth: u8,
@@ -76,7 +76,7 @@ impl PlaygroundAnalysisConfig {
             || !(1..=12).contains(&midgame_depth)
             || exact_solver_empty_squares > 16
         {
-            return Err("advisor depths must be 1..12 and exact threshold 0..16".into());
+            return Err("decision-move depths must be 1..12 and exact threshold 0..16".into());
         }
         Ok(Self {
             opening_depth,
@@ -91,6 +91,13 @@ impl PlaygroundAnalysisConfig {
         } else {
             self.midgame_depth
         }
+    }
+
+    /// Build the existing search configuration for one decision position.
+    pub fn search_config_for_stones(&self, stone_count: u32) -> AiConfig {
+        let depth = self.depth_for_stones(stone_count);
+        AiConfig::new(depth, depth, depth)
+            .with_exact_solver_empty_squares(self.exact_solver_empty_squares)
     }
 
     pub(crate) fn context_fingerprint(&self) -> u64 {
@@ -108,27 +115,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn playground_move_boundaries_and_identity() {
-        let config = PlaygroundAnalysisConfig::new(2, 5, 16).unwrap();
+    fn decision_move_boundaries_and_identity() {
+        let config = DecisionMoveConfig::new(2, 5, 16).unwrap();
         assert_eq!(config.depth_for_stones(4), 2);
         assert_eq!(config.depth_for_stones(23), 2);
         assert_eq!(config.depth_for_stones(24), 5);
         assert_eq!(config.depth_for_stones(63), 5);
         assert_ne!(
             config.context_fingerprint(),
-            PlaygroundAnalysisConfig::new(2, 6, 16)
+            DecisionMoveConfig::new(2, 6, 16)
                 .unwrap()
                 .context_fingerprint()
         );
         assert_ne!(
             config.context_fingerprint(),
-            PlaygroundAnalysisConfig::new(2, 5, 0)
+            DecisionMoveConfig::new(2, 5, 0)
                 .unwrap()
                 .context_fingerprint()
         );
-        assert!(PlaygroundAnalysisConfig::new(0, 1, 0).is_err());
-        assert!(PlaygroundAnalysisConfig::new(1, 13, 0).is_err());
-        assert!(PlaygroundAnalysisConfig::new(1, 1, 17).is_err());
+        assert!(DecisionMoveConfig::new(0, 1, 0).is_err());
+        assert!(DecisionMoveConfig::new(1, 13, 0).is_err());
+        assert!(DecisionMoveConfig::new(1, 1, 17).is_err());
     }
 
     #[test]

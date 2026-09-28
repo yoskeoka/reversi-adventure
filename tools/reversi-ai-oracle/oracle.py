@@ -1852,6 +1852,7 @@ def command_main(argv: list[str]) -> int:
 
     setup = subparsers.add_parser("setup-oracle")
     setup.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    setup.add_argument("--json", action="store_true", help="print verified paths as JSON")
 
     benchmark_verify = subparsers.add_parser("verify-benchmark-corpus")
     benchmark_verify.add_argument("--corpus", type=Path, required=True)
@@ -1877,6 +1878,8 @@ def command_main(argv: list[str]) -> int:
     advisor.add_argument("--midgame-depth", type=int, required=True)
     advisor.add_argument("--exact-solver-empty-squares", type=int, required=True)
     advisor.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    advisor.add_argument("--binary", type=Path)
+    advisor.add_argument("--data-dir", type=Path)
 
     golden = subparsers.add_parser("generate-golden")
     golden.add_argument("--corpus", type=Path, default=default_paths()[0])
@@ -1915,7 +1918,14 @@ def command_main(argv: list[str]) -> int:
             config = analysis_config(args.opening_depth, args.midgame_depth,
                                      args.exact_solver_empty_squares)
             validate_budget(1, args.timeout)
-            binary, cwd = ensure_oracle(args.timeout)
+            if (args.binary is None) != (args.data_dir is None):
+                die("--binary and --data-dir must be supplied together")
+            if args.binary is None:
+                binary, cwd = ensure_oracle(args.timeout)
+            else:
+                binary, cwd = args.binary.resolve(), args.data_dir.resolve()
+                if not binary.is_file() or not os.access(binary, os.X_OK) or not cwd.is_dir():
+                    die("configured Oracle binary or data directory is unavailable")
             progress = Progress()
             for number, line in enumerate(sys.stdin, 1):
                 if not line.strip():
@@ -1939,8 +1949,12 @@ def command_main(argv: list[str]) -> int:
 
         if args.command == "setup-oracle":
             validate_budget(1, args.timeout)
-            binary, _ = ensure_oracle(args.timeout)
-            print(f"verified pinned Egaroucid v{ORACLE_VERSION}: {binary}")
+            binary, data_dir = ensure_oracle(args.timeout)
+            if args.json:
+                print(json.dumps({"binary": str(binary.resolve()), "dataDir": str(data_dir.resolve()),
+                                  "version": ORACLE_VERSION}, sort_keys=True))
+            else:
+                print(f"verified pinned Egaroucid v{ORACLE_VERSION}: {binary}")
             return 0
 
         if args.command == "verify-benchmark-corpus":

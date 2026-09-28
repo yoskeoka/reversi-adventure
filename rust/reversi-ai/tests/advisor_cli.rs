@@ -63,3 +63,53 @@ fn advisor_cli_rejects_incomplete_initial_iteration_without_output() {
     assert!(!ok);
     assert!(output.is_empty());
 }
+
+#[test]
+fn printed_advisor_config_id_matches_analysis_and_validates_mode() {
+    let settings = [
+        "--advisor-analysis",
+        "--opening-depth",
+        "2",
+        "--midgame-depth",
+        "3",
+        "--exact-solver-empty-squares",
+        "0",
+    ];
+    let (ok, analysis) = invoke(&settings);
+    assert!(ok);
+    let analysis: Value = serde_json::from_str(&analysis).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_reversi-ai-cli"))
+        .args(settings)
+        .arg("--print-advisor-config-id")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}\n", analysis["config_id"].as_str().unwrap())
+    );
+    for invalid in [
+        vec!["--print-advisor-config-id"],
+        vec![
+            "--advisor-analysis",
+            "--print-advisor-config-id",
+            "--opening-depth",
+            "13",
+        ],
+        vec![
+            "--advisor-analysis",
+            "--print-advisor-config-id",
+            "--evaluator",
+            "trained",
+            "--trained-artifact",
+            "/nonexistent/reversi-ai-artifact.json",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_reversi-ai-cli"))
+            .args(invalid)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+    }
+}
