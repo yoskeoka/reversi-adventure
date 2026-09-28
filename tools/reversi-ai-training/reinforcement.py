@@ -51,9 +51,9 @@ class Progress:
     def stage_done(self, name: str, started: float) -> None:
         print(f"stage {name} done stage={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
 
-    def game(self, pair: int, member: int, completed: int, total: int, started: float) -> None:
+    def game(self, kind: str, pair: int, member: int, completed: int, total: int, started: float) -> None:
         if completed % self.interval == 0 or completed == total:
-            print(f"progress self-play pair={pair} member={member} {completed}/{total} game={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
+            print(f"progress {kind} pair={pair} member={member} {completed}/{total} game={time.monotonic() - started:.1f}s elapsed={self.elapsed():.1f}s", file=sys.stderr, flush=True)
 INITIAL = "...........................WB......BW..........................."
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 MOVE = re.compile(r"[a-h][1-8]\Z")
@@ -158,7 +158,7 @@ def openings(seed: int, count: int, plies: int) -> list[tuple[str, str, list[str
 
 def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
     manifest = training.read_json(path)
-    require_keys(manifest, {"schema_version", "producer_version", "baseline_artifact", "candidate", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match"}, "manifest")
+    require_keys(manifest, {"schema_version", "producer_version", "baseline_artifact", "candidate", "self_play_search", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match"}, "manifest")
     if manifest["schema_version"] != 2 or manifest["producer_version"] != VERSION:
         fail("unsupported reinforcement manifest")
     root = path.parent
@@ -179,6 +179,18 @@ def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
         fail("strong-engine-hcap-v1 requires exact threshold 16")
     training.require_int(candidate["time_limit_ms"], "time limit", 1)
     training.require_int(candidate["node_limit"], "node limit", 1)
+    self_play = require_keys(manifest["self_play_search"], {"opening_depth", "midgame_depth", "endgame_depth", "exact_solver_empty_squares", "time_limit_ms", "node_limit"}, "self_play_search")
+    for key in ("opening_depth", "midgame_depth", "endgame_depth"):
+        training.require_int(self_play[key], f"self-play {key}", 1, 64)
+    training.require_int(self_play["exact_solver_empty_squares"], "self-play exact threshold", 0, 16)
+    training.require_int(self_play["time_limit_ms"], "self-play time limit", 1)
+    training.require_int(self_play["node_limit"], "self-play node limit", 1)
+    if self_play["opening_depth"] != 12 or self_play["endgame_depth"] != 12 or self_play["midgame_depth"] not in (8, 12):
+        fail("self-play search requires 12/8/12 or 12/12/12 depths")
+    if self_play["exact_solver_empty_squares"] != 16:
+        fail("self-play search requires exact threshold 16")
+    if self_play["time_limit_ms"] != candidate["time_limit_ms"] or self_play["node_limit"] != candidate["node_limit"]:
+        fail("self-play search must use frozen candidate resource limits")
     training.require_int(manifest["seed"], "seed", 0, 2**64 - 1)
     games = training.require_int(manifest["game_count"], "game_count", 2)
     if games % 2 or games > 256:
@@ -436,17 +448,17 @@ def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_call
     generated = openings(manifest["seed"], manifest["game_count"], manifest["opening_plies"])
     games = []
     remaining = [manifest["max_decisions"]]
-    candidate = Candidate(executable, baseline_path, manifest["candidate"], manifest["decision_timeout_seconds"])
+    candidate = Candidate(executable, baseline_path, manifest["self_play_search"], manifest["decision_timeout_seconds"])
     stage = progress.stage_start("self-play")
     try:
         for pair, (board, side, opening, rotation) in enumerate(generated):
             game_started = time.monotonic()
             games.append(play("self-play", pair, 0, board, side, opening, 0, {"baseline": candidate}, {"B": "baseline", "W": "baseline"}, remaining))
-            progress.game(pair, 0, len(games), manifest["game_count"], game_started)
+            progress.game("self-play", pair, 0, len(games), manifest["game_count"], game_started)
             paired_board, paired_side = rotated_pair(board, side, rotation)
             game_started = time.monotonic()
             games.append(play("self-play", pair, 1, paired_board, paired_side, opening, rotation, {"baseline": candidate}, {"B": "baseline", "W": "baseline"}, remaining))
-            progress.game(pair, 1, len(games), manifest["game_count"], game_started)
+            progress.game("self-play", pair, 1, len(games), manifest["game_count"], game_started)
     finally:
         candidate.close()
     progress.stage_done("self-play", stage)
@@ -476,7 +488,7 @@ def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_call
             for member, (match_board, match_side, match_rotation, sides) in enumerate(((board, side, 0, {"B": "candidate", "W": "baseline"}), (rotated_pair(board, side, rotation)[0], rotated_pair(board, side, rotation)[1], rotation, {"B": "baseline", "W": "candidate"}))):
                 started = time.monotonic()
                 match_games.append(play("candidate-match", pair, member, match_board, match_side, opening, match_rotation, {"baseline": baseline_player, "candidate": candidate_player}, sides, remaining))
-                progress.game(pair, member, len(match_games), 200, started)
+                progress.game("candidate-match", pair, member, len(match_games), 200, started)
             if pair + 1 == 25:
                 first = match_summary(match_games)
                 continued = first["match_points"] > 25
@@ -500,6 +512,7 @@ def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_call
     selected = artifact if selected_name == "candidate" else baseline
     stage = progress.stage_start("report-serialization")
     report = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
+              "candidate_executable_sha256": sha(executable), "self_play_search": manifest["self_play_search"],
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": artifact["artifact_digest"],
               "selected_artifact_digest": selected["artifact_digest"], "selected": selected_name,
               "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics, "excluded_ids": excluded_validation_ids, "remaining_records": len(validation)},
@@ -586,6 +599,7 @@ def verify(manifest_path: Path, directory: Path) -> None:
         fail("checkpoint metadata or decision mismatch")
     checks = {"schema_version": 2, "producer_version": VERSION,
               "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
+              "candidate_executable_sha256": manifest["candidate"]["sha256"], "self_play_search": manifest["self_play_search"],
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": candidate["artifact_digest"],
               "selected_artifact_digest": selected["artifact_digest"], "selected": selected_name,
               "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics, "excluded_ids": excluded_ids, "remaining_records": len(validation)},
@@ -608,6 +622,9 @@ def prepare(args: argparse.Namespace) -> None:
                               "opening_depth": args.opening_depth, "midgame_depth": args.midgame_depth,
                               "endgame_depth": args.endgame_depth, "exact_solver_empty_squares": args.exact_solver_empty_squares,
                               "time_limit_ms": args.time_limit_ms, "node_limit": args.node_limit},
+                "self_play_search": {"opening_depth": args.opening_depth, "midgame_depth": args.self_play_midgame_depth,
+                                     "endgame_depth": args.endgame_depth, "exact_solver_empty_squares": args.exact_solver_empty_squares,
+                                     "time_limit_ms": args.time_limit_ms, "node_limit": args.node_limit},
                 "seed": args.seed, "game_count": args.game_count, "opening_plies": args.opening_plies,
                 "pairing": PAIRING, "decision_timeout_seconds": args.decision_timeout_seconds,
                 "max_decisions": args.max_decisions,
@@ -654,6 +671,7 @@ def main(argv: list[str]) -> int:
     for option in ("seed", "game-count", "opening-plies", "opening-depth", "midgame-depth", "endgame-depth", "exact-solver-empty-squares", "time-limit-ms", "node-limit", "decision-timeout-seconds", "max-decisions"):
         creation.add_argument(f"--{option}", type=int, required=True)
     creation.add_argument("--match-first-pairs", type=int, default=25)
+    creation.add_argument("--self-play-midgame-depth", type=int, choices=(8, 12), default=12)
     creation.add_argument("--match-continuation-pairs", type=int, default=75)
     creation.add_argument("--match-max-opening-attempts", type=int, default=200)
     for name in ("run", "verify", "regret-command", "regret-timeout"):

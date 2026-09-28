@@ -23,6 +23,20 @@ BENCHMARK_REPORT ?= /tmp/reversi-adventure-search-comparison-v1.json
 BENCHMARK_REPETITIONS ?= 5
 BENCHMARK_TIME_LIMIT_MS ?= 300000
 BENCHMARK_PROGRESS_EVERY ?= 1
+WHOLE_GAME_TOOL := tools/reversi-ai-benchmark/whole_game.py
+WHOLE_GAME_KIND ?= cli
+WHOLE_GAME_BINARY ?=
+WHOLE_GAME_ARTIFACT ?=
+WHOLE_GAME_DEPTH ?= 12
+WHOLE_GAME_CACHE_SCOPE ?= game
+WHOLE_GAME_MAX_RSS_KIB ?= 1048576
+WHOLE_GAME_TIMEOUT_SECONDS ?= 310
+WHOLE_GAME_REPORT ?= /tmp/reversi-adventure-whole-game.json
+WHOLE_GAME_ORACLE_CWD ?=
+WHOLE_GAME_TURN_REPORT ?= /tmp/reversi-adventure-whole-game-turn.json
+WHOLE_GAME_GAME_REPORT ?= /tmp/reversi-adventure-whole-game-game.json
+WHOLE_GAME_COMPARISON ?= /tmp/reversi-adventure-whole-game-comparison.json
+WHOLE_GAME_ORACLE_EVIDENCE ?= /tmp/reversi-adventure-whole-game-oracle-evidence.json
 PATTERN_TRAINER := tools/reversi-ai-training/training.py
 PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-manifest.json
 PATTERN_ARTIFACT ?= /tmp/reversi-adventure-pattern-artifact.json
@@ -50,6 +64,7 @@ REINFORCEMENT_SEED ?= $(shell od -An -N8 -tu8 /dev/urandom | tr -d ' ')
 REINFORCEMENT_GAME_COUNT ?= 64
 REINFORCEMENT_OPENING_PLIES ?= 6
 REINFORCEMENT_DEPTH ?= 12
+REINFORCEMENT_SELF_PLAY_MIDGAME_DEPTH ?= 12
 REINFORCEMENT_EXACT_EMPTY ?= 16
 REINFORCEMENT_TIME_LIMIT_MS ?= 300000
 REINFORCEMENT_NODE_LIMIT ?= 10000000
@@ -70,7 +85,7 @@ AI_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_OPEN
 AI_MATCH_COMMAND := $(AI_BINARY) --evaluator $(AI_EVALUATOR) --opening-depth $(AI_MATCH_OPENING_DEPTH) --midgame-depth $(AI_MATCH_MIDGAME_DEPTH) --endgame-depth $(AI_MATCH_ENDGAME_DEPTH) --exact-solver-empty-squares $(AI_EXACT_SOLVER_EMPTY_SQUARES)
 AI_CALIBRATION_COMMAND := $(AI_BINARY) --evaluator strategic --profile strong-engine-hcap-v1
 
-.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify benchmark-reference benchmark-reference-verify benchmark-compare pattern-training-test pattern-training-fixture pattern-random-prepare pattern-random-generate pattern-random-verify pattern-random-train pattern-reinforcement-prepare pattern-reinforcement-run pattern-reinforcement-verify pattern-reinforcement-regret
+.PHONY: oracle-test oracle-verify oracle-golden oracle-match oracle-evaluate oracle-ci oracle-corpus oracle-calibration benchmark-oracle-setup benchmark-corpus benchmark-corpus-verify benchmark-reference benchmark-reference-verify benchmark-compare benchmark-whole-game benchmark-whole-game-verify benchmark-whole-game-compare benchmark-whole-game-compare-verify benchmark-whole-game-oracle-check benchmark-whole-game-oracle-check-verify pattern-training-test pattern-training-fixture pattern-random-prepare pattern-random-generate pattern-random-verify pattern-random-train pattern-reinforcement-prepare pattern-reinforcement-run pattern-reinforcement-verify pattern-reinforcement-regret
 
 pattern-training-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-training/tests -p 'test_*.py'
@@ -94,7 +109,7 @@ pattern-random-train: pattern-random-verify
 
 pattern-reinforcement-prepare:
 	@test -n "$(REINFORCEMENT_BASELINE_ARTIFACT)" && test -n "$(REINFORCEMENT_VALIDATION_INPUT)" && test -n "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" || (echo "Set REINFORCEMENT_BASELINE_ARTIFACT, REINFORCEMENT_VALIDATION_INPUT, and REINFORCEMENT_CANDIDATE_EXECUTABLE" >&2; exit 2)
-	$(PYTHON) $(REINFORCEMENT_TOOL) prepare --manifest "$(REINFORCEMENT_MANIFEST)" --baseline-artifact "$(REINFORCEMENT_BASELINE_ARTIFACT)" --candidate-executable "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" --validation-input "$(REINFORCEMENT_VALIDATION_INPUT)" --validation-source "$(REINFORCEMENT_VALIDATION_SOURCE)" --seed $(REINFORCEMENT_SEED) --game-count $(REINFORCEMENT_GAME_COUNT) --opening-plies $(REINFORCEMENT_OPENING_PLIES) --opening-depth $(REINFORCEMENT_DEPTH) --midgame-depth $(REINFORCEMENT_DEPTH) --endgame-depth $(REINFORCEMENT_DEPTH) --exact-solver-empty-squares $(REINFORCEMENT_EXACT_EMPTY) --time-limit-ms $(REINFORCEMENT_TIME_LIMIT_MS) --node-limit $(REINFORCEMENT_NODE_LIMIT) --decision-timeout-seconds $(REINFORCEMENT_DECISION_TIMEOUT_SECONDS) --max-decisions $(REINFORCEMENT_MAX_DECISIONS) --match-max-opening-attempts $(REINFORCEMENT_MATCH_MAX_OPENING_ATTEMPTS)
+	$(PYTHON) $(REINFORCEMENT_TOOL) prepare --manifest "$(REINFORCEMENT_MANIFEST)" --baseline-artifact "$(REINFORCEMENT_BASELINE_ARTIFACT)" --candidate-executable "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" --validation-input "$(REINFORCEMENT_VALIDATION_INPUT)" --validation-source "$(REINFORCEMENT_VALIDATION_SOURCE)" --seed $(REINFORCEMENT_SEED) --game-count $(REINFORCEMENT_GAME_COUNT) --opening-plies $(REINFORCEMENT_OPENING_PLIES) --opening-depth $(REINFORCEMENT_DEPTH) --midgame-depth $(REINFORCEMENT_DEPTH) --endgame-depth $(REINFORCEMENT_DEPTH) --self-play-midgame-depth $(REINFORCEMENT_SELF_PLAY_MIDGAME_DEPTH) --exact-solver-empty-squares $(REINFORCEMENT_EXACT_EMPTY) --time-limit-ms $(REINFORCEMENT_TIME_LIMIT_MS) --node-limit $(REINFORCEMENT_NODE_LIMIT) --decision-timeout-seconds $(REINFORCEMENT_DECISION_TIMEOUT_SECONDS) --max-decisions $(REINFORCEMENT_MAX_DECISIONS) --match-max-opening-attempts $(REINFORCEMENT_MATCH_MAX_OPENING_ATTEMPTS)
 
 # This is a human-operated long-running command; it is never a test prerequisite.
 pattern-reinforcement-run:
@@ -108,6 +123,7 @@ pattern-reinforcement-regret: pattern-reinforcement-verify
 
 oracle-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-oracle/tests -p 'test_*.py'
+	$(PYTHON) -m unittest discover -s tools/reversi-ai-benchmark -p 'test_*.py'
 
 oracle-corpus:
 	$(PYTHON) $(ORACLE_TOOL) generate-corpus --output $(ORACLE_CORPUS)
@@ -153,3 +169,25 @@ benchmark-reference-verify:
 benchmark-compare:
 	@test -n "$(BENCHMARK_BASELINE)" && test -n "$(BENCHMARK_CANDIDATE)" || (echo "BENCHMARK_BASELINE and BENCHMARK_CANDIDATE must name explicit release profiler binaries" >&2; exit 2)
 	$(PYTHON) $(BENCHMARK_COMPARATOR) --baseline "$(BENCHMARK_BASELINE)" --candidate "$(BENCHMARK_CANDIDATE)" --corpus $(BENCHMARK_CORPUS) --output $(BENCHMARK_REPORT) --repetitions $(BENCHMARK_REPETITIONS) --time-limit-ms $(BENCHMARK_TIME_LIMIT_MS) --progress-every $(BENCHMARK_PROGRESS_EVERY)
+
+# Human-operated; never a test prerequisite.
+benchmark-whole-game:
+	@test -n "$(WHOLE_GAME_BINARY)" || (echo "WHOLE_GAME_BINARY is required" >&2; exit 2)
+	$(PYTHON) $(WHOLE_GAME_TOOL) measure --kind "$(WHOLE_GAME_KIND)" --binary "$(WHOLE_GAME_BINARY)" $(if $(WHOLE_GAME_ARTIFACT),--artifact "$(WHOLE_GAME_ARTIFACT)") $(if $(WHOLE_GAME_ORACLE_CWD),--oracle-cwd "$(WHOLE_GAME_ORACLE_CWD)") --midgame-depth $(WHOLE_GAME_DEPTH) --cache-scope $(WHOLE_GAME_CACHE_SCOPE) --timeout-seconds $(WHOLE_GAME_TIMEOUT_SECONDS) --max-rss-kib $(WHOLE_GAME_MAX_RSS_KIB) --output "$(WHOLE_GAME_REPORT)"
+
+benchmark-whole-game-verify:
+	$(PYTHON) $(WHOLE_GAME_TOOL) verify --report "$(WHOLE_GAME_REPORT)" $(if $(WHOLE_GAME_BINARY),--binary "$(WHOLE_GAME_BINARY)") $(if $(WHOLE_GAME_ARTIFACT),--artifact "$(WHOLE_GAME_ARTIFACT)")
+
+benchmark-whole-game-compare:
+	$(PYTHON) $(WHOLE_GAME_TOOL) compare --baseline-report "$(WHOLE_GAME_TURN_REPORT)" --candidate-report "$(WHOLE_GAME_GAME_REPORT)" --output "$(WHOLE_GAME_COMPARISON)"
+
+benchmark-whole-game-compare-verify:
+	$(PYTHON) $(WHOLE_GAME_TOOL) verify-comparison --baseline-report "$(WHOLE_GAME_TURN_REPORT)" --candidate-report "$(WHOLE_GAME_GAME_REPORT)" --output "$(WHOLE_GAME_COMPARISON)"
+
+# Human-operated independent exact solves; never a test prerequisite.
+benchmark-whole-game-oracle-check:
+	@test -n "$(WHOLE_GAME_BINARY)" || (echo "WHOLE_GAME_BINARY must name the external oracle" >&2; exit 2)
+	$(PYTHON) $(WHOLE_GAME_TOOL) oracle-check --report "$(WHOLE_GAME_GAME_REPORT)" --oracle-binary "$(WHOLE_GAME_BINARY)" $(if $(WHOLE_GAME_ORACLE_CWD),--oracle-cwd "$(WHOLE_GAME_ORACLE_CWD)") --timeout-seconds $(WHOLE_GAME_TIMEOUT_SECONDS) --output "$(WHOLE_GAME_ORACLE_EVIDENCE)"
+
+benchmark-whole-game-oracle-check-verify:
+	$(PYTHON) $(WHOLE_GAME_TOOL) verify-oracle-check --report "$(WHOLE_GAME_GAME_REPORT)" $(if $(WHOLE_GAME_BINARY),--oracle-binary "$(WHOLE_GAME_BINARY)") --output "$(WHOLE_GAME_ORACLE_EVIDENCE)"

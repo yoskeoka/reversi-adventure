@@ -597,6 +597,62 @@ count exact null-window calls, fail-highs, and full re-searches separately
 from searched nodes. These counts are diagnostic and may change when the
 search tree changes.
 
+### Whole-game self-play performance
+
+The version-1 whole-game corpus consists of four fixed legal openings reached
+from the standard black-to-move board, each played with both seat assignments.
+The eight games retain their opening transcript, seat colors, passes, every
+decision board and side, final board and score, and a canonical input digest.
+An interrupted or partial game is never a completed sample.
+
+The benchmark records three independent workloads: pinned bookless, single
+thread Egaroucid against itself; a baseline project CLI against itself; and a
+candidate project CLI against itself. In the comparable workload, each seat
+has one process for exactly one game. Process startup and shutdown are measured
+separately from decision time. A second CLI workload keeps the same process
+across all games, matching the reinforcement runner. Runs are serial on one
+host with pinned binary and evaluator artifact SHA-256, search settings,
+timeouts, and resource caps.
+
+Each completed game reports wall time, user and
+system CPU, peak RSS, each decision time, search count, and exact-cache probes,
+hits, and stores. Missing CPU or RSS rejects a performance adoption claim.
+Raw per-game data and aggregates are independently recalculable; diagnostics
+stay out of GTP responses, game records, artifacts, and their digests. The
+long-running eight-game measurement is started by a human in a separate
+terminal. A stopped version-2 reinforcement run supplies no candidate evidence.
+
+Exact-solver reuse is confined to a bounded table owned by a `SearchEngine`.
+An entry identifies the complete board and side to move, carries a score from
+that side's perspective, a proved bound and legal best move, and is checked
+against the full identity after a hash probe. Reuse across roots and passes
+must preserve root-relative signs. Context changes invalidate reused search
+state, and timeout or interruption cannot turn a bound or unfinished root into
+an exact answer or principal variation. Capacity and replacement are fixed and
+observable, including when collisions occur; ordinary heuristic TT depth
+semantics are unchanged.
+
+The diagnostic CLI can select a `turn` cache scope, which clears only the
+exact table before each request, or the default `game` scope, which retains
+proofs across requests. Both scopes use the same solver and heuristic TT.
+This switch is recorded in whole-game benchmark reports and does not alter
+the move-only stdout protocol.
+
+Self-play may select depth `12/8/12` with the 16-empty exact threshold while
+candidate matches and 0018 acceptance retain their separately frozen search
+settings. A version-2 production manifest and report identify the selected
+self-play depths, exact threshold, and executable SHA-256. `prepare`, `run`,
+and `verify` reject a mismatched binary or manifest, including an older
+manifest lacking these identities. Heuristic positions at depth 8 and 12 are
+different workloads.
+
+Within one configuration, baseline and candidate must
+agree on move, score, and completed exactness for the same positions; exact
+scores are checked against the independent oracle. The report states both
+workload times, measured cause of any improvement, and the available settings
+if the 2–3 minute guide is missed. The guide becomes an acceptance threshold
+only after the oracle's whole-game result has been measured.
+
 ### SearchEngine
 
 Wrapper around `Negascout` managing the transposition table and Zobrist keys.
@@ -604,6 +660,7 @@ Wrapper around `Negascout` managing the transposition table and Zobrist keys.
 ```rust
 struct SearchEngine {
     tt: TranspositionTable,
+    exact_table: ExactTable,
     zobrist: ZobristKeys,
     context_fingerprint: Option<u64>,
 }
@@ -611,7 +668,8 @@ struct SearchEngine {
 
 - `SearchEngine::new()` — Create with default TT capacity (~1M entries).
 - `SearchEngine::search_with_budget<E: BoardEvaluator + ?Sized>(board: &Board, color: Color, evaluator: &E, config: &AiConfig, budget: &SearchBudget)` — Run iterative deepening search within the supplied budget. Returns `SearchResult`.
-- `SearchEngine::clear_tt()` — Clear all entries in the transposition table. Useful between games to avoid cross-game contamination.
+- `SearchEngine::clear_tt()` — Clear both heuristic and exact tables.
+- `SearchEngine::clear_exact_cache()` — Clear only the exact table for diagnostic turn-scoped comparison.
 
 ### SearchBudget
 
