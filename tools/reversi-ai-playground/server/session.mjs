@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { readFileSync, readdirSync, lstatSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { LineProcess } from './processes.mjs';
 import { INITIAL_BOARD, advance, legalMoves, other, play } from './rules.mjs';
 
@@ -11,6 +12,7 @@ const ADVISORS = new Set([...AI, 'oracle']);
 const IDS = new Set(['human', 'strategic', 'novice', 'trained-baseline', 'random', 'oracle']);
 const LABELS = { human: 'Human', strategic: 'StrategicEvaluator', novice: 'NoviceEvaluator', 'trained-baseline': 'TrainedEvaluator (baseline)', random: 'Uniform random', oracle: 'External oracle' };
 const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');
+const execFileAsync = promisify(execFile);
 function digestTree(root) {
   const hash = createHash('sha256');
   function visit(directory, prefix = '') {
@@ -103,7 +105,7 @@ export class Session {
     this.sessionId = randomUUID(); this.token = randomUUID();
     this.revision = 0; this.board = INITIAL_BOARD; this.turn = 'B';
     this.lastMove = null; this.lastPass = null; this.result = null; this.error = null; this.thinking = false;
-    this.processes = {}; this.advisorProcesses = {}; this.advisorConfigIds = {}; this.advisor = null; this.closed = false; this.busy = false;
+    this.processes = {}; this.advisorProcesses = {}; this.advisorStarts = {}; this.advisorConfigIds = {}; this.advisor = null; this.closed = false; this.busy = false;
     this.identities = { cli: identity(config.cli, config.cliSha256), trained: config.trained ? { ...identity(config.trained.artifact, config.trained.sha256), demo: Boolean(config.trained.demo) } : null,
       oracle: config.oracle ? { ...identity(config.oracle.binary, config.oracle.sha256), dataDir: config.oracle.dataDir, dataSha256: config.oracle.dataSha256 } : null };
   }
@@ -134,33 +136,43 @@ export class Session {
       }
     }
   }
-  startAdvisorProcess(side) {
+  async startAdvisorProcess(side) {
     const advisor = this.seat(side).advisor;
     if (!advisor) return;
     if (advisor.id === 'oracle') {
+      if (digest(this.config.oracle.binary) !== this.config.oracle.sha256) throw new Error('oracle binary digest changed');
       this.advisorProcesses[side] = new LineProcess('python3',
         [join(this.config.repoRoot, 'tools/reversi-ai-oracle/oracle.py'), 'analyze-position',
           ...searchArgs(advisor), '--binary', this.config.oracle.binary, '--data-dir', this.config.oracle.dataDir,
-          '--timeout', '300'], this.config.repoRoot, 310000);
+          '--timeout', '300'], this.config.repoRoot, 310000, true);
     } else {
       const args = ['--advisor-analysis', '--evaluator', advisor.id === 'trained-baseline' ? 'trained' : advisor.id,
         ...searchArgs(advisor), '--time-limit-ms', '10000'];
       if (advisor.id === 'trained-baseline') args.push('--trained-artifact', this.config.trained.artifact);
       if (!this.advisorConfigIds[side]) {
-        const descriptor = spawnSync(this.config.cli, [...args, '--print-advisor-config-id'],
-          { cwd: this.config.repoRoot, encoding: 'utf8', timeout: 12000 });
-        const configId = descriptor.stdout?.trim();
-        if (descriptor.error || descriptor.status !== 0 || !/^project-ai-advisor-v1:[0-9a-f]{16}$/.test(configId)) {
-          throw new Error(`Advisor configuration identity failed: ${descriptor.error?.message ?? descriptor.stderr?.trim() ?? descriptor.status}`);
+        const controller = new AbortController();
+        this.advisorStarts[side] = controller;
+        try {
+          const descriptor = await execFileAsync(this.config.cli, [...args, '--print-advisor-config-id'],
+            { cwd: this.config.repoRoot, encoding: 'utf8', timeout: 12000, maxBuffer: 1024, signal: controller.signal });
+          if (controller.signal.aborted || this.closed) return;
+          const configId = descriptor.stdout.trim();
+          if (!/^project-ai-advisor-v1:[0-9a-f]{16}$/.test(configId)) throw new Error('invalid Advisor configuration identity');
+          this.advisorConfigIds[side] = configId;
+        } finally {
+          if (this.advisorStarts[side] === controller) delete this.advisorStarts[side];
         }
-        this.advisorConfigIds[side] = configId;
       }
+      if (this.closed) return;
       this.advisorProcesses[side] = new LineProcess(this.config.cli, args, this.config.repoRoot, 12000);
     }
+    return this.advisorProcesses[side];
   }
   cancelAdvisor() {
     if (this.advisor?.pending) {
       const side = this.advisor.seat;
+      this.advisorStarts[side]?.abort();
+      delete this.advisorStarts[side];
       this.advisorProcesses[side]?.close();
       delete this.advisorProcesses[side];
     }
@@ -175,13 +187,10 @@ export class Session {
     this.advisor = { seat: side, pending: true, scores: null, error: null };
     this.publish();
     let process;
-    try { process = this.advisorProcesses[side] ?? (this.startAdvisorProcess(side), this.advisorProcesses[side]); }
-    catch (error) {
-      this.advisor = { seat: side, pending: false, scores: null, error: String(error?.message ?? error) };
-      this.publish();
-      return;
-    }
-    void process.command(`${positionId}\t${board}\t${side}`).then(line => {
+    void (async () => {
+      process = this.advisorProcesses[side] ?? await this.startAdvisorProcess(side);
+      if (this.closed || this.revision !== revision || this.board !== board || this.turn !== side || !this.advisor?.pending || !process) return;
+      const line = await process.command(`${positionId}\t${board}\t${side}`);
       if (this.closed || this.revision !== revision || this.board !== board || this.turn !== side || !this.advisor?.pending) return;
       const result = JSON.parse(line);
       if (result.schema_version !== 1 || result.position_id !== positionId || result.board !== board || result.side !== side ||
@@ -201,9 +210,9 @@ export class Session {
       if (result.exact !== result.scores.every(score => score.exact)) throw new Error('invalid Advisor exactness');
       this.advisor = { seat: side, pending: false, scores: result.scores.map(({ move, value }) => ({ move, value })), error: null };
       this.publish();
-    }).catch(error => {
+    })().catch(error => {
       if (this.closed || this.revision !== revision || this.board !== board || this.turn !== side || !this.advisor?.pending) return;
-      process.close(); delete this.advisorProcesses[side];
+      process?.close(); delete this.advisorProcesses[side];
       this.advisor = { seat: side, pending: false, scores: null, error: String(error?.message ?? error) };
       this.publish();
     });
@@ -211,12 +220,14 @@ export class Session {
   close() {
     if (this.closed) return;
     this.closed = true;
+    for (const controller of Object.values(this.advisorStarts)) controller.abort();
     for (const process of Object.values(this.processes)) process.close();
     for (const process of Object.values(this.advisorProcesses)) process.close();
   }
   fail(error) {
     if (this.closed) return;
     this.thinking = false; this.error = String(error?.message ?? error);
+    for (const controller of Object.values(this.advisorStarts)) controller.abort();
     for (const process of Object.values(this.processes)) process.close();
     for (const process of Object.values(this.advisorProcesses)) process.close();
     this.advisor = null;

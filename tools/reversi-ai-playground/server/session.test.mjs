@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Session, oracleDepthArgs } from './session.mjs';
 
 const config = { cli: '/unused', cliSha256: 'fixed', repoRoot: '/tmp', trained: null, oracle: null };
@@ -136,9 +139,40 @@ test('Advisor process startup failure reports an error without stopping the game
   const { session } = game({ id: 'human', advisor: strategic });
   session.startAdvisorProcess = () => { throw new Error('advisor executable failed'); };
   session.beginAdvisor();
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(session.advisor.pending, false);
   assert.match(session.advisor.error, /advisor executable failed/);
   assert.equal(session.error, null);
   await session.humanMove({ sessionId: session.sessionId, revision: 0, move: 'd3' });
   assert.equal(session.revision, 1);
+});
+
+test('Human move cancels an asynchronous Advisor startup without blocking play', async () => {
+  const { session } = game({ id: 'human', advisor: strategic });
+  let aborted = false;
+  session.startAdvisorProcess = () => new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    session.advisorStarts.B = controller;
+    controller.signal.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
+  });
+  session.beginAdvisor();
+  await session.humanMove({ sessionId: session.sessionId, revision: 0, move: 'd3' });
+  assert.equal(session.revision, 1);
+  assert.equal(aborted, true);
+  assert.equal(session.advisor, null);
+});
+
+test('Oracle Advisor refuses a binary changed after configuration verification', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'reversi-oracle-advisor-'));
+  try {
+    const binary = join(directory, 'oracle');
+    writeFileSync(binary, 'changed');
+    const oracleConfig = { ...config, oracle: { binary, sha256: 'old-digest', dataDir: directory } };
+    const session = new Session({ black: { id: 'human', advisor: { id: 'oracle', openingDepth: 1, midgameDepth: 1, exact: 0 } },
+      white: { id: 'human' } }, oracleConfig, () => {});
+    session.beginAdvisor();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(session.advisor.error, /oracle binary digest changed/);
+    assert.equal(session.error, null);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
