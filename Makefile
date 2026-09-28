@@ -1,4 +1,9 @@
 PYTHON ?= python3
+PLAYGROUND_DIR := tools/reversi-ai-playground
+
+.PHONY: playground
+playground:
+	cd $(PLAYGROUND_DIR) && pnpm dev
 CARGO ?= cargo
 ORACLE_TOOL := tools/reversi-ai-oracle/oracle.py
 ORACLE_CORPUS := tools/reversi-ai-oracle/corpus.jsonl

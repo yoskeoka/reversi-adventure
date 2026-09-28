@@ -1,0 +1,56 @@
+:root { font-family: "Segoe UI", "Hiragino Kaku Gothic ProN", sans-serif; color: #e8f0e8; background: #0b1510; }
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(circle at 20% -10%, #214b34, transparent 38%), #0b1510; }
+button, select, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+.shell { max-width: 1160px; margin: auto; padding: 24px; }
+.masthead, .section-heading, .start-row { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.masthead { align-items: center; margin-bottom: 24px; }
+.eyebrow { color: #92cba7; font-size: .72rem; letter-spacing: .17em; font-weight: 700; }
+h1 { font-size: clamp(1.7rem, 4vw, 2.6rem); margin: 4px 0; }
+h2 { margin: 0; }
+#connection { color: #b7d6bd; font-size: .85rem; }
+.setup, .game-info { background: #14261b; border: 1px solid #31543d; border-radius: 16px; padding: 20px; }
+.section-heading p { margin: 0; color: #afc2b2; font-size: .86rem; }
+.seats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px 0; }
+fieldset { border: 1px solid #46664c; border-radius: 12px; padding: 16px; min-width: 0; }
+legend { padding: 0 8px; font-weight: 700; }
+label { display: grid; gap: 5px; color: #c8ddca; font-size: .86rem; }
+select, input { width: 100%; background: #0c1c13; color: #f2f8f2; border: 1px solid #56775d; border-radius: 8px; padding: 9px; }
+.ai-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.ai-settings[hidden] { display: none; }
+.start-row label { width: min(320px, 100%); }
+#start { background: #86d59b; color: #102116; border: 0; border-radius: 8px; padding: 11px 24px; font-weight: 700; }
+#start:hover:not(:disabled) { background: #b0efbf; }
+#start:disabled { opacity: .45; }
+.game { display: grid; grid-template-columns: minmax(0, 620px) minmax(250px, 1fr); gap: 24px; margin-top: 24px; align-items: start; }
+.board-panel { min-width: 0; }
+.board-labels { display: grid; grid-template-columns: 25px repeat(8, 1fr); text-align: center; color: #a8c4ae; padding: 0 0 6px; }
+.board-with-ranks { display: grid; grid-template-columns: 25px 1fr; }
+.ranks { display: grid; grid-template-rows: repeat(8, 1fr); align-items: center; color: #a8c4ae; }
+.board { display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1; border: 4px solid #173e2a; border-radius: 4px; overflow: hidden; box-shadow: 0 18px 45px #0007; }
+.cell { position: relative; display: grid; place-items: center; border: 1px solid #1d5636; padding: 0; background: #277c4b; min-width: 0; }
+.cell:nth-child(16n + 2), .cell:nth-child(16n + 4), .cell:nth-child(16n + 6), .cell:nth-child(16n + 8), .cell:nth-child(16n + 9), .cell:nth-child(16n + 11), .cell:nth-child(16n + 13), .cell:nth-child(16n + 15) { background: #2a8651; }
+.cell.last::after { content: ""; position: absolute; inset: 3px; border: 2px solid #e9c669; pointer-events: none; }
+.cell:disabled { opacity: 1; }
+.cell:hover:not(:disabled) { background: #4ca76c; }
+.cell:focus-visible { outline: 3px solid #f8d47b; outline-offset: -4px; z-index: 1; }
+.piece { width: 76%; height: 76%; border-radius: 50%; box-shadow: 1px 3px 6px #0920149c; }
+.disc { display: inline-block; vertical-align: middle; width: 15px; height: 15px; border-radius: 50%; margin-right: 4px; }
+.piece.black, .disc.black { background: radial-gradient(circle at 30% 25%, #3e4740, #111a14 70%); border: 1px solid #0c160e; }
+.piece.white, .disc.white { background: radial-gradient(circle at 30% 25%, #fff, #d5e0d3 75%); border: 1px solid #b4c7b7; }
+.hint { width: 24%; height: 24%; border-radius: 50%; background: #ddf5c0aa; }
+.game-info { min-height: 330px; }
+.game-info h2 { margin: 7px 0; }
+.activity { min-height: 26px; color: #b7dbc0; }
+.score { display: flex; justify-content: space-between; gap: 14px; border-block: 1px solid #3b6047; margin: 17px 0; }
+.score strong { font-size: 1.5rem; margin-left: 8px; }
+dl { display: grid; grid-template-columns: 80px 1fr; gap: 10px; font-size: .88rem; }
+dt { color: #9ec3a5; }
+dd { margin: 0; overflow-wrap: anywhere; }
+.error { color: #ffbdb5; font-weight: 600; }
+.result { color: #eace7c; font-weight: 700; }
+details { margin-top: 18px; color: #afc8b3; font-size: .8rem; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .game { grid-template-columns: 1fr; } .seats { grid-template-columns: 1fr; } .masthead, .section-heading { align-items: start; flex-direction: column; gap: 5px; } }

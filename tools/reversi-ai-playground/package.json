@@ -1,0 +1,14 @@
+{
+  "name": "reversi-ai-playground",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc --noEmit && vite build web --config web/vite.config.ts",
+    "lint": "tsc --noEmit",
+    "test": "node --test server/*.test.mjs"
+  },
+  "dependencies": { "ws": "^8.18.3" },
+  "devDependencies": { "@types/ws": "^8.18.1", "typescript": "^5.9.2", "vite": "^7.1.7" },
+  "packageManager": "pnpm@10.17.1"
+}
