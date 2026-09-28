@@ -1,7 +1,10 @@
 PYTHON ?= python3
 PLAYGROUND_DIR := tools/reversi-ai-playground
 
-.PHONY: playground
+.PHONY: playground-install playground
+playground-install:
+	cd $(PLAYGROUND_DIR) && pnpm install
+
 playground:
 	cd $(PLAYGROUND_DIR) && pnpm dev
 CARGO ?= cargo
