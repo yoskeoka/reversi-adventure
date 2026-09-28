@@ -32,9 +32,9 @@
 ## ブラックボックス契約と作業
 
 1. **手数と探索設定**: 手数は初期盤面から打たれた石の数で、次の意思決定の番号を「盤上石数 − 3」とする。パスでは進まない。第 1〜20 手の判断は序盤深さ、第 21〜60 手は中盤深さを使用する。完全読み開始空き数 0〜16 は独立設定とし、閾値以下では通常探索深さより完全読みを優先する。終盤深さ入力は置かない。Strategic、Novice、Trained、Oracle の各 seat と Advisor に独立設定を持ち、対局開始時に凍結する。Random は探索しないため深さ・完全読み入力を持たない。既定 CLI 利用者の 20/44 石境界は変えず、Playground が明示指定した場合だけ第 20 手境界と中盤深さの終局までの適用を行う。
-2. **Oracle**: 検証済み Egaroucid の `-depthprobrange` で 1〜20 手、21〜60 手を指定し、完全読み閾値以降は残り空き数を解く深さへ切り替える。閾値 0 は明示的な完全読み移行なしとする。起動引数と実際の境界局面で、指定深さと完全読みへの移行を確認する。Oracle の option が同等の動作を示せない場合に限り、序盤・中盤を同一深さとして UI と snapshot にその制約を表示する。Oracle の解を project AI の品質保証とみなさない。
+2. **Oracle**: 検証済み Egaroucid の `-depthprobrange` で 1〜20 手、21〜60 手を指定する。意思決定番号 `m` の前の空き数は `61 − m` なので、完全読み開始空き数 `E` が 1〜16 の場合は `m = 61 − E` から深さ `E`（その後の残り空き数以上）へ切り替える。`E = 0` は完全読み用 range を作らず、中盤設定を第 60 手まで使う。起動引数と実際の境界局面で、指定深さと完全読みへの移行を確認する。Oracle の option が同等の動作を示せない場合に限り、序盤・中盤を同一深さとして UI と snapshot にその制約を表示する。Oracle の解を project AI の品質保証とみなさない。
 3. **Advisor**: Human の黒・白それぞれに `none` または利用可能な非 Human 対局者を選ぶ。探索する Advisor は seat と独立した序盤/中盤深さ・完全読み閾値を持つ。人間の手番で明示的な「助言を求める」操作を受けると、サーバーが現在局面を問い合わせ、推奨合法手と担当 AI を snapshot に表示する。助言は自動着手せず、人間は別の合法手も選べる。推奨は session/revision/盤面に紐づけ、着手、パス、再開始、失効時に消し、遅延応答は表示しない。Human 着手は助言待ちを妨げない。助言失敗は Advisor のエラーとして表示し、対局可能なままにする。Random Advisor は合法手の一様な参考提案のみを返す。
-4. **Advisor のプロセス境界**: 対局 AI と Advisor は別の子プロセス/状態を持ち、同一 session の終了・期限切れで閉じる。CLI 応答は既存の position ID・合法性検証を使う。Oracle Advisor の `genmove` は内部盤面を進めるため、助言要求ごとに専用の Oracle process を起こしてその時点までの合法着手とパスを再生し、応答後に閉じる。人間の実着手が提案と異なっても次回は実際の履歴を再生する。助言は本対局の Oracle 対局者の GTP 状態に触れない。再接続では凍結設定と有効な助言だけを復元する。
+4. **Advisor のプロセス境界**: 対局 AI と Advisor は別の子プロセス/状態を持ち、同一 session の終了・期限切れで閉じる。CLI 応答は既存の position ID・合法性検証を使う。Session は初期盤面から受理した全着手と強制パスを順序付きの追記専用履歴として保持し、再接続では同じ Session と履歴を維持する。Oracle Advisor の `genmove` は内部盤面を進めるため、助言要求ごとに専用の Oracle process を起こしてその履歴を全件再生し、現盤面/手番と一致することを確かめてから問い合わせ、応答後に閉じる。人間の実着手が提案と異なっても次回は実際の履歴を再生する。助言は本対局の Oracle 対局者の GTP 状態に触れない。再接続では凍結設定と有効な助言だけを復元する。
 5. **install/start**: `make playground-install` は pnpm install と既存の pin 済み Oracle setup を実行し、成功時に checkout 外の設定ファイルへ検証済み binary/data の絶対 path を保存する。Oracle download/build/検証に失敗した場合は target 自体を失敗させる。学習済み重みがまだない環境でも、既存 tiny fixture から生成した強さ未確認のデモ artifact を checkout 外に置いて TrainedEvaluator を選択可能にし、UI でデモ用と明示する。`PLAYGROUND_CONFIG` で実学習 artifact や Oracle path を指定した場合は項目単位で準備済み設定より優先し、無効な任意設定は該当対局者だけを利用不可にする。`make start-playground` は準備済み設定を渡して既存のローカル dev server を起動し、未 install なら前提不足を明示する。既存の `make playground` は互換 alias として扱う。Oracle、artifact は Rust/GDExtension/配布依存に入れない。
 
 ## 作業順序と依存
@@ -47,8 +47,8 @@
 
 ## 検証
 
-- 第 1/20/21/60 手、パスを含む盤面、完全読み閾値の前後で CLI と Oracle に渡る深さを確認する。既定 CLI のフェーズ境界と config fingerprint/キャッシュ隔離も確認する。
-- Human 対局者の Advisor 選択、助言の表示、助言と異なる合法着手、連続助言、Human 両席、Oracle 対局者との同時利用、古い助言の破棄、再接続、期限切れ、失敗後の対局継続を確認する。
+- 第 1/20/21/60 手、パスを含む盤面、完全読み閾値 0 と 16 の前後（`m = 61 − E`）で CLI と Oracle に渡る深さを確認する。既定 CLI のフェーズ境界と config fingerprint/キャッシュ隔離も確認する。
+- Human 対局者の Advisor 選択、助言の表示、助言と異なる合法着手、追記専用履歴の全件再生と現盤面照合、連続助言、Human 両席、Oracle 対局者との同時利用、古い助言の破棄、再接続後の履歴維持、期限切れ、失敗後の対局継続を確認する。
 - `make playground-install` で pnpm、pin 済み Oracle の再利用/検証、デモ artifact/設定生成を確認し、`make start-playground` で全対局者が選べること、`PLAYGROUND_CONFIG` で実 artifact を優先できることを確認する。Oracle の長い download/build は既存 cache を使い、生成物は checkout 外とする。
 - Playground の `pnpm test`, `pnpm lint`, `pnpm build`、関連 Rust テストと Clippy、該当 Python テスト、workflow lint、`git diff --check`。
 
