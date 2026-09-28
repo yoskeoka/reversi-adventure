@@ -5,7 +5,7 @@ use reversi_engine::types::{Color, Position};
 #[cfg(test)]
 use super::ordering::order_moves;
 use super::tt::{Bound, ZobristKeys};
-use super::{SearchBudget, SearchOutcome};
+use super::{AnalysisScore, SearchBudget, SearchOutcome};
 
 const NOT_A_FILE: u64 = 0xfefefefefefefefe;
 const NOT_H_FILE: u64 = 0x7f7f7f7f7f7f7f7f;
@@ -301,6 +301,41 @@ pub struct ExactPvsDiagnostics {
 }
 
 impl<'a> EndgameSolver<'a> {
+    pub(crate) fn analyze_all(
+        &mut self,
+        board: &Board,
+        color: Color,
+        budget: &SearchBudget,
+    ) -> Result<Vec<AnalysisScore>, ()> {
+        let depth = board.empty_cells().count_ones() as u8;
+        let mut scores = Vec::new();
+        for candidate in moves::generated_moves(board, color) {
+            if budget.interrupted(*self.nodes_searched) {
+                return Err(());
+            }
+            let child =
+                moves::make_move_with_flips(board, color, candidate.position, candidate.flips);
+            let terminal = !moves::has_legal_move(&child, color)
+                && !moves::has_legal_move(&child, color.opponent());
+            let value = if terminal {
+                terminal_score(&child, color)
+            } else {
+                -self
+                    .negamax(&child, color.opponent(), -65, 65, budget)?
+                    .score
+            };
+            scores.push(AnalysisScore {
+                position: candidate.position,
+                value,
+                completed_depth: if terminal { 1 } else { depth },
+                exact: true,
+            });
+        }
+        if budget.interrupted_after_completion() {
+            return Err(());
+        }
+        Ok(scores)
+    }
     pub(crate) fn new(
         zobrist: &'a ZobristKeys,
         table: &'a mut ExactTable,

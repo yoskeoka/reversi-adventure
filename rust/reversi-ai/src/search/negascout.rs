@@ -5,7 +5,7 @@ use reversi_engine::types::{Color, Position};
 use super::endgame::terminal_score;
 use super::ordering::order_moves_with_successors;
 use super::tt::{Bound, TranspositionTable, TtEntry, ZobristKeys};
-use super::{SearchBudget, SearchOutcome};
+use super::{AnalysisScore, SearchBudget, SearchOutcome};
 use crate::eval::{BoardEvaluator, EvalResult};
 
 /// Negascout search with iterative deepening.
@@ -33,6 +33,59 @@ pub(crate) struct CompletedSearch {
 }
 
 impl<'a, E: BoardEvaluator + ?Sized> Negascout<'a, E> {
+    pub(crate) fn analyze_all(
+        &mut self,
+        board: &Board,
+        color: Color,
+        max_depth: u8,
+        budget: &SearchBudget,
+    ) -> Result<(u8, Vec<AnalysisScore>), ()> {
+        let candidates = moves::generated_moves(board, color);
+        let mut completed = None;
+        for depth in 1..=max_depth {
+            let mut scores = Vec::with_capacity(candidates.len());
+            let mut interrupted = false;
+            for candidate in &candidates {
+                if budget.interrupted(self.nodes_searched) {
+                    interrupted = true;
+                    break;
+                }
+                let child =
+                    moves::make_move_with_flips(board, color, candidate.position, candidate.flips);
+                let terminal = !moves::has_legal_move(&child, color)
+                    && !moves::has_legal_move(&child, color.opponent());
+                let value = if terminal {
+                    super::endgame::terminal_score(&child, color)
+                } else {
+                    match self.negascout(
+                        &child,
+                        color.opponent(),
+                        depth - 1,
+                        i32::MIN + 1,
+                        i32::MAX - 1,
+                        budget,
+                    ) {
+                        Ok(result) => -result.score,
+                        Err(()) => {
+                            interrupted = true;
+                            break;
+                        }
+                    }
+                };
+                scores.push(AnalysisScore {
+                    position: candidate.position,
+                    value,
+                    completed_depth: if terminal { 1 } else { depth },
+                    exact: terminal,
+                });
+            }
+            if interrupted || budget.interrupted_after_completion() {
+                break;
+            }
+            completed = Some((depth, scores));
+        }
+        completed.ok_or(())
+    }
     pub fn new(evaluator: &'a E, tt: &'a mut TranspositionTable, zobrist: &'a ZobristKeys) -> Self {
         Self {
             evaluator,

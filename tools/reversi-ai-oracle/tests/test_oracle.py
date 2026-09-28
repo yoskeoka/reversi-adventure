@@ -16,6 +16,90 @@ SPEC.loader.exec_module(oracle)
 
 
 class OracleHarnessTests(unittest.TestCase):
+    def test_advisor_analysis_ranges_and_identity(self):
+        config = oracle.analysis_config(3, 5, 16)
+        self.assertEqual(oracle.analysis_depth(config, 23), 3)  # move 20
+        self.assertEqual(oracle.analysis_depth(config, 24), 5)  # move 21
+        self.assertEqual(oracle.analysis_depth(config, 47), 5)  # move 44
+        self.assertEqual(oracle.analysis_depth(config, 48), 16)  # move 45
+        self.assertEqual(config.depth_ranges[-1], oracle.DepthProbabilityRange(60, 60, 1, "100"))
+        argv = oracle.analysis_argv(Path("oracle"), config, Path("positions"))
+        self.assertIn(["-depthprobrange", "46", "46", "15", "100"],
+                      [argv[index:index + 5] for index in range(len(argv))])
+        self.assertEqual(config.config_id, oracle.analysis_config(3, 5, 16).config_id)
+        self.assertNotEqual(config.config_id, oracle.analysis_config(3, 5, 0).config_id)
+        self.assertEqual(oracle.analysis_depth(oracle.analysis_config(3, 5, 0), 48), 5)
+        with self.assertRaises(oracle.OracleError):
+            oracle.analysis_config(0, 5, 16)
+        with self.assertRaises(oracle.OracleError):
+            oracle.validate_analysis_config(config._replace(config_id="changed"))
+
+    def test_advisor_position_returns_complete_root_set_and_pass_game_over(self):
+        initial = oracle.generate_corpus()[0]
+        config = oracle.analysis_config(2, 3, 0)
+        board, side = str(initial["board"]), str(initial["side_to_move"])
+        legal = oracle.legal_moves(board, side)
+        rows = [{"value": index, "exact": True, "completed_depth": 1,
+                 "move": oracle.legal_moves(oracle.apply_move(board, side, move),
+                                             oracle.other(side))[0]}
+                for index, move in enumerate(legal)]
+        with patch.object(oracle, "run_analysis_solve", return_value=rows) as solve:
+            report = oracle.analyze_position("p1", board, side, config,
+                                             Path("oracle"), Path("."), 1)
+        self.assertEqual(report["outcome"], "move")
+        self.assertEqual({item["move"] for item in report["scores"]}, set(legal))
+        self.assertTrue(all(item["completed_depth"] == 2 for item in report["scores"]))
+        self.assertFalse(report["exact"])
+        self.assertEqual(solve.call_args.args[-1], 2)
+        for outcome in ("Pass", "GameOver"):
+            record = next(item for item in oracle.generate_corpus()
+                          if item["outcome"]["kind"] == outcome)
+            report = oracle.analyze_position("p", str(record["board"]),
+                                             str(record["side_to_move"]), config,
+                                             Path("oracle"), Path("."), 1)
+            self.assertEqual(report["outcome"], outcome.lower() if outcome == "Pass" else "game_over")
+            self.assertEqual(report["scores"], [])
+
+    def test_advisor_solve_rejects_incomplete_candidate(self):
+        config = oracle.analysis_config(2, 3, 0)
+        board = str(oracle.generate_corpus()[0]["board"])
+        with patch.object(oracle, "run_external") as run:
+            run.return_value.stdout = "\n".join([
+                "| Level | Depth | Move | Score | Time | Nodes | NPS |",
+                "| custom | 0@100% | d3 | +4 | 000:00:00.001 | 1 | 1000 |",
+                "total 1 nodes in 0.001s NPS 1000",
+            ])
+            with self.assertRaises(oracle.OracleError):
+                oracle.run_analysis_solve([(board, "B")], Path("oracle"), Path("."),
+                                          config, 1, 2)
+
+    def test_advisor_forced_pass_child_and_terminal_child_scores(self):
+        config = oracle.analysis_config(2, 3, 0)
+        record = next(item for item in oracle.generate_corpus()
+                      if item["position_id"] == "stones-40")
+        board, side = str(record["board"]), str(record["side_to_move"])
+        queries_seen = []
+
+        def solve(queries, _binary, _cwd, _config, _timeout, _depth):
+            queries_seen.extend(queries)
+            return [{"value": 7, "exact": True} for _ in queries]
+
+        with patch.object(oracle, "run_analysis_solve", side_effect=solve):
+            result = oracle.analyze_position("forced", board, side, config,
+                                             Path("oracle"), Path("."), 1)
+        values = {item["move"]: item["value"] for item in result["scores"]}
+        self.assertEqual(values["g1"], 7)
+        self.assertEqual(values["e7"], -7)
+        forced_child = oracle.apply_move(board, side, "g1")
+        self.assertIn((forced_child, side), queries_seen)
+
+        terminal = ".W" + "B" * 62
+        result = oracle.analyze_position("terminal-child", terminal, "B", config,
+                                         Path("oracle"), Path("."), 1)
+        self.assertEqual(result["scores"], [{"move": "a1", "value": 64,
+                                              "completed_depth": 1, "exact": True}])
+        self.assertTrue(result["exact"])
+
     def test_generated_corpus_covers_phases_and_terminal_outcomes(self):
         records = oracle.generate_corpus()
         oracle.validate_corpus(records)

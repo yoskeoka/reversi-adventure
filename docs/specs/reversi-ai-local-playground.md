@@ -18,6 +18,31 @@ An opponent move is broadcast immediately. A forced pass is explicit in the last
 
 ## Process boundary
 
+### Advisor analysis producers
+
+An explicit project-AI CLI analysis mode and an independent external Oracle
+analysis command accept a position ID, the 64-character board and side `B` or
+`W`. Each successful request emits exactly one newline-delimited JSON object:
+`{schema_version:1, position_id, board, side, config_id, outcome,
+completed_depth, exact, scores:[{move, value, completed_depth, exact}]}`.
+`outcome` is `move`, `pass`, or `game_over`. Scores cover each legal coordinate
+exactly once for `move`, and are empty otherwise. Values are finite and from
+the current side's perspective. Nonterminal candidates share the root's
+completed depth; immediately terminal candidates may carry their own proven
+depth and `exact=true`. Root `exact` is true only when every candidate is exact.
+No partial set is a successful response. Consumers validate the schema,
+position, board, side, config identity, legal-move set, uniqueness, and depth
+consistency before display; a stale response never changes the board.
+
+Oracle advisor analysis uses the pinned external `-solve` child-position batch.
+Its separately validated configuration specifies opening and midgame depths,
+exact threshold, generated depth range, and fingerprint without changing the
+named match/corpus profiles. The range uses moves 1–20 and 21–60; at an exact
+threshold `E` from 1–16 it searches at least all `61-m` remaining empties from
+move `m=61-E`, while `E=0` adds no exact range. The command fails unless every
+legal candidate reaches the required depth. Advisor values are local to their
+producer and search regime; the UI must not compare different scales.
+
 Each project AI seat owns a persistent `reversi-ai-cli` process with fixed server-generated arguments and a bounded response deadline. The server verifies the CLI digest before games and validates the artifact digest before trained games. It hashes the configured oracle executable and data tree at startup and before games. The external oracle runs only from a server-configured executable and data directory outside the checkout, with GTP `genmove` and `play` synchronization. Oracle is absent from Rust/GDExtension/release dependencies. No browser value is a command, executable path, artifact path, or argument fragment.
 
 The UI shows seat names and settings, legal destinations, last move, turn, score, thinking, pass, result, and errors. One screen supports human vs human, human vs AI, and AI vs AI. The server is authoritative; visualizer board styling may inspire the display, but its replay validation does not determine live game legality.

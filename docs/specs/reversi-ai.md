@@ -344,6 +344,27 @@ Phase is determined by total stone count on the board:
 - Midgame: 21-44 stones
 - Endgame: 45-64 stones
 
+### Playground advisor analysis
+
+An explicit Playground advisor configuration has opening and midgame depths
+(1–12) and an exact-solver threshold (0–16 empty squares). It has no endgame
+depth. The next move number is the number of occupied squares minus three;
+passes do not advance it. Moves 1–20 use the opening depth and moves 21–60
+use the midgame depth. The decision position alone selects the depth and
+whether exact solving applies. The existing `AiConfig` phase boundaries and
+ordinary move search remain unchanged. The advisor configuration and evaluator
+identity are included in the analysis `config_id`.
+
+For a nonterminal position, analysis evaluates every legal root move from the
+current side's perspective. Heuristic results share one completed root depth;
+an immediately terminal child may instead report its proven exact value. One
+monotonic deadline and node budget cover the entire set. Only the last fully
+completed set may be returned; if no complete set finishes, analysis fails.
+In the exact region, a set succeeds only after every candidate is proven.
+Pass and game-over positions return an empty score set with an explicit outcome.
+Advisor values are evaluator-specific and are not comparable across AIs or
+between heuristic and exact searches.
+
 ## Search
 
 ### Adopted search acceleration methods

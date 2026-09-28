@@ -89,6 +89,69 @@ class OracleProfile(NamedTuple):
     legacy_level: int | None = None
 
 
+class AnalysisConfig(NamedTuple):
+    opening_depth: int
+    midgame_depth: int
+    exact_empty_squares: int
+    depth_ranges: tuple[DepthProbabilityRange, ...]
+    config_id: str
+
+
+def analysis_config(opening_depth: int, midgame_depth: int,
+                    exact_empty_squares: int) -> AnalysisConfig:
+    if not (type(opening_depth) is int and 1 <= opening_depth <= 12
+            and type(midgame_depth) is int and 1 <= midgame_depth <= 12
+            and type(exact_empty_squares) is int and 0 <= exact_empty_squares <= 16):
+        die("advisor depths must be 1..12 and exact empty squares must be 0..16")
+    first_exact = 61 - exact_empty_squares if exact_empty_squares else 61
+    ranges: list[DepthProbabilityRange] = []
+    for start, end, depth in ((1, min(20, first_exact - 1), opening_depth),
+                              (21, min(60, first_exact - 1), midgame_depth)):
+        if start <= end:
+            ranges.append(DepthProbabilityRange(start, end, depth, "100"))
+    for move in range(first_exact, 61):
+        ranges.append(DepthProbabilityRange(move, move, 61 - move, "100"))
+    settings = {"schema_version": 1, "oracle_version": ORACLE_VERSION,
+                "source_sha256": SOURCE_SHA256, "book": False, "threads": 1,
+                "hash_level": 25, "opening_depth": opening_depth,
+                "midgame_depth": midgame_depth,
+                "exact_empty_squares": exact_empty_squares,
+                "depth_ranges": [list(item) for item in ranges]}
+    identity = hashlib.sha256(json.dumps(settings, sort_keys=True,
+                                      separators=(",", ":")).encode("ascii")).hexdigest()
+    return AnalysisConfig(opening_depth, midgame_depth, exact_empty_squares,
+                          tuple(ranges), f"oracle-advisor-v1:{identity}")
+
+
+def validate_analysis_config(config: AnalysisConfig) -> None:
+    if config != analysis_config(config.opening_depth, config.midgame_depth,
+                                 config.exact_empty_squares):
+        die("modified oracle advisor analysis configuration")
+
+
+def analysis_depth(config: AnalysisConfig, occupied_discs: int) -> int:
+    validate_analysis_config(config)
+    move_number = occupied_discs - 3
+    for item in config.depth_ranges:
+        if item.move_start <= move_number <= item.move_end:
+            return item.depth
+    die(f"advisor has no depth for decision move {move_number}")
+
+
+def analysis_argv(binary: Path, config: AnalysisConfig, solve_path: Path) -> list[str]:
+    validate_analysis_config(config)
+    argv = [str(binary), "-nobook", "-thread", "1", "-hash", "25"]
+    for item in config.depth_ranges:
+        # -solve receives the child position. Its placement depth is one less
+        # than the completed depth reported for the decision position.
+        child_start, child_end = item.move_start + 1, min(item.move_end + 1, 60)
+        if child_start <= child_end:
+            argv.extend(["-depthprobrange", str(child_start), str(child_end),
+                         str(max(item.depth - 1, 1)), "100"])
+    argv.extend(["-solve", str(solve_path)])
+    return argv
+
+
 CI_SMOKE_V1 = OracleProfile(
     name="ci-smoke-v1",
     hash_level=25,
@@ -961,9 +1024,14 @@ def parse_depth(value: str) -> tuple[int, float]:
 
 
 def parse_solve_output(
-    output: str, required_depths: list[int], expected_profile: OracleProfile
+    output: str, required_depths: list[int], expected_profile: OracleProfile | AnalysisConfig
 ) -> list[dict[str, object]]:
-    validate_profile(expected_profile)
+    if isinstance(expected_profile, AnalysisConfig):
+        validate_analysis_config(expected_profile)
+        legacy_level = None
+    else:
+        validate_profile(expected_profile)
+        legacy_level = expected_profile.legacy_level
     rows: list[dict[str, object]] = []
     header_seen = False
     summary_seen = False
@@ -1007,12 +1075,12 @@ def parse_solve_output(
             die(f"unexpected Egaroucid move: {move!r}")
         if not re.fullmatch(r"[+-]?\d+", score):
             die(f"unexpected Egaroucid score: {score!r}")
-        if expected_profile.legacy_level is None and level != "custom":
+        if legacy_level is None and level != "custom":
             die(f"Egaroucid returned level {level!r}, expected custom profile output")
-        if expected_profile.legacy_level is not None and level != str(expected_profile.legacy_level):
-            die(f"Egaroucid returned level {level!r}, expected {expected_profile.legacy_level}")
+        if legacy_level is not None and level != str(legacy_level):
+            die(f"Egaroucid returned level {level!r}, expected {legacy_level}")
         completed_depth, probability = parse_depth(depth)
-        if expected_profile.legacy_level is None and probability != 100:
+        if legacy_level is None and probability != 100:
             die(f"Egaroucid custom profile did not report 100% probability: {depth!r}")
         if not re.fullmatch(r"\d+", nodes) or not re.fullmatch(r"\d+", nps):
             die(f"unexpected Egaroucid node count: {nodes!r}, {nps!r}")
@@ -1109,6 +1177,77 @@ def run_solve(
         return rows
     finally:
         problem_path.unlink(missing_ok=True)
+
+
+def run_analysis_solve(
+    queries: list[tuple[str, str]], binary: Path, cwd: Path,
+    config: AnalysisConfig, timeout: float, root_depth: int,
+) -> list[dict[str, object]]:
+    validate_analysis_config(config)
+    validate_budget(1, timeout)
+    if not queries:
+        return []
+    with tempfile.NamedTemporaryFile(
+        mode="w", prefix="reversi-ai-advisor-", suffix=".txt",
+        encoding="ascii", delete=False,
+    ) as problem:
+        problem_path = Path(problem.name)
+        for board, side in queries:
+            problem.write(to_egaroucid_problem(board, side) + "\n")
+    try:
+        result = run_external(analysis_argv(binary, config, problem_path),
+                              cwd=cwd, timeout=timeout)
+        required = [min(board.count("."), max(root_depth - 1, 1))
+                    for board, _ in queries]
+        rows = parse_solve_output(result.stdout, required, config)
+        for (board, side), row in zip(queries, rows):
+            if str(row["move"]) not in legal_moves(board, side):
+                die(f"Egaroucid returned an illegal continuation move for {side}: {row['move']!r}")
+            if not row["exact"]:
+                die("Egaroucid did not complete every advisor candidate depth")
+        return rows
+    finally:
+        problem_path.unlink(missing_ok=True)
+
+
+def analyze_position(position_id: str, board: str, side: str,
+                     config: AnalysisConfig, binary: Path, cwd: Path,
+                     timeout: float) -> dict[str, object]:
+    validate_analysis_config(config)
+    if not position_id or any(character in position_id for character in "\r\n\t"):
+        die("advisor position ID must be nonempty and contain no protocol delimiters")
+    if not BOARD_RE.fullmatch(board) or side not in ("B", "W"):
+        die("advisor position requires a 64-cell board and B or W side")
+    occupied = board.count("B") + board.count("W")
+    if not 4 <= occupied <= 64:
+        die("advisor position has invalid occupied-disc count")
+    legal = legal_moves(board, side)
+    outcome = "move" if legal else "pass" if legal_moves(board, other(side)) else "game_over"
+    root_depth = analysis_depth(config, occupied) if legal else 0
+    root_exact = bool(legal) and board.count(".") <= config.exact_empty_squares
+    scores: list[dict[str, object]] = []
+    queries: list[tuple[str, str]] = []
+    metadata: list[tuple[str, int]] = []
+    for move in legal:
+        child = apply_move(board, side, move)
+        if not legal_moves(child, other(side)) and not legal_moves(child, side):
+            scores.append({"move": move, "value": child.count(side) - child.count(other(side)),
+                           "completed_depth": 1, "exact": True})
+            continue
+        effective_side, sign = effective_query(child, other(side))
+        metadata.append((move, -sign))
+        queries.append((child, effective_side))
+    rows = run_analysis_solve(queries, binary, cwd, config, timeout, root_depth)
+    for (move, sign), row in zip(metadata, rows):
+        scores.append({"move": move, "value": sign * int(row["value"]),
+                       "completed_depth": root_depth, "exact": root_exact})
+    scores.sort(key=lambda item: str(item["move"]))
+    if len(scores) != len(legal) or {item["move"] for item in scores} != set(legal):
+        die("incomplete oracle advisor root-move set")
+    return {"schema_version": 1, "position_id": position_id, "board": board,
+            "side": side, "config_id": config.config_id, "outcome": outcome,
+            "completed_depth": root_depth, "exact": bool(legal) and all(
+                bool(item["exact"]) for item in scores), "scores": scores}
 
 
 def candidate_move_from_line(line: str, expected_id: str) -> str:
@@ -1733,6 +1872,12 @@ def command_main(argv: list[str]) -> int:
     analyze.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     analyze.add_argument("--candidate-command")
 
+    advisor = subparsers.add_parser("analyze-position")
+    advisor.add_argument("--opening-depth", type=int, required=True)
+    advisor.add_argument("--midgame-depth", type=int, required=True)
+    advisor.add_argument("--exact-solver-empty-squares", type=int, required=True)
+    advisor.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+
     golden = subparsers.add_parser("generate-golden")
     golden.add_argument("--corpus", type=Path, default=default_paths()[0])
     golden.add_argument("--output", type=Path, default=default_paths()[1])
@@ -1766,6 +1911,25 @@ def command_main(argv: list[str]) -> int:
 
     args = parser.parse_args(argv)
     try:
+        if args.command == "analyze-position":
+            config = analysis_config(args.opening_depth, args.midgame_depth,
+                                     args.exact_solver_empty_squares)
+            validate_budget(1, args.timeout)
+            binary, cwd = ensure_oracle(args.timeout)
+            progress = Progress()
+            for number, line in enumerate(sys.stdin, 1):
+                if not line.strip():
+                    continue
+                fields = line.rstrip("\r\n").split("\t")
+                if len(fields) != 3:
+                    die(f"advisor input line {number} must be position_id<TAB>board<TAB>side")
+                started = progress.stage_start("advisor-position")
+                result = analyze_position(fields[0], fields[1], fields[2], config,
+                                          binary, cwd, args.timeout)
+                print(canonical_json(result), flush=True)
+                progress.stage_done("advisor-position", started)
+            return 0
+
         if args.command == "generate-corpus":
             records = generate_corpus()
             validate_corpus(records)

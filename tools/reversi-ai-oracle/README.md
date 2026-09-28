@@ -31,6 +31,41 @@ make oracle-ci
 make oracle-calibration
 ```
 
+### Playground advisor analysis
+
+`analyze-position` is an independent, line-oriented advisor command. It uses
+the pinned external Egaroucid `-solve` batch and does not change the named
+corpus, match, or GTP profiles. Set the opening and midgame depths to 1–12 and
+the exact-solver start to 0–16 empty squares:
+
+```sh
+python3 tools/reversi-ai-oracle/oracle.py analyze-position \
+  --opening-depth 4 --midgame-depth 6 --exact-solver-empty-squares 16 \
+  --timeout 300
+```
+
+Send one `position_id<TAB>64-character-board<TAB>B|W` request per stdin line.
+Each successful request emits one JSON line with `schema_version:1`, the
+position ID, board, side, configuration fingerprint, `move|pass|game_over`
+outcome, completed root depth, exact flag, and `scores` containing every legal
+move exactly once. Scores are from the requested side's perspective. A pass or
+game over has an empty score set. Immediately terminal moves carry a proven
+value and their own depth. A failed or incomplete solve emits no result for
+that request and exits with an error.
+
+The decision move number is occupied discs minus three. Moves 1–20 use the
+opening depth and moves 21–60 the midgame depth. The exact threshold replaces
+the heuristic depth from move `61 − E`; `E=0` disables the exact range. One
+placement is already made in each `-solve` child query, so the generated
+child ranges start one move later and search one placement less. The command
+uses the Oracle minimum child depth of one for a requested root depth of one
+and reports that root depth conservatively. It checks each completed child
+depth before publishing the full result. Its
+configuration fingerprint includes the pinned Oracle identity and generated
+ranges. Values are meaningful within this advisor configuration; they are not
+comparable to other evaluators or search regimes. The optional `--timeout`
+is an external process wall-clock bound and is not passed to Egaroucid.
+
 `oracle-verify` analyzes the versioned corpus and compares its stable
 projection with `golden.jsonl`. Runtime reports include `elapsed_ms`; the
 golden projection removes that machine-dependent field while retaining score,

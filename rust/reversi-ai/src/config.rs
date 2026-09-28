@@ -58,9 +58,78 @@ impl AiConfig {
     }
 }
 
+/// Explicit Playground advisor phase policy, independent of match profiles.
+#[derive(Debug, Clone, Copy)]
+pub struct PlaygroundAnalysisConfig {
+    pub opening_depth: u8,
+    pub midgame_depth: u8,
+    pub exact_solver_empty_squares: u32,
+}
+
+impl PlaygroundAnalysisConfig {
+    pub fn new(
+        opening_depth: u8,
+        midgame_depth: u8,
+        exact_solver_empty_squares: u32,
+    ) -> Result<Self, String> {
+        if !(1..=12).contains(&opening_depth)
+            || !(1..=12).contains(&midgame_depth)
+            || exact_solver_empty_squares > 16
+        {
+            return Err("advisor depths must be 1..12 and exact threshold 0..16".into());
+        }
+        Ok(Self {
+            opening_depth,
+            midgame_depth,
+            exact_solver_empty_squares,
+        })
+    }
+
+    pub fn depth_for_stones(&self, stone_count: u32) -> u8 {
+        if stone_count <= 23 {
+            self.opening_depth
+        } else {
+            self.midgame_depth
+        }
+    }
+
+    pub(crate) fn context_fingerprint(&self) -> u64 {
+        crate::eval::stable_context_fingerprint(&[
+            0x4144_5649_534f_5231,
+            u64::from(self.opening_depth),
+            u64::from(self.midgame_depth),
+            u64::from(self.exact_solver_empty_squares),
+        ])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playground_move_boundaries_and_identity() {
+        let config = PlaygroundAnalysisConfig::new(2, 5, 16).unwrap();
+        assert_eq!(config.depth_for_stones(4), 2);
+        assert_eq!(config.depth_for_stones(23), 2);
+        assert_eq!(config.depth_for_stones(24), 5);
+        assert_eq!(config.depth_for_stones(63), 5);
+        assert_ne!(
+            config.context_fingerprint(),
+            PlaygroundAnalysisConfig::new(2, 6, 16)
+                .unwrap()
+                .context_fingerprint()
+        );
+        assert_ne!(
+            config.context_fingerprint(),
+            PlaygroundAnalysisConfig::new(2, 5, 0)
+                .unwrap()
+                .context_fingerprint()
+        );
+        assert!(PlaygroundAnalysisConfig::new(0, 1, 0).is_err());
+        assert!(PlaygroundAnalysisConfig::new(1, 13, 0).is_err());
+        assert!(PlaygroundAnalysisConfig::new(1, 1, 17).is_err());
+    }
 
     #[test]
     fn test_phase_detection() {
