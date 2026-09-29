@@ -26,6 +26,8 @@ At the start of each Human turn with an Advisor, the server automatically reques
 
 Until all scores arrive, legal destinations remain `●` and “Advisor 思考中…” appears beside the current Human name. The UI replaces all legal `●` together with the selected Advisor's signed, rounded scores. Finite values round to the nearest integer with half values away from zero; rounded zero, including negative zero, displays as `+0`. No partial result appears. Scores from different Advisors or heuristic and exact analysis have no shared scale.
 
+The 8×8 board keeps a square outline and equal cell dimensions at a given viewport size. Its width and height do not change as turns advance or legal destinations switch between dots, Advisor scores, pieces, and empty cells. The board may resize when the viewport changes.
+
 An opponent move is broadcast immediately. A forced pass is explicit in the last-pass field and advances revision. Terminal snapshots contain the winner or draw. AI thinking is visible while a bounded query runs. Process failure and timeout report their cause; replacing/expiring a session ends its children. Rejected human requests are recoverable; process and AI errors stop automatic play until a new game.
 
 ## Process boundary
