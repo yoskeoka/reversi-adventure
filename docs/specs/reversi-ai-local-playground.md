@@ -1,5 +1,13 @@
 # Local Reversi AI playground
 
+## Purpose and ownership
+
+The playground is the low-cost Web feedback surface for the main game's pure Reversi experience. Its scope includes AI-versus-AI matches and analysis, human play against computer opponents, and local problems such as Reversi puzzles. Reversi interactions and their UX are refined here before being brought into Godot; the playground is not a separate game design or a release target.
+
+The playground and Godot must use the same project-owned Reversi AI, game rules, and position operations. A setting that changes AI or game behavior has one shared meaning and implementation across both surfaces; do not add a playground-only variant or option to make a desired Reversi interaction work. New position setup, move, pass, result, or analysis capabilities needed by the Web UI belong in reusable engine/AI interfaces that Godot can also call. Browser presentation, local transport, and development tooling may remain in the playground package.
+
+For each new Reversi interaction, confirm its behavior in the Web UI and carry the validated behavior into Godot through those shared interfaces. Existing playground code is not assumed to meet this ownership rule merely because it is described here; duplicated domain logic must be migrated when the affected behavior is developed.
+
 This development-only tool is owned by `tools/reversi-ai-playground`; its only committed Node manifest and pnpm lockfile are `tools/reversi-ai-playground/package.json` and `tools/reversi-ai-playground/pnpm-lock.yaml`. From the repository root, `make playground-install` resolves dependencies and `make playground` starts the tool, with both commands running pnpm in that package directory. The package's `node_modules/` and build output are local ignored artifacts. Root-level npm manifests, pnpm lockfiles, and `node_modules/` are not inputs or output contracts for the tool.
 
 The tool binds HTTP and WebSocket to `127.0.0.1`. Startup builds the project CLI in release mode and fixes its SHA-256 digest for the lifetime of the server. The browser sends only stable player IDs, game settings, moves, and a reconnect token. Local configuration, never a WebSocket request, names the trained artifact and external oracle binary/data.

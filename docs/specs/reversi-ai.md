@@ -344,15 +344,17 @@ Phase is determined by total stone count on the board:
 - Midgame: 21-44 stones
 - Endgame: 45-64 stones
 
-### Playground advisor analysis
+### Reversi experience analysis
 
-An explicit Playground advisor configuration has opening and midgame depths
+An explicit shared analysis configuration has opening and midgame depths
 (1–12) and an exact-solver threshold (0–16 empty squares). It has no endgame
 depth. The next move number is the number of occupied squares minus three;
 passes do not advance it. Moves 1–20 use the opening depth and moves 21–60
 use the midgame depth. The decision position alone selects the depth and
 whether exact solving applies. The existing `AiConfig` phase boundaries and
-ordinary move search remain unchanged. The advisor configuration and evaluator
+ordinary move search remain unchanged. This policy must be available to both the
+Playground and Godot through the same Rust configuration and analysis behavior;
+it is not a Playground-only AI variant. The analysis configuration and evaluator
 identity are included in the analysis `config_id`.
 
 For a nonterminal position, analysis evaluates every legal root move from the
