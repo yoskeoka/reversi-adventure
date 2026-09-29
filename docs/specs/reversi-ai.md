@@ -644,10 +644,24 @@ timeouts, and resource caps.
 Each completed game reports wall time, user and
 system CPU, peak RSS, each decision time, search count, and exact-cache probes,
 hits, and stores. Missing CPU or RSS rejects a performance adoption claim.
-Raw per-game data and aggregates are independently recalculable; diagnostics
-stay out of GTP responses, game records, artifacts, and their digests. The
-long-running eight-game measurement is started by a human in a separate
+Raw per-game data and aggregates are independently recalculable. CLI stderr
+diagnostics stay out of GTP responses; structured per-decision search metadata
+is retained in game records and their digests. The long-running eight-game
+measurement is started by a human in a separate
 terminal. A stopped version-2 reinforcement run supplies no candidate evidence.
+
+The benchmark independently replays each decision before accepting CLI search
+diagnostics. At a nonterminal forced pass below the exact-solver threshold,
+the CLI records `outcome=pass`, `score=null`, `completed_depth=0`, and
+`exact=false`. At a forced pass in the exact region it records `outcome=pass`,
+an integer root-side score, `completed_depth` equal to the remaining empty
+squares, and `exact=true`. Both retain nonnegative elapsed time, node count,
+and cache counters in the game record and report digest. A pass where the
+current side has a legal move, a move outcome for a forced pass, or an
+inconsistent pass diagnostic invalidates the report. Every legal-move decision
+requires `outcome=move`, an integer score, and the configured phase depth (or
+the exact empty-square depth); a fallback or incomplete search invalidates the
+measurement. Offline verification applies the same conditions.
 
 Exact-solver reuse is confined to a bounded table owned by a `SearchEngine`.
 An entry identifies the complete board and side to move, carries a score from
