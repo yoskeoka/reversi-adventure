@@ -1,6 +1,6 @@
 # Reversi AI playground
 
-Local development UI for live Reversi games and a proving ground for match controls shared with the main game. The tool itself is not packaged in the Godot release build.
+Local Web UI for developing the main game's pure Reversi experience. Its intended scope includes AI matches and analysis, human games against computer opponents, and local problems such as Reversi puzzles. Refine the human-facing experience in the browser before bringing it into Godot. Each frontend owns its game flow and position controls; project AI search, analysis, and their call contract are shared. Godot adopts new AI uses during main-game development. The playground is not part of the Godot release build. See [the playground specification](../../docs/specs/reversi-ai-local-playground.md) for the ownership contract.
 
 ## Start
 

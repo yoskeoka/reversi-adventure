@@ -354,7 +354,9 @@ three; passes do not advance it. Moves 1–20 use the opening depth and moves
 and whether exact solving applies. Advisor analysis and CLI move search with
 `--decision-move-phases` use this policy. The existing `AiConfig` phase boundaries
 and ordinary move-search defaults remain unchanged. The advisor configuration
-and evaluator identity are included in the analysis `config_id`.
+and evaluator identity are included in the analysis `config_id`. The policy is
+part of the shared Rust AI and can be used by Godot when the main game adopts
+this interaction; no separate playground-only search policy is needed.
 In advisor mode, `--print-advisor-config-id` validates the evaluator, trained
 artifact, and search settings, prints that same `config_id` as one line, and
 exits without reading stdin. It is invalid outside advisor mode.
