@@ -29,9 +29,9 @@ and self-play setting decision are completed separately.
 - `tools/reversi-ai-benchmark/test_whole_game.py:15-49,65-110` — synthetic
   game/report fixtures and offline verification tests; current pass fixtures use
   move-search metadata instead of the CLI's actual pass result.
-- `rust/reversi-ai/src/search/negascout.rs:57-74` — a nonterminal heuristic
+- `rust/reversi-ai/src/search/negascout.rs:111-127` — a nonterminal heuristic
   root pass returns `Pass`, no score, depth zero, and `exact=false`.
-- `rust/reversi-ai/src/search/endgame.rs:330-365` — exact-region pass retains
+- `rust/reversi-ai/src/search/endgame.rs:361-395` — exact-region pass retains
   an exact score and empty-square depth.
 - `Makefile:130-137` — `oracle-test` runs oracle and benchmark Python suites;
   the whole-game measurement itself is explicitly human-operated.
