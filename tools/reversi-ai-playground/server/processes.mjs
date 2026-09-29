@@ -2,8 +2,9 @@ import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 
 export class LineProcess {
-  constructor(binary, args, cwd, timeoutMs = 15000) {
-    this.child = spawn(binary, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+  constructor(binary, args, cwd, timeoutMs = 15000, killGroup = false) {
+    this.child = spawn(binary, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: killGroup });
+    this.killGroup = killGroup;
     this.timeoutMs = timeoutMs;
     this.buffer = '';
     this.lines = [];
@@ -71,9 +72,15 @@ export class LineProcess {
     this.closed = true;
     this.fail(new Error('process closed'));
     this.child.stdin.end();
-    this.child.kill('SIGTERM');
-    const timer = setTimeout(() => this.child.kill('SIGKILL'), 2000);
+    const signal = name => {
+      try {
+        if (this.killGroup && this.child.pid) process.kill(-this.child.pid, name);
+        else this.child.kill(name);
+      } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    };
+    signal('SIGTERM');
+    const timer = setTimeout(() => signal('SIGKILL'), 2000);
     timer.unref();
-    this.child.once('exit', () => clearTimeout(timer));
+    if (!this.killGroup) this.child.once('exit', () => clearTimeout(timer));
   }
 }

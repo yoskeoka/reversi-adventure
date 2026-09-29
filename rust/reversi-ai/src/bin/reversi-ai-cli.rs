@@ -1,6 +1,6 @@
 use std::io::{self, BufRead, Write};
 
-use reversi_ai::config::{AiConfig, PlaygroundAnalysisConfig};
+use reversi_ai::config::{AiConfig, DecisionMoveConfig};
 use reversi_ai::eval::novice::NoviceEvaluator;
 use reversi_ai::eval::strategic::StrategicEvaluator;
 use reversi_ai::eval::trained::TrainedEvaluator;
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice|trained] [--trained-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
-[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope game|turn]\n\nadvisor mode: --advisor-analysis --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v1)"
+[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope game|turn]\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v1)"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -47,10 +47,16 @@ struct CliArgs {
     time_limit: Duration,
     node_limit: Option<u64>,
     exact_cache_scope: String,
-    advisor_config: Option<PlaygroundAnalysisConfig>,
+    advisor_config: Option<DecisionMoveConfig>,
+    decision_move_config: Option<DecisionMoveConfig>,
+    print_advisor_config_id: bool,
 }
 
 fn parse_args() -> Result<CliArgs, String> {
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
     let mut evaluator = String::from("strategic");
     let mut opening_depth = 3;
     let mut midgame_depth = 4;
@@ -63,8 +69,9 @@ fn parse_args() -> Result<CliArgs, String> {
     let mut has_explicit_config = false;
     let mut has_endgame_depth = false;
     let mut advisor_analysis = false;
+    let mut print_advisor_config_id = false;
+    let mut decision_move_phases = false;
     let mut trained_artifact = None;
-    let mut args = std::env::args().skip(1);
 
     while let Some(option) = args.next() {
         let mut value = || {
@@ -102,6 +109,8 @@ fn parse_args() -> Result<CliArgs, String> {
             "--exact-cache-scope" => exact_cache_scope = value()?,
             "--profile" => profile = Some(value()?),
             "--advisor-analysis" => advisor_analysis = true,
+            "--print-advisor-config-id" => print_advisor_config_id = true,
+            "--decision-move-phases" => decision_move_phases = true,
             _ => return Err(format!("unknown option {option}\n{}", usage())),
         }
     }
@@ -121,10 +130,20 @@ fn parse_args() -> Result<CliArgs, String> {
     if advisor_analysis && (profile.is_some() || has_endgame_depth) {
         return Err("advisor mode does not accept --profile or --endgame-depth".into());
     }
+    if print_advisor_config_id && !advisor_analysis {
+        return Err("--print-advisor-config-id requires --advisor-analysis".into());
+    }
+    if decision_move_phases && (advisor_analysis || profile.is_some() || has_endgame_depth) {
+        return Err(
+            "--decision-move-phases does not accept --advisor-analysis, --profile, or --endgame-depth"
+                .into(),
+        );
+    }
     let advisor_config = advisor_analysis
-        .then(|| {
-            PlaygroundAnalysisConfig::new(opening_depth, midgame_depth, exact_solver_empty_squares)
-        })
+        .then(|| DecisionMoveConfig::new(opening_depth, midgame_depth, exact_solver_empty_squares))
+        .transpose()?;
+    let decision_move_config = decision_move_phases
+        .then(|| DecisionMoveConfig::new(opening_depth, midgame_depth, exact_solver_empty_squares))
         .transpose()?;
     let config = match profile.as_deref() {
         None => AiConfig::new(opening_depth, midgame_depth, endgame_depth)
@@ -143,7 +162,18 @@ fn parse_args() -> Result<CliArgs, String> {
         node_limit,
         exact_cache_scope,
         advisor_config,
+        decision_move_config,
+        print_advisor_config_id,
     })
+}
+
+fn match_config_for_board(args: &CliArgs, board: &Board) -> AiConfig {
+    if let Some(phases) = args.decision_move_config {
+        let stones = board.count(Color::Black) + board.count(Color::White);
+        phases.search_config_for_stones(stones)
+    } else {
+        args.config
+    }
 }
 
 fn parse_color(value: &str) -> Result<Color, String> {
@@ -207,6 +237,17 @@ fn main() -> Result<(), String> {
         ),
         _ => unreachable!("evaluator was checked while parsing arguments"),
     };
+    if args.print_advisor_config_id {
+        let config = args
+            .advisor_config
+            .as_ref()
+            .expect("advisor mode was validated");
+        println!(
+            "{}",
+            SearchEngine::advisor_config_id(evaluator.as_ref(), config)
+        );
+        return Ok(());
+    }
     let mut engine = SearchEngine::new();
     let stdin = io::stdin();
     let mut stdout = io::BufWriter::new(io::stdout().lock());
@@ -265,12 +306,13 @@ fn main() -> Result<(), String> {
             continue;
         }
         let decision_started = Instant::now();
+        let match_config = match_config_for_board(&args, &board);
         let (move_name, search_result) = choose_move(
             &mut engine,
             evaluator.as_ref(),
             &board,
             color,
-            &args.config,
+            &match_config,
             args.time_limit,
             args.node_limit,
         );
@@ -300,4 +342,96 @@ fn main() -> Result<(), String> {
         stdout.flush().map_err(|error| format!("stdout: {error}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(options: &[&str]) -> Result<CliArgs, String> {
+        parse_args_from(options.iter().map(|option| option.to_string()))
+    }
+
+    fn board_with_stones(stones: usize) -> Board {
+        let flat = format!("{}{}", "B".repeat(stones), ".".repeat(64 - stones));
+        board_from_flat_string(&flat).unwrap()
+    }
+
+    #[test]
+    fn decision_move_match_uses_move_number_boundaries_and_exact_threshold() {
+        let parsed = args(&[
+            "--decision-move-phases",
+            "--opening-depth",
+            "2",
+            "--midgame-depth",
+            "5",
+            "--exact-solver-empty-squares",
+            "0",
+        ])
+        .unwrap();
+        for stones in [4, 23] {
+            let config = match_config_for_board(&parsed, &board_with_stones(stones));
+            assert_eq!(config.depth_for_phase(stones as u32), 2);
+            assert_eq!(config.exact_solver_empty_squares, 0);
+        }
+        for stones in [24, 63] {
+            let config = match_config_for_board(&parsed, &board_with_stones(stones));
+            assert_eq!(config.depth_for_phase(stones as u32), 5);
+            assert_eq!(config.exact_solver_empty_squares, 0);
+        }
+        let threshold_16 = args(&[
+            "--decision-move-phases",
+            "--exact-solver-empty-squares",
+            "16",
+        ])
+        .unwrap();
+        assert_eq!(
+            match_config_for_board(&threshold_16, &board_with_stones(48))
+                .exact_solver_empty_squares,
+            16
+        );
+    }
+
+    #[test]
+    fn decision_move_match_rejects_unavailable_settings() {
+        for options in [
+            vec!["--decision-move-phases", "--endgame-depth", "2"],
+            vec![
+                "--decision-move-phases",
+                "--profile",
+                "strong-engine-hcap-v1",
+            ],
+            vec!["--decision-move-phases", "--advisor-analysis"],
+            vec!["--decision-move-phases", "--opening-depth", "13"],
+            vec![
+                "--decision-move-phases",
+                "--exact-solver-empty-squares",
+                "17",
+            ],
+        ] {
+            assert!(args(&options).is_err(), "{options:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_match_retains_existing_phase_policy() {
+        let args = args(&[
+            "--opening-depth",
+            "2",
+            "--midgame-depth",
+            "5",
+            "--endgame-depth",
+            "7",
+        ])
+        .unwrap();
+        assert!(args.decision_move_config.is_none());
+        assert_eq!(
+            match_config_for_board(&args, &board_with_stones(23)).depth_for_phase(23),
+            5
+        );
+        assert_eq!(
+            match_config_for_board(&args, &board_with_stones(45)).depth_for_phase(45),
+            7
+        );
+    }
 }

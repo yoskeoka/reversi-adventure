@@ -18,8 +18,9 @@ fieldset { border: 1px solid #46664c; border-radius: 12px; padding: 16px; min-wi
 legend { padding: 0 8px; font-weight: 700; }
 label { display: grid; gap: 5px; color: #c8ddca; font-size: .86rem; }
 select, input { width: 100%; background: #0c1c13; color: #f2f8f2; border: 1px solid #56775d; border-radius: 8px; padding: 9px; }
-.ai-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
-.ai-settings[hidden] { display: none; }
+.ai-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-top: 12px; }
+.ai-settings[hidden], .advisor-settings[hidden] { display: none; }
+.advisor-settings { margin-top: 12px; border-top: 1px solid #46664c; padding-top: 12px; }
 .start-row label { width: min(320px, 100%); }
 #start { background: #86d59b; color: #102116; border: 0; border-radius: 8px; padding: 11px 24px; font-weight: 700; }
 #start:hover:not(:disabled) { background: #b0efbf; }
@@ -40,7 +41,8 @@ select, input { width: 100%; background: #0c1c13; color: #f2f8f2; border: 1px so
 .disc { display: inline-block; vertical-align: middle; width: 15px; height: 15px; border-radius: 50%; margin-right: 4px; }
 .piece.black, .disc.black { background: radial-gradient(circle at 30% 25%, #3e4740, #111a14 70%); border: 1px solid #0c160e; }
 .piece.white, .disc.white { background: radial-gradient(circle at 30% 25%, #fff, #d5e0d3 75%); border: 1px solid #b4c7b7; }
-.hint { width: 24%; height: 24%; border-radius: 50%; background: #ddf5c0aa; }
+.hint { color: #ddf5c0; font-size: clamp(1rem, 2.4vw, 1.8rem); line-height: 1; }
+.hint-score { color: #fff4c5; font-size: clamp(.8rem, 2.1vw, 1.35rem); font-weight: 800; text-shadow: 0 1px 2px #123822; }
 .game-info { min-height: 330px; }
 .game-info h2 { margin: 7px 0; }
 .activity { min-height: 26px; color: #b7dbc0; }
@@ -49,6 +51,7 @@ select, input { width: 100%; background: #0c1c13; color: #f2f8f2; border: 1px so
 dl { display: grid; grid-template-columns: 80px 1fr; gap: 10px; font-size: .88rem; }
 dt { color: #9ec3a5; }
 dd { margin: 0; overflow-wrap: anywhere; }
+.advisor-status { color: #eace7c; font-weight: 700; }
 .error { color: #ffbdb5; font-weight: 600; }
 .result { color: #eace7c; font-weight: 700; }
 details { margin-top: 18px; color: #afc8b3; font-size: .8rem; }

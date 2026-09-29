@@ -344,18 +344,22 @@ Phase is determined by total stone count on the board:
 - Midgame: 21-44 stones
 - Endgame: 45-64 stones
 
-### Reversi experience analysis
+### Decision move phase configuration and advisor analysis
 
-An explicit shared analysis configuration has opening and midgame depths
-(1–12) and an exact-solver threshold (0–16 empty squares). It has no endgame
-depth. The next move number is the number of occupied squares minus three;
-passes do not advance it. Moves 1–20 use the opening depth and moves 21–60
-use the midgame depth. The decision position alone selects the depth and
-whether exact solving applies. The existing `AiConfig` phase boundaries and
-ordinary move search remain unchanged. This policy must be available to both the
-Playground and Godot through the same Rust configuration and analysis behavior;
-it is not a Playground-only AI variant. The analysis configuration and evaluator
-identity are included in the analysis `config_id`.
+`DecisionMoveConfig` is a reusable AI search policy with opening and midgame
+depths (1–12) and an exact-solver threshold (0–16 empty squares). It has no
+endgame depth. The next move number is the number of occupied squares minus
+three; passes do not advance it. Moves 1–20 use the opening depth and moves
+21–60 use the midgame depth. The decision position alone selects the depth
+and whether exact solving applies. Advisor analysis and CLI move search with
+`--decision-move-phases` use this policy. The existing `AiConfig` phase boundaries
+and ordinary move-search defaults remain unchanged. The advisor configuration
+and evaluator identity are included in the analysis `config_id`. The policy is
+part of the shared Rust AI and can be used by Godot when the main game adopts
+this interaction; no separate playground-only search policy is needed.
+In advisor mode, `--print-advisor-config-id` validates the evaluator, trained
+artifact, and search settings, prints that same `config_id` as one line, and
+exits without reading stdin. It is invalid outside advisor mode.
 
 For a nonterminal position, analysis evaluates every legal root move from the
 current side's perspective. Heuristic results share one completed root depth;

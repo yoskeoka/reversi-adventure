@@ -1,5 +1,8 @@
 import copy
+from contextlib import redirect_stdout
 import importlib.util
+from io import StringIO
+import json
 import math
 import os
 from tempfile import TemporaryDirectory, TemporaryFile
@@ -16,6 +19,29 @@ SPEC.loader.exec_module(oracle)
 
 
 class OracleHarnessTests(unittest.TestCase):
+    def test_setup_oracle_json_reports_verified_paths(self):
+        output = StringIO()
+        with patch.object(oracle, "ensure_oracle", return_value=(Path("/tmp/oracle"), Path("/tmp/data"))):
+            with redirect_stdout(output):
+                self.assertEqual(oracle.command_main(["setup-oracle", "--json"]), 0)
+        self.assertEqual(json.loads(output.getvalue()),
+                         {"binary": "/tmp/oracle", "dataDir": "/tmp/data", "version": "7.8.1"})
+
+    def test_advisor_explicit_oracle_paths_do_not_run_setup(self):
+        with TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            binary = directory / "oracle"
+            binary.write_text("oracle")
+            binary.chmod(0o755)
+            with patch.object(oracle, "ensure_oracle") as ensure, \
+                 patch.object(oracle.sys, "stdin", StringIO("")):
+                self.assertEqual(oracle.command_main([
+                    "analyze-position", "--opening-depth", "2", "--midgame-depth", "3",
+                    "--exact-solver-empty-squares", "0", "--binary", str(binary),
+                    "--data-dir", str(directory)]), 0)
+                ensure.assert_not_called()
+
+
     def test_advisor_analysis_ranges_and_identity(self):
         config = oracle.analysis_config(3, 5, 16)
         self.assertEqual(oracle.analysis_depth(config, 23), 3)  # move 20
