@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 MODULE = Path(__file__).with_name("whole_game.py")
@@ -13,8 +14,12 @@ assert SPEC and SPEC.loader
 whole_game = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(whole_game)
 
+TARGET_MOVES = "e6f6d3g4h4d2e2c2c1g2f2h3h1d1f1h2e1g3e3b1a1b4g1h5h6b2g5"
+TARGET_BOARD = "BBBBBBBB.WWBBBBB..WWBWBB.WWWWBBB...WWWBB...WWW.B................"
 
-def synthetic_game(row: dict, assignment: int) -> dict:
+
+def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
+                   target_prefix: bool = False) -> dict:
     oracle = whole_game.oracle
     board, side = row["board"], row["side"]
     steps = []
@@ -22,16 +27,20 @@ def synthetic_game(row: dict, assignment: int) -> dict:
         legal = oracle.legal_moves(board, side)
         if not legal and not oracle.legal_moves(board, oracle.other(side)):
             break
-        move = legal[0] if legal else "pass"
+        move = (TARGET_MOVES[turn * 2:turn * 2 + 2] if target_prefix and turn < 27
+                else legal[0] if legal else "pass")
+        assert move in legal if legal else move == "pass"
         occupied = 64 - board.count(".")
         exact = occupied >= 48
-        depth = 64 - occupied if exact else 12
+        depth = 64 - occupied if exact else (0 if move == "pass" else
+                                           12 if occupied <= 20 or occupied >= 45 else midgame_depth)
         steps.append({"id": f"{row['id']}-seat{assignment}-turn{turn}",
                       "board": board, "side": side,
                       "seat": side if assignment == 0 else oracle.other(side),
                       "move": move, "decision_elapsed_ns": 1,
-                      "search": {"elapsed_us": 1, "nodes": 1, "exact": exact,
-                                 "score": 0, "completed_depth": depth,
+                      "search": {"elapsed_us": 1, "nodes": 0 if move == "pass" and not exact else 1,
+                                 "exact": exact, "score": None if move == "pass" and not exact else 0,
+                                 "completed_depth": depth,
                                  "outcome": "pass" if move == "pass" else "move",
                                  "cache_probes": 0, "cache_hits": 0, "cache_stores": 0}})
         if legal:
@@ -49,15 +58,17 @@ def synthetic_game(row: dict, assignment: int) -> dict:
             "search_count": len(steps)}
 
 
-def synthetic_report() -> dict:
-    games = [synthetic_game(row, assignment) for row in whole_game.opening_rows()
+def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False) -> dict:
+    games = [synthetic_game(row, assignment, midgame_depth,
+                            target_prefix and row["id"] == "opening-4" and assignment == 0)
+             for row in whole_game.opening_rows()
              for assignment in (0, 1)]
     report = {"schema_version": 1, "runner_version": whole_game.VERSION, "kind": "cli",
               "openings_sha256": whole_game.digest(whole_game.OPENINGS),
               "binary": {"path": "/synthetic/cli", "sha256": "0" * 64},
               "artifact": {"path": "/synthetic/artifact", "sha256": "1" * 64},
               "oracle_profile": None,
-              "settings": {"opening_depth": 12, "midgame_depth": 12, "endgame_depth": 12,
+              "settings": {"opening_depth": 12, "midgame_depth": midgame_depth, "endgame_depth": 12,
                            "exact_empty": 16, "timeout_seconds": 310,
                            "exact_cache_scope": "game",
                            "max_decisions": 120, "max_rss_kib": 1000,
@@ -66,6 +77,11 @@ def synthetic_report() -> dict:
               "games": games, "aggregate": whole_game.totals(games), "process_totals": None}
     report["report_digest"] = hashlib.sha256(whole_game.canonical(report)).hexdigest()
     return report
+
+
+def redigest(report: dict) -> None:
+    report["report_digest"] = hashlib.sha256(whole_game.canonical(
+        {key: value for key, value in report.items() if key != "report_digest"})).hexdigest()
 
 
 class WholeGameTests(unittest.TestCase):
@@ -107,6 +123,65 @@ class WholeGameTests(unittest.TestCase):
             {key: value for key, value in game.items() if key != "report_digest"})).hexdigest()
         with self.assertRaisesRegex(whole_game.BenchmarkError, "semantic score mismatch"):
             whole_game.comparison(turn, game)
+
+    def test_observed_heuristic_pass_is_attached_verified_and_compared(self):
+        report = synthetic_report(8, target_prefix=True)
+        record = report["games"][6]
+        step = record["steps"][27]
+        self.assertEqual((step["id"], step["board"], step["side"], step["move"]),
+                         ("opening-4-seat0-turn27", TARGET_BOARD, "W", "pass"))
+        self.assertEqual((step["search"]["score"], step["search"]["completed_depth"],
+                          step["search"]["exact"], step["search"]["nodes"]), (None, 0, False, 0))
+        diagnostic = copy.deepcopy(step["search"])
+        record["cache"] = None
+        record["search_count"] = 0
+        seats = {side: SimpleNamespace(depth=8, diagnostics={
+            item["id"]: copy.deepcopy(item["search"]) for item in record["steps"]
+            if item["seat"] == side}) for side in ("B", "W")}
+        for item in record["steps"]:
+            item.pop("search", None)
+        whole_game.attach_diagnostics(record, seats, "cli")
+        self.assertEqual(step["search"], diagnostic)
+        redigest(report)
+        whole_game.verify(report)
+        turn = copy.deepcopy(report)
+        turn["settings"]["exact_cache_scope"] = "turn"
+        redigest(turn)
+        self.assertGreater(whole_game.comparison(turn, report)["semantic_positions"], 400)
+
+    def test_pass_and_legal_move_diagnostics_reject_inconsistency(self):
+        report = synthetic_report(8, target_prefix=True)
+        whole_game.verify(report)
+        steps = report["games"][6]["steps"]
+        heuristic_pass = steps[27]
+        exact_pass = next(step for game in report["games"] for step in game["steps"]
+                          if step["move"] == "pass" and step["search"]["exact"])
+        legal_move = steps[0]
+        cases = ((heuristic_pass, "score", 0), (heuristic_pass, "completed_depth", 8),
+                 (heuristic_pass, "exact", True), (heuristic_pass, "outcome", "move"),
+                 (heuristic_pass, "cache_hits", -1), (exact_pass, "score", None),
+                 (exact_pass, "completed_depth", 0), (exact_pass, "exact", False),
+                 (legal_move, "score", None), (legal_move, "completed_depth", 0),
+                 (legal_move, "outcome", "pass"))
+        for step, field, value in cases:
+            with self.subTest(step=step["id"], field=field):
+                changed = copy.deepcopy(report)
+                changed_step = next(item for game in changed["games"] for item in game["steps"]
+                                    if item["id"] == step["id"])
+                changed_step["search"][field] = value
+                redigest(changed)
+                with self.assertRaises(whole_game.BenchmarkError):
+                    whole_game.verify(changed)
+                seat = SimpleNamespace(depth=8, diagnostics={step["id"]: changed_step["search"]})
+                with self.assertRaises(whole_game.BenchmarkError):
+                    whole_game.attach_diagnostics({"steps": [dict(changed_step)]},
+                                                  {step["seat"]: seat}, "cli")
+
+        illegal = copy.deepcopy(report)
+        illegal["games"][0]["steps"][0]["move"] = "pass"
+        redigest(illegal)
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "illegal move or pass"):
+            whole_game.verify(illegal)
 
     def test_oracle_evidence_requires_every_exact_position(self):
         report = synthetic_report()

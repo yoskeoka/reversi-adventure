@@ -284,6 +284,30 @@ def totals(games: list[dict]) -> dict:
             "cache_stores": sum(game["cache"]["stores"] for game in games if game["cache"])}
 
 
+def validate_cli_diagnostic(step: dict, sample: dict, midgame_depth: int) -> None:
+    require(isinstance(sample, dict) and type(sample.get("exact")) is bool
+            and sample.get("outcome") in ("move", "pass", "game_over")
+            and all(type(sample.get(key)) is int and sample[key] >= 0
+                    for key in ("elapsed_us", "nodes", "completed_depth",
+                                "cache_probes", "cache_hits", "cache_stores")),
+            "CLI search diagnostic missing")
+    occupied = 64 - step["board"].count(".")
+    exact = occupied >= 48
+    forced_pass = step["move"] == "pass"
+    if exact:
+        expected_depth = 64 - occupied
+    elif forced_pass:
+        expected_depth = 0
+    else:
+        expected_depth = 12 if occupied <= 20 or occupied >= 45 else midgame_depth
+    expected_score = int if exact or not forced_pass else type(None)
+    require(type(sample.get("score")) is expected_score
+            and sample["completed_depth"] == expected_depth
+            and sample["exact"] == exact
+            and sample["outcome"] == ("pass" if forced_pass else "move"),
+            "incomplete or inconsistent CLI search")
+
+
 def attach_diagnostics(record: dict, seats: dict[str, Seat], kind: str) -> None:
     if kind in ("oracle", "cli-legacy"):
         record["cache"] = None
@@ -293,13 +317,10 @@ def attach_diagnostics(record: dict, seats: dict[str, Seat], kind: str) -> None:
     for step in record["steps"]:
         diagnostic = seats[step["seat"]].diagnostics.get(step["id"])
         require(diagnostic is not None, f"missing CLI diagnostic for {step['id']}")
-        occupied = 64 - step["board"].count(".")
-        exact = occupied >= 48
-        expected_depth = 64 - occupied if exact else (12 if occupied <= 20 or occupied >= 45 else seats[step["seat"]].depth)
-        require(diagnostic["score"] is not None and diagnostic["completed_depth"] == expected_depth
-                and diagnostic["exact"] == exact
-                and diagnostic["outcome"] == ("pass" if step["move"] == "pass" else "move"),
-                f"incomplete or inconsistent CLI search at {step['id']}")
+        try:
+            validate_cli_diagnostic(step, diagnostic, seats[step["seat"]].depth)
+        except BenchmarkError as exc:
+            raise BenchmarkError(f"{exc} at {step['id']}") from exc
         step["search"] = diagnostic
         for key in sums:
             sums[key] += diagnostic[f"cache_{key}"]
@@ -468,18 +489,7 @@ def verify(report: dict, binary: Path | None = None, artifact: Path | None = Non
             cache = {"probes": 0, "hits": 0, "stores": 0}
             for step in record["steps"]:
                 sample = step.get("search")
-                require(isinstance(sample, dict) and type(sample.get("exact")) is bool
-                        and type(sample.get("score")) is int
-                        and sample.get("outcome") in ("move", "pass", "game_over")
-                        and all(type(sample.get(key)) is int and sample[key] >= 0
-                                for key in ("elapsed_us", "nodes", "completed_depth", "cache_probes", "cache_hits", "cache_stores")),
-                        "CLI search diagnostic missing")
-                occupied = 64 - step["board"].count(".")
-                exact = occupied >= 48
-                expected_depth = 64 - occupied if exact else (12 if occupied <= 20 or occupied >= 45 else settings["midgame_depth"])
-                require(sample["exact"] == exact and sample["completed_depth"] == expected_depth
-                        and sample["outcome"] == ("pass" if step["move"] == "pass" else "move"),
-                        "CLI search did not complete configured workload")
+                validate_cli_diagnostic(step, sample, settings["midgame_depth"])
                 for key in cache:
                     cache[key] += sample[f"cache_{key}"]
             require(record.get("cache") == cache, "cache totals mismatch")

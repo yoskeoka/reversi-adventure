@@ -40,8 +40,20 @@ Repeat oracle and CLI runs at self-play midgame depth 8, changing only
 `WHOLE_GAME_DEPTH=8` and output names. `WHOLE_GAME_MAX_RSS_KIB` defaults to
 1,048,576 KiB and `WHOLE_GAME_TIMEOUT_SECONDS` to 310 seconds per decision;
 set both explicitly if the host requires other caps. The runner stops without
-a report on illegal moves, timeout, incomplete search depth, missing CPU/RSS,
-or a failed game.
+a report on illegal moves, timeout, an incomplete legal-move search, missing
+CPU/RSS, or a failed game. A nonterminal forced pass below the exact threshold
+is valid with `outcome=pass`, `score=null`, `completed_depth=0`, and
+`exact=false`; it remains a decision in the game record. An exact-region pass
+requires an integer score, `exact=true`, and completed depth equal to the
+remaining empty squares. Measurement attachment and offline verification reject
+malformed pass diagnostics and require configured depth and an integer score
+for every legal-move search.
+
+The depth-8 `turn` measurement previously stopped at
+`opening-4-seat0-turn27`, a legal forced pass after 27 placements, before
+writing its report. After this fix merges, rerun that eight-game condition in
+the existing output directory. Independently verify the completed reports
+already there and reuse them; the failed `turn-8` sample must be measured anew.
 
 `benchmark-whole-game-verify` independently replays the
 games and recomputes resource totals and report digest. Report
