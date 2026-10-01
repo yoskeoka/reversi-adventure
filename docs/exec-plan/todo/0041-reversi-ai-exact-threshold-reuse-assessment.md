@@ -40,7 +40,9 @@ wall/CPU/RSS、全局時間へどの程度効くかを測る。中盤深度8/12�
 2. 既存game-8棋譜から空き24の合法decision rootを黒2/白2の計4位置、
    opening/assignment/turn順で最初の異なるboard+sideを選んでfreezeする。
    各rootから空き12までの同じ局内windowを測り、閾値16でも後続rootの再利用を観測する。
-   passは空き数を減らさず履歴に残す。
+   空き12以下または合法な終局でwindow完了とする。passは空き数を減らさず履歴に残す。
+   pilotのheuristic設定は12/8/12に固定する。pilot成功は実行可能性の事前確認であり、
+   full12/12/12の完了や速度を保証しない。
    閾値16/20/24×turn/gameの6条件、各4window（既知total24window）とする。
    各decisionは10,000,000 nodeまたは310秒、peak RSS 1,572,864 KiBをpilot上限とする。
    未完成resultをexactと扱わず、その条件の失敗reportを保存して同じ失敗を自動再測定しない。
@@ -61,7 +63,7 @@ wall/CPU/RSS、全局時間へどの程度効くかを測る。中盤深度8/12�
    full-depth速度と混ぜない。閾値24が失敗して20が成功した場合も両方を報告する。
 6. scriptのパラメータをprepareで固定し、人間が1行で起動する。pilotは1window、fullは1局、
    Oracleは1位置が完了単位で、atomic保存→verify→resume/skipを行う。各stage totalはmanifestで
-   固定する（pilot=24、fullはgate通過条件×16局、Oracleはsource reportから確定した位置数）。
+   固定する（pilot=24、fullはgate通過閾値×32局で最大96局、Oracleはsource reportから確定した位置数）。
    stderrは `progress exact-threshold stage=<pilot|full|oracle|verify> threshold=<16|20|24> scope=<turn|game> unit=<window|game|position> done=<n> total=<n> status=<running|saved|skipped|interrupted|verified|failed> elapsed_s=<value>`。
    既定は完成単位ごと、`--progress-every N` は通常進捗を間引き、失敗/中断/完成は必ずflushする。
 7. 高い閾値は実験としてreportへ記録する。productionのexact=16制約や0018候補対戦設定を
