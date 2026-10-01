@@ -2,6 +2,11 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+> **2026-10-02 performance evidence**: 0035の深度12/8の全局計測は完了し、
+> `docs/references/reversi-ai-whole-game-0035-results.md` に検証済み結果を記録した。
+> pilotの実行設定は0040の意味検証と人間の設定/時間予算判断後に固定する。
+> 追加計測は0039のパラメータ固定scriptと局単位保存/再開を利用し、既存条件を再測定しない。
+
 ## 目的と完了条件
 
 学習データの生成方法と教師値を明示して選び、0019 の本格的な再実行より先に、予定規模の 10% 以下の小規模 batch で `TrainedEvaluator` の更新前後を独立に比べる。改善が観測された artifact、全入力/設定の digest、検証結果を残す。改善しなければ失敗結果を保存し、方法を再計画する。小規模結果から 0018 の 50% 目標達成や統計的な一般化は主張しない。
