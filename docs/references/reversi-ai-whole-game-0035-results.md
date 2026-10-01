@@ -74,6 +74,11 @@ exact=trueを先に分類し、それ以外をdecision盤面のoccupied<=20がop
 
 残作業は [0039](../exec-plan/todo/0039-reversi-ai-whole-game-resumable-measurement.md) の局単位保存/再開/scriptと、[0040](../exec-plan/todo/0040-reversi-ai-self-play-performance-closeout.md) の意味証拠/序盤コスト/設定判断へ分けた。0035はその判断までactive。新本番manifestは0037 pilot成功と0032の完全game/provenance検証後に0019で凍結する。
 
+試遊で中盤深度8/12が遅く空き16の完全読みは速かったという人間の観察に基づき、
+[0041](../exec-plan/todo/0041-reversi-ai-exact-threshold-reuse-assessment.md) で空き20/24も測る。
+候補手数の多さは原因仮説として合法手数/時間を記録して確認する。高い閾値で再利用が効くかは
+未測定であり、16/20/24それぞれのturn/game比較と独立Oracle照合で判断する。
+
 benchmark artifactのdigest検証と学習元データ全体のprovenance検証は別。0032のgenerator source digest mismatchは本番freeze前の未解決項目であり、完成したbenchmarkの検証を学習元データ検証の完了と扱わない。
 
 ## 固定入力digest

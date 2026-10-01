@@ -27,6 +27,7 @@
 - (MODIFY) `docs/specs/reversi-ai.md` — 比較context/入力履歴、意味診断、選択した時間予算の契約を先に明示する。
 - (NEW) `tools/reversi-ai-benchmark/self_play_closeout.py` と関連tests — 既存reportのphase/共通局面分析、履歴付き意味比較、診断コストの証拠検証。
 - (MODIFY) `Makefile`, `docs/references/reversi-ai-whole-game-0035.md` — 0039を使う固定入力scriptのprepare/run/verify手順。
+- (MODIFY) `tools/reversi-ai-benchmark/prepare-whole-game-measurement.py` — 意味比較/コスト計測の固定入力scriptとcheckpoint設定。
 - (MODIFY) `docs/references/reversi-ai-whole-game-0035-results.md` — 補完結果、原因、採否、設定選択とdigest。
 - (MODIFY) `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md`, `0037-reversi-ai-training-method-pilot.md` — 設定証拠への依存を同期する。
 - (DELETE, 完了時) `docs/exec-plan/todo/0035-reversi-ai-self-play-performance.md` と本計画。
@@ -66,6 +67,9 @@
    `.local/reversi-ai-whole-game-0035/` に配置する。意味比較は1局の履歴照合ごと、コスト分析は
    1rootごと、Oracle照合は1位置ごとにcheckpointを保存/verify/skipし、未完了単位から再開する。
    長時間測定は人間が1行のscriptで起動する。既存14reportを上書きしない。
+   semanticのtotalは深度ごと8局、costは8root、追加Oracle測定はmanifestの位置数で固定する。
+   stderr書式は `progress self-play-closeout stage=<inputs|semantic|cost|oracle|verify> unit=<game|root|position> done=<n> total=<n> status=<running|saved|skipped|interrupted|verified|failed> elapsed_s=<value>`。
+   既定は完成単位ごと、`--progress-every N` は通常進捗だけ間引き、失敗/中断/完成は必ずflushする。
 6. 現在の有効な選択候補は12/12/12（game約17分/局）と12/8/12（game約6分56秒/局）。
    旧persistent約6分34秒/局は局間cacheを利用した参考値であり、設定判断は新reset条件の測定を待つ。
    Oracle12平均87.8秒を基準に2–3分目安をどう合否値へ固定するか、平均/局別上限、
@@ -81,6 +85,8 @@
 ## 依存関係と順序
 
 - spec→offline分析/診断driver→0039形式のscript準備→局reset条件を含む人間の測定→検証→選択判断→親cleanup。
+- [0041](0041-reversi-ai-exact-threshold-reuse-assessment.md) の閾値16/20/24の測定も設定選択前に確認する。
+  高い閾値で未完了ならその失敗証拠を残し、現行16を超えた採用と記録しない。
 - 0036のTT正規化、0037の教師値/学習方法、0018の勝率受け入れは独立した計画のまま維持する。
 - 0032のsource digest mismatchはbenchmark検証を無効化しないが本番freeze前に解決する。
 

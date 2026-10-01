@@ -72,9 +72,10 @@
    既存v1 persistent reportは局間cacheを保持した参考値として保存/verify/skipする。
    新しい局reset条件の完成結果とは扱わず、新条件だけを測定する。
 7. progressの作業単位は保存済み1局、totalは条件ごと8局と全条件数。stderrの既定書式を
-   `progress whole-game condition=<id> games=<done>/8 status=<measuring|saved|skipped|interrupted|verified> elapsed_s=<value>`
+   `progress whole-game stage=<prepare|inputs|measure|aggregate|compare|oracle|verify> condition=<id|none> conditions=<done>/<total> games=<done>/8 status=<measuring|saved|skipped|interrupted|verified|failed> elapsed_s=<value>`
    としてspecに固定する。prepare→入力検証→局測定/保存→完成report検証→比較/照合のstageを
    表示する。既定は1局ごと、`--progress-every N` は通常進捗だけを間引き、失敗/中断/完成は必ずflushする。
+   条件totalはmanifestで固定する。局のないstageではgames=0/8とし、局測定の完了数とは区別する。
 
 ## 作業と依存関係
 
