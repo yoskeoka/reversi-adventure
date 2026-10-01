@@ -756,7 +756,8 @@ def verify(report: dict, binary: Path | None = None, artifact: Path | None = Non
     identity = report.get("identity")
     require(isinstance(identity, dict) and report.get("condition_digest") == hashlib.sha256(canonical(identity)).hexdigest(),
             "condition identity mismatch")
-    require(identity.get("cache_lifetime") == "one-game" and identity.get("reset_protocol") == "new_game-v1",
+    require(identity.get("cache_lifetime") == "one-game" and identity.get("reset_protocol") == (
+            "gtp-clear-board" if report["kind"] == "oracle" else "new_game-v1"),
             "game cache/reset identity missing")
     require(re.fullmatch(r"[0-9a-f]{64}", report.get("manifest_digest", "")) is not None,
             "manifest identity missing")
@@ -880,7 +881,8 @@ def measurement_identity(args) -> dict:
     return {"kind": args.kind, "binary": {"path": str(args.binary.resolve()), "sha256": digest(args.binary)},
             "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)} if args.artifact else None),
             "openings_sha256": digest(OPENINGS), "source_revision": getattr(args, "source_revision", None),
-            "host": platform.node(), "cache_lifetime": "one-game", "reset_protocol": "new_game-v1",
+            "host": platform.node(), "cache_lifetime": "one-game",
+            "reset_protocol": "gtp-clear-board" if args.kind == "oracle" else "new_game-v1",
             "settings": {"opening_depth": 12, "midgame_depth": args.midgame_depth, "endgame_depth": 12,
                          "exact_empty": 16, "timeout_seconds": args.timeout_seconds,
                          "exact_cache_scope": args.cache_scope, "max_decisions": args.max_decisions,
@@ -1070,7 +1072,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     measure = sub.add_parser("measure")
-    measure.add_argument("--kind", choices=("oracle", "cli", "cli-persistent", "cli-legacy"), required=True)
+    measure.add_argument("--kind", choices=("oracle", "cli", "cli-persistent"), required=True)
     measure.add_argument("--binary", type=Path, required=True)
     measure.add_argument("--artifact", type=Path)
     measure.add_argument("--oracle-cwd", type=Path)

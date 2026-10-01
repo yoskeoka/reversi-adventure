@@ -292,6 +292,21 @@ class ReinforcementTests(unittest.TestCase):
         with self.assertRaisesRegex(training.TrainingError, "reset evidence"):
             reinforcement.replay(game)
 
+    def test_interrupted_prepare_closes_candidate_removes_manifest_and_allows_retry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            close_candidate = reinforcement.Candidate.close
+            with mock.patch.object(reinforcement.Candidate, "new_game", side_effect=KeyboardInterrupt), \
+                 mock.patch.object(reinforcement.Candidate, "close", autospec=True,
+                                   side_effect=close_candidate) as close:
+                with self.assertRaises(KeyboardInterrupt):
+                    self.prepare_fixture(root)
+            close.assert_called_once()
+            self.assertIsNotNone(close.call_args.args[0].process.returncode)
+            self.assertFalse((root / "manifest.json").exists())
+            manifest = self.prepare_fixture(root)
+            reinforcement.validate_manifest(manifest)
+
     def test_candidate_rejects_missing_reset_acknowledgement(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

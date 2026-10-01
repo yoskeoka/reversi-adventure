@@ -5,6 +5,8 @@ import hashlib
 import importlib.util
 import unittest
 import tempfile
+import contextlib
+import io
 from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
@@ -209,14 +211,15 @@ class WholeGameTests(unittest.TestCase):
 
 class FakeSeat:
     def __init__(self, kind, binary, artifact, depth, timeout, side, *args):
-        self.depth, self.side = depth, side
+        self.depth, self.side, self.kind = depth, side, kind
         self.process = SimpleNamespace(pid=1)
         self.diagnostics = {}
         self.startup_ns = 1
         self.started_at_ns = 1
 
     def new_game(self, identifier):
-        return {"game_id": identifier, "acknowledged": True, "elapsed_ns": 1, "protocol": "new_game-v1"}
+        return {"game_id": identifier, "acknowledged": True, "elapsed_ns": 1,
+                "protocol": "gtp-clear-board" if self.kind == "oracle" else "new_game-v1"}
 
     def close(self):
         return {"startup_ns": 1, "shutdown_ns": 1, "user_cpu_ns": 100, "system_cpu_ns": 0,
@@ -255,6 +258,8 @@ class ResumableTests(unittest.TestCase):
         record = synthetic_game(row, assignment, 8)
         for step in record["steps"]:
             seats[step["seat"]].diagnostics[step["id"]] = step["search"]
+            if kind == "oracle":
+                step.pop("search")
         return record
 
     def measure(self):
@@ -367,6 +372,25 @@ class ResumableTests(unittest.TestCase):
             with self.assertRaisesRegex(whole_game.BenchmarkError, "acknowledgement"):
                 self.measure()
         self.assertFalse(self.args.output.exists())
+
+    def test_oracle_identity_records_actual_protocol(self):
+        self.args.kind = "oracle"
+        self.args.artifact = None
+        report = self.measure()
+        self.assertEqual(report["identity"]["reset_protocol"], "gtp-clear-board")
+        self.assertEqual(report["settings"]["process_lifetime"], "one-game-per-seat")
+        for record in report["games"]:
+            self.assertEqual({event["protocol"] for event in record["reset_events"].values()}, {"gtp-clear-board"})
+        whole_game.verify(report)
+
+    def test_legacy_measure_kind_rejected_by_argument_parser(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                whole_game.main(["measure", "--kind", "cli-legacy"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("invalid choice", stderr.getvalue())
+        self.assertIn("cli-legacy", stderr.getvalue())
 
     def test_first_seat_aborted_when_second_constructor_fails(self):
         original = FakeSeat.__init__

@@ -667,7 +667,7 @@ def prepare(args: argparse.Namespace) -> None:
             candidate.new_game("prepare-reset-probe")
         finally:
             candidate.close()
-    except Exception:
+    except BaseException:
         args.manifest.unlink(missing_ok=True)
         raise
 

@@ -52,7 +52,7 @@ existing evidence. A driver lock rejects a concurrent launch.
 
 One-game-per-seat conditions have per-game wait4 CPU and peak RSS. Persistent
 conditions save diagnostics and CPU differences immediately after each game;
-their RSS values are cumulative segment peaks, not independent per-game peaks.
+their RSS values report absolute cumulative peaks for each process segment.
 Each new segment starts with empty game caches and never warms up by replaying
 completed games. Session/segment and startup/shutdown evidence distinguishes
 resumed segments from eight games in a single uninterrupted process. Final
@@ -72,13 +72,13 @@ accepts the preparation arguments in `WHOLE_GAME_PREPARE_ARGS`;
 `benchmark-whole-game-run` accepts `WHOLE_GAME_MANIFEST` and optional
 `WHOLE_GAME_PROGRESS_EVERY`. Failures and completion progress always flush.
 
-## Original v1 procedure and evidence
+## Existing v1 evidence and direct reset measurement
 
 The checked-in `whole-game-openings-v1.json` fixes four legal six-placement
 openings. The runner plays each opening twice with reversed seat assignments,
 giving eight complete games per condition. Each seat is one process for one
-game; `cli-persistent` keeps two CLI processes for all eight games as a
-separate runner workload.
+game; `cli-persistent` keeps two CLI processes through each resumed segment.
+Both workloads reset project search caches at every game boundary.
 
 The GTP oracle uses pinned, bookless, one-thread
 Console profiles `whole-game-depth-12-exact-16` and
@@ -97,13 +97,15 @@ immutable.
 The diagnostic comparison uses the 0035 CLI with
 `WHOLE_GAME_CACHE_SCOPE=turn` for a per-turn table and `game` for retained
 exact proofs. Both use identical search code and diagnostic fields. The old
-CLI lacks this diagnostic contract; its raw timing can be measured separately,
-but that report alone cannot support an adoption claim.
+CLI lacks this diagnostic and reset contract. Retain and verify its completed
+v1 timing reports. The reset runner accepts `oracle`, `cli`, and
+`cli-persistent`; it cannot create new `cli-legacy` samples. Retrieve the old
+measurement procedure through Git history when auditing historical evidence.
 
 ```sh
 rtk make benchmark-whole-game WHOLE_GAME_KIND=oracle WHOLE_GAME_BINARY=/absolute/path/Egaroucid-for-Console WHOLE_GAME_DEPTH=12 WHOLE_GAME_REPORT=/absolute/path/oracle-12.json
 rtk make benchmark-whole-game-verify WHOLE_GAME_REPORT=/absolute/path/oracle-12.json WHOLE_GAME_BINARY=/absolute/path/Egaroucid-for-Console
-rtk make benchmark-whole-game WHOLE_GAME_KIND=cli-legacy WHOLE_GAME_BINARY=/absolute/path/pre-0035/reversi-ai-cli WHOLE_GAME_ARTIFACT=/absolute/path/baseline-artifact.json WHOLE_GAME_DEPTH=12 WHOLE_GAME_REPORT=/absolute/path/legacy-12.json
+rtk make benchmark-whole-game-verify WHOLE_GAME_REPORT=/absolute/path/legacy-12.json WHOLE_GAME_BINARY=/absolute/path/pre-0035/reversi-ai-cli WHOLE_GAME_ARTIFACT=/absolute/path/baseline-artifact.json
 rtk make benchmark-whole-game WHOLE_GAME_KIND=cli WHOLE_GAME_BINARY=/absolute/path/candidate/reversi-ai-cli WHOLE_GAME_ARTIFACT=/absolute/path/baseline-artifact.json WHOLE_GAME_DEPTH=12 WHOLE_GAME_CACHE_SCOPE=turn WHOLE_GAME_REPORT=/absolute/path/turn-12.json
 rtk make benchmark-whole-game WHOLE_GAME_KIND=cli WHOLE_GAME_BINARY=/absolute/path/candidate/reversi-ai-cli WHOLE_GAME_ARTIFACT=/absolute/path/baseline-artifact.json WHOLE_GAME_DEPTH=12 WHOLE_GAME_CACHE_SCOPE=game WHOLE_GAME_REPORT=/absolute/path/game-12.json
 rtk make benchmark-whole-game WHOLE_GAME_KIND=cli-persistent WHOLE_GAME_BINARY=/absolute/path/candidate/reversi-ai-cli WHOLE_GAME_ARTIFACT=/absolute/path/baseline-artifact.json WHOLE_GAME_DEPTH=12 WHOLE_GAME_REPORT=/absolute/path/candidate-persistent-12.json
@@ -114,7 +116,7 @@ Repeat oracle and CLI runs at self-play midgame depth 8, changing only
 `WHOLE_GAME_DEPTH=8` and output names. `WHOLE_GAME_MAX_RSS_KIB` defaults to
 1,048,576 KiB and `WHOLE_GAME_TIMEOUT_SECONDS` to 310 seconds per decision;
 set both explicitly if the host requires other caps. The runner stops without
-a report on illegal moves, timeout, an incomplete legal-move search, missing
+a completed report on illegal moves, timeout, an incomplete legal-move search, missing
 CPU/RSS, or a failed game. A nonterminal forced pass below the exact threshold
 is valid with `outcome=pass`, `score=null`, `completed_depth=0`, and
 `exact=false`; it remains a decision in the game record. An exact-region pass
@@ -123,11 +125,10 @@ remaining empty squares. Measurement attachment and offline verification reject
 malformed pass diagnostics and require configured depth and an integer score
 for every legal-move search.
 
-The depth-8 `turn` measurement previously stopped at
-`opening-4-seat0-turn27`, a legal forced pass after 27 placements, before
-writing its report. After this fix merges, rerun that eight-game condition in
-the existing output directory. Independently verify the completed reports
-already there and reuse them; the failed `turn-8` sample must be measured anew.
+The historical depth-8 `turn` run stopped at `opening-4-seat0-turn27`, a
+legal forced pass after 27 placements. The corrected v1 run has since completed.
+All 14 existing reports are preserved and verified by the legacy registry.
+Prepare new reset conditions in a fresh directory; keep the existing results.
 
 `benchmark-whole-game-verify` independently replays the
 games and recomputes resource totals and report digest. Report

@@ -722,11 +722,15 @@ Move requests and responses retain their existing format. Both seats must
 acknowledge before a game's first decision. Reinforcement self-play and candidate
 matches use the same boundary; prepare/run/verify pin `one-game` cache lifetime,
 reset protocol and executable identity, and reject manifests lacking them.
+Interrupted or failed preparation leaves no published reinforcement manifest.
 Within a game search state survives between decisions, except that diagnostic
 `turn` scope clears the exact table on every decision. Across games no search
 state survives, even when seat processes remain alive. Reports record reset
 identity, duration and acknowledgement; unsupported or missing acknowledgement
-rejects new measurement conditions. Legacy persistent reports retain their
+rejects new measurement conditions. Resumable external Oracle measurements
+record the actual `gtp-clear-board` boundary; only project CLI workloads claim
+`new_game-v1`. Legacy CLI measurement is unavailable in the reset runner, while
+its completed v1 reports remain independently verifiable. Legacy persistent reports retain their
 original cross-game cache semantics and cannot represent reset conditions.
 
 Each completed game durably records its opening and assignment identity,
