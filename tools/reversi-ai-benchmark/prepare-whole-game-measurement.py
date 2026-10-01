@@ -35,7 +35,7 @@ def host() -> dict:
 
 
 def revision() -> str:
-    return subprocess.check_output(["rtk", "git", "-C", str(ROOT), "rev-parse", "HEAD"],
+    return subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
                                    text=True).strip()
 
 
@@ -183,7 +183,7 @@ def prepare(args: argparse.Namespace) -> Path:
     wg.require(len(args.source_revision) == 40 and all(c in "0123456789abcdef" for c in args.source_revision),
                "source revision must be a full commit hash")
     wg.require(args.harness_revision == revision(), "harness revision differs from checkout")
-    subprocess.run(["rtk", "git", "-C", str(ROOT), "cat-file", "-e", args.source_revision + "^{commit}"], check=True)
+    subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", args.source_revision + "^{commit}"], check=True)
     wg.require(args.timeout_seconds > 1 and args.max_rss_kib > 0, "invalid resource caps")
     inputs = {"cli": pin(args.cli_binary), "oracle": pin(args.oracle_binary),
               "artifact": pin(args.artifact), "openings": pin(wg.OPENINGS)}

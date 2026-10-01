@@ -50,7 +50,7 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(len(manifest["assignments"]), 8)
         self.assertEqual(manifest["inputs"]["cli"], prepare.pin(self.cli))
         script = self.args.output_dir / "run-whole-game.sh"
-        subprocess.run(["rtk", "bash", "-n", str(script)], check=True)
+        subprocess.run(["bash", "-n", str(script)], check=True)
         self.assertIn("rtk python3", script.read_text())
         with self.assertRaises(whole_game.BenchmarkError):
             prepare.prepare(self.args)
