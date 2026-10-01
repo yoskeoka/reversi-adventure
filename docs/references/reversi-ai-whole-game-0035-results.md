@@ -9,6 +9,7 @@ PR [#236](https://github.com/yoskeoka/reversi-adventure/pull/236) と [#246](htt
 - 固定4合法開局×両seat、各条件8局。同一ホスト `xps` のLinux/WSL2で逐次測定。反復測定や信頼区間はない。
 - opening/endgame depth=12、midgame=12または8、exact_empty=16。timeout=310秒/decision、peak RSS cap=1,572,864 KiB。
 - Oracle/legacy/turn/gameはone-game-per-seat、persistentはall-games-per-seat。起動/終了は別のseat_processes。局wallはdecision区間を含む対局時間。
+- 旧persistentは局間で通常TT/完全読み表も保持するため、局内だけ再利用する本来の自己対局性能の採用証拠から外す。数値は既存計測の参考値として残す。新条件は常駐しても各局の開始時に両cacheを消去する。
 - Oracleは外部Egaroucid v7.8.1、bookless/one-thread。異なる探索/評価器なので、Oracleとの比率は同一アルゴリズムの改善率を示さない。
 - Oracle12の8局wall合計702.164秒と人間ログの全体elapsed815.8秒は計時範囲が異なる。
 
@@ -65,11 +66,11 @@ exact=trueを先に分類し、それ以外をdecision盤面のoccupied<=20がop
 | opening-1-seat1-turn9 | 19 / W | c2 / f2 | -1 / 12 / false | 16 / -6 |
 | opening-2-seat1-turn3 | 13 / W | f5 / f2 | 0 / 12 / false | -32 / 22 |
 
-常駐深度8は411 decisionでgameの408と異なる。同点手/TT履歴が原因の可能性はあるが未確認。異なる棋譜の5.1%程度の時間差を、process保持だけによる改善と解釈しない。
+常駐深度8は411 decisionでgameの408と異なる。同点手/TT履歴が原因の可能性はあるが未確認。異なる棋譜の5.1%程度の時間差を、process保持だけによる改善と解釈しない。局間cacheを使った旧条件の原因調査によって採用可能にするのではなく、局開始resetの新条件で再測定する。
 
 ## 完了済みと残作業
 
-0035の実装/全局測定/turn-game比較/独立Oracle照合は完了。速度目安は未達で、Oracle測定後の正式閾値、cacheの採用理由、自己対局の設定選択が残る。変更前CLIのscore/exactness、常駐での着手差も補完する。
+0035の実装/既存条件の全局測定/turn-game比較/独立Oracle照合は完了。速度目安は未達で、Oracle測定後の正式閾値、cacheの採用理由、自己対局の設定選択が残る。変更前CLIのscore/exactnessと、通常TT/完全読み表を局開始時にresetする常駐条件を補完する。
 
 残作業は [0039](../exec-plan/todo/0039-reversi-ai-whole-game-resumable-measurement.md) の局単位保存/再開/scriptと、[0040](../exec-plan/todo/0040-reversi-ai-self-play-performance-closeout.md) の意味証拠/序盤コスト/設定判断へ分けた。0035はその判断までactive。新本番manifestは0037 pilot成功と0032の完全game/provenance検証後に0019で凍結する。
 

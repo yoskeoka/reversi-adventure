@@ -15,6 +15,8 @@
 > 変更前後の点数/exactness確認は未完了。0039の局単位保存/再開と0040の補完/採否を経て、
 > 0037のpilot成功と0032入力の完全game/provenance検証も満たしてから本番を凍結する。
 > 詳細は `docs/references/reversi-ai-whole-game-0035-results.md` を参照。
+> プロセスが常駐しても、各局の開始前に通常TT/完全読み表を消去する。局内の読みだけを
+> 再利用し、局間cacheを残した旧persistent測定は本番性能の採用証拠にしない。
 
 ## Objective and completion boundary
 
