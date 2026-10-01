@@ -239,6 +239,74 @@ class ReinforcementTests(unittest.TestCase):
             self.assertEqual(report["validation"]["remaining_records"], 0)
             self.assertEqual(report["validation"]["baseline"]["status"], "unavailable")
 
+    def test_artifact_provenance_accepts_legacy_and_game_reset_producers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.prepare_fixture(root)
+            original = training.read_json(root / "baseline.json")
+            for version in (training.REINFORCEMENT_V1_VERSION, training.REINFORCEMENT_VERSION,
+                            reinforcement.VERSION):
+                artifact = json.loads(json.dumps(original))
+                artifact["provenance"]["trainer_version"] = version
+                artifact["provenance"]["optimizer"]["name"] = "bounded_td_v1"
+                artifact.pop("artifact_digest")
+                artifact["artifact_digest"] = training.digest(artifact)
+                training.validate_artifact(artifact)
+
+    def test_reset_contract_binary_and_old_manifest_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.prepare_fixture(root)
+            original = training.read_json(manifest_path)
+            for contract in (None, {"protocol": "new_game-v1", "cache_lifetime": "process", "binary_sha256": original["candidate"]["sha256"]},
+                             {"protocol": "new_game-v1", "cache_lifetime": "one-game", "binary_sha256": "0" * 64}):
+                manifest = json.loads(json.dumps(original))
+                if contract is None:
+                    manifest.pop("reset_contract")
+                else:
+                    manifest["reset_contract"] = contract
+                manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
+                with self.assertRaises(training.TrainingError):
+                    reinforcement.validate_manifest(manifest_path)
+
+    def test_play_resets_both_players_before_any_decision(self):
+        events = []
+        class Player:
+            def __init__(self, name):
+                self.name = name
+            def new_game(self, identifier):
+                events.append(("reset", self.name, identifier))
+            def choose(self, identifier, board, side):
+                self.assert_resets()
+                return reinforcement.legal_moves(board, side)[0]
+            def assert_resets(self):
+                if {event[1] for event in events} != {"baseline", "candidate"}:
+                    raise AssertionError("move precedes both acknowledgements")
+        game = reinforcement.play("candidate-match", 0, 0, reinforcement.INITIAL, "B", [], 0,
+                                  {name: Player(name) for name in ("baseline", "candidate")},
+                                  {"B": "baseline", "W": "candidate"}, [120])
+        self.assertEqual(len(events), 2)
+        reinforcement.replay(game)
+        game["reset_events"].pop()
+        game["game_digest"] = training.digest({key: value for key, value in game.items() if key != "game_digest"})
+        with self.assertRaisesRegex(training.TrainingError, "reset evidence"):
+            reinforcement.replay(game)
+
+    def test_candidate_rejects_missing_reset_acknowledgement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "old-cli"
+            executable.write_text("#!/usr/bin/env python3\nimport sys\nfor line in sys.stdin:\n print('new_game\\twrong\\tready', flush=True)\n")
+            executable.chmod(0o755)
+            candidate = reinforcement.Candidate(executable, root / "unused", {
+                "opening_depth": 1, "midgame_depth": 1, "endgame_depth": 1,
+                "exact_solver_empty_squares": 0, "time_limit_ms": 1, "node_limit": 100}, 1)
+            try:
+                with self.assertRaisesRegex(training.TrainingError, "reset acknowledgement"):
+                    candidate.new_game("game")
+            finally:
+                candidate.close()
+
     def test_partial_candidate_line_obeys_timeout(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

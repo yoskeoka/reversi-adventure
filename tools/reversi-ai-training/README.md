@@ -100,7 +100,11 @@ whole-game timing and semantic evidence supports that self-play workload.
 The default remains 12. Self-play uses 12/8/12 or 12/12/12; candidate matches,
 corpus regret, and later 0018 acceptance keep their own 12/12/12 settings.
 The manifest and report freeze the self-play setting and CLI SHA-256. Old
-version-2 manifests without this field are rejected for a new production run.
+version-1 and version-2 manifests are rejected for a new production run.
+Version-3 manifests pin the reset-capable candidate binary digest and the
+`new_game-v1` protocol with cache lifetime `one-game`. Prepare checks its reset
+acknowledgement; self-play and candidate matches reset each player before every
+game, and verification checks the per-game reset evidence.
 
 Set time and node caps explicitly if the host needs different limits. The
 match profile still requires depths 12/12/12 and the 16-empty threshold. The

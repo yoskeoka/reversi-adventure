@@ -189,16 +189,24 @@ zero weights are diagnostics, not a playing-strength claim. The separate 0019
 cycle uses the exact baseline and validation digests; 0018 acceptance openings
 remain unread until their own gate.
 
-The offline reinforcement producer accepts a version-2, immutable manifest.
+The offline reinforcement producer accepts a version-3, immutable manifest.
 It records the baseline artifact identity and SHA-256, candidate executable
 SHA-256, trainer and update-rule versions, feature contract, trained evaluator,
 all three search depths, exact-solver threshold, disabled book, self-play and
 match limits, D4/color-pairing policy, per-decision timeout, maximum decisions,
 and an actual random seed. These identify the method and the compared inputs;
 the producer source commit and reproducing the generated openings from a seed
-are not acceptance gates. Version-1 manifests and reports are never evidence
-for version-2 candidate selection, although version-1 baseline artifacts remain
-valid inputs.
+are not acceptance gates. Version-1 and version-2 manifests and reports are never evidence
+for version-3 candidate selection, although version-1 and version-2 baseline artifacts remain
+valid inputs. Version-3 pins `reset_contract` with protocol `new_game-v1`,
+cache lifetime `one-game`, and the same candidate executable SHA-256. Prepare
+checks a control acknowledgement without playing a game. Every self-play and
+candidate-match game resets each participating player before any move; its
+record preserves the game ID and acknowledged reset events. Run and offline
+verify reject a missing contract, an old manifest, mismatched binary identity,
+or missing per-game reset evidence. Version-1 and version-2 trained artifacts
+remain usable baselines, and the artifact loaders also accept version-3
+reinforcement provenance.
 
 The `strong-engine-hcap-v1` candidate label requires all three depths to be
 12 and the exact-solver threshold to be 16. Its decision protocol timeout must
@@ -245,7 +253,7 @@ bytes, and cannot make a failed or interrupted cycle valid.
   complete pairs (200 games), candidate match points must exceed 100 to be
   selected; ties select the baseline. A non-continuing 50-game result selects
   the baseline.
-- The 50-game result is written as an atomic version-2 checkpoint containing
+- The 50-game result is written as an atomic version-3 checkpoint containing
   manifest identity, game digests, aggregate and continuation decision. It is
   diagnostic evidence, not resume input. A run accepts only a nonexistent or
   empty output directory; it rejects checkpoints, partial files, and temporary
@@ -648,7 +656,7 @@ Raw per-game data and aggregates are independently recalculable. CLI stderr
 diagnostics stay out of GTP responses; structured per-decision search metadata
 is retained in game records and their digests. The long-running eight-game
 measurement is started by a human in a separate
-terminal. A stopped version-2 reinforcement run supplies no candidate evidence.
+terminal. A stopped reinforcement run supplies no candidate evidence.
 
 The benchmark independently replays each decision before accepting CLI search
 diagnostics. At a nonterminal forced pass below the exact-solver threshold,
@@ -681,7 +689,7 @@ the move-only stdout protocol.
 
 Self-play may select depth `12/8/12` with the 16-empty exact threshold while
 candidate matches and 0018 acceptance retain their separately frozen search
-settings. A version-2 production manifest and report identify the selected
+settings. A version-3 production manifest and report identify the selected
 self-play depths, exact threshold, and executable SHA-256. `prepare`, `run`,
 and `verify` reject a mismatched binary or manifest, including an older
 manifest lacking these identities. Heuristic positions at depth 8 and 12 are
@@ -693,6 +701,63 @@ scores are checked against the independent oracle. The report states both
 workload times, measured cause of any improvement, and the available settings
 if the 2–3 minute guide is missed. The guide becomes an acceptance threshold
 only after the oracle's whole-game result has been measured.
+
+### Durable whole-game measurement and game boundaries
+
+Prepared measurement manifests pin source and harness revisions; absolute paths
+and SHA-256 identities of the CLI, external oracle, evaluator and opening corpus;
+search depths, exact threshold and cache scope; ordered seat assignments;
+process lifetime; timeout and RSS caps; host identity; and output directory.
+Preparation writes a manifest and an executable script without starting measurement.
+The script validates all pinned inputs and harness identity on every invocation,
+then runs serially on the same host. Explicitly registered version-1 reports
+remain immutable reference evidence. Canonical encoding, report digest, all eight
+legal games, resource data and registered identities must verify before skipping.
+Corrupt or mismatched existing evidence fails closed rather than being replaced.
+Verified comparisons and oracle checks can likewise be skipped.
+
+A CLI game starts with `new_game\t<game-id>`; after clearing both search tables
+and retained search context, the CLI flushes `new_game\t<game-id>\tready`.
+Move requests and responses retain their existing format. Both seats must
+acknowledge before a game's first decision. Reinforcement self-play and candidate
+matches use the same boundary; prepare/run/verify pin `one-game` cache lifetime,
+reset protocol and executable identity, and reject manifests lacking them.
+Within a game search state survives between decisions, except that diagnostic
+`turn` scope clears the exact table on every decision. Across games no search
+state survives, even when seat processes remain alive. Reports record reset
+identity, duration and acknowledgement; unsupported or missing acknowledgement
+rejects new measurement conditions. Legacy persistent reports retain their
+original cross-game cache semantics and cannot represent reset conditions.
+
+Each completed game durably records its opening and assignment identity,
+positions, sides, moves, diagnostics, terminal result, wall and CPU time, RSS,
+startup/shutdown, condition and manifest digests, and session/segment identity.
+The runner writes a temporary file in the destination directory, flushes and
+fsyncs it, atomically renames it, and fsyncs the directory before advancing the
+completed-game count. An exclusive lock rejects simultaneous runners. On
+interrupt or crash, independently verified completed games are reused; unfinished
+temporary files do not count. Corruption, duplicate games, missing identities and
+changed inputs reject resume. Only all eight verified games produce an atomic
+completed report with recalculable aggregates and report digest.
+
+Persistent seats save diagnostics and cumulative CPU differences after each game.
+RSS is the absolute cumulative process/segment peak, never a per-game difference
+or an independent per-game peak. Segment closure records wait4 CPU and peak RSS
+for reconciliation, including enforcement of the RSS cap against the final
+segment peak. Persistent reports label completed-game checkpoint aggregates
+separately from segment aggregates; segment totals include process overhead
+and measured work in an interrupted game. After process loss, remaining games start from empty caches,
+without replaying completed games. The interrupted game is measured again in full.
+Session/segment startup and shutdown distinguish resumed segments from one
+uninterrupted eight-game process lifetime.
+
+Progress is flushed on stderr using
+`progress whole-game stage=<prepare|inputs|measure|aggregate|compare|oracle|verify> condition=<id|none> conditions=<done>/<total> games=<done>/8 status=<measuring|saved|skipped|interrupted|verified|failed> elapsed_s=<value>`.
+The completed work unit is one durably saved game; each condition totals eight
+games, and the manifest fixes the condition total. Stages without games use
+`games=0/8`. The default emits every saved game. `--progress-every N` limits
+ordinary progress only; failures, interruptions and completion always flush.
+Long-running production measurements remain human-operated.
 
 ### SearchEngine
 
@@ -710,6 +775,7 @@ struct SearchEngine {
 - `SearchEngine::new()` — Create with default TT capacity (~1M entries).
 - `SearchEngine::search_with_budget<E: BoardEvaluator + ?Sized>(board: &Board, color: Color, evaluator: &E, config: &AiConfig, budget: &SearchBudget)` — Run iterative deepening search within the supplied budget. Returns `SearchResult`.
 - `SearchEngine::clear_tt()` — Clear both heuristic and exact tables.
+- `SearchEngine::new_game()` — Clear both tables and discard the prior search context before acknowledging a new game.
 - `SearchEngine::clear_exact_cache()` — Clear only the exact table for diagnostic turn-scoped comparison.
 
 ### SearchBudget

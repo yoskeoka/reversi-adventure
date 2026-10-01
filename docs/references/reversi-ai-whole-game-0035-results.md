@@ -72,7 +72,7 @@ exact=trueを先に分類し、それ以外をdecision盤面のoccupied<=20がop
 
 0035の実装/既存条件の全局測定/turn-game比較/独立Oracle照合は完了。速度目安は未達で、Oracle測定後の正式閾値、cacheの採用理由、自己対局の設定選択が残る。変更前CLIのscore/exactnessと、通常TT/完全読み表を局開始時にresetする常駐条件を補完する。
 
-残作業は [0039](../exec-plan/todo/0039-reversi-ai-whole-game-resumable-measurement.md) の局単位保存/再開/scriptと、[0040](../exec-plan/todo/0040-reversi-ai-self-play-performance-closeout.md) の意味証拠/序盤コスト/設定判断へ分けた。0035はその判断までactive。新本番manifestは0037 pilot成功と0032の完全game/provenance検証後に0019で凍結する。
+局単位保存/再開/scriptの[0039計画](https://github.com/yoskeoka/reversi-adventure/blob/8bc7f009f645da0b5277cb83794c17b3e56afe1d/docs/exec-plan/todo/0039-reversi-ai-whole-game-resumable-measurement.md)は実装し、起動手順は[計測handoff](reversi-ai-whole-game-0035.md)へ記録した。残る[0040](../exec-plan/todo/0040-reversi-ai-self-play-performance-closeout.md)は意味証拠/序盤コスト/設定判断を扱う。0035はその判断までactive。新本番manifestは0037 pilot成功と0032の完全game/provenance検証後に0019で凍結する。
 
 試遊で中盤深度8/12が遅く空き16の完全読みは速かったという人間の観察に基づき、
 [0041](../exec-plan/todo/0041-reversi-ai-exact-threshold-reuse-assessment.md) で空き20/24も測る。

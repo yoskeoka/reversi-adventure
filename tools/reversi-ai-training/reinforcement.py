@@ -19,7 +19,8 @@ from pathlib import Path
 
 import training
 
-VERSION = "reversi-ai-pattern-reinforcement-v2"
+VERSION = "reversi-ai-pattern-reinforcement-v3"
+RESET_PROTOCOL = "new_game-v1"
 PAIRING = "color_swap_d4_v1"
 OUTPUTS = ("candidate-artifact.json", "selected-artifact.json", "games.jsonl", "checkpoint.json", "report.json")
 
@@ -158,8 +159,8 @@ def openings(seed: int, count: int, plies: int) -> list[tuple[str, str, list[str
 
 def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
     manifest = training.read_json(path)
-    require_keys(manifest, {"schema_version", "producer_version", "baseline_artifact", "candidate", "self_play_search", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match"}, "manifest")
-    if manifest["schema_version"] != 2 or manifest["producer_version"] != VERSION:
+    require_keys(manifest, {"schema_version", "producer_version", "baseline_artifact", "candidate", "self_play_search", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match", "reset_contract"}, "manifest")
+    if manifest["schema_version"] != 3 or manifest["producer_version"] != VERSION:
         fail("unsupported reinforcement manifest")
     root = path.parent
     baseline_entry = require_keys(manifest["baseline_artifact"], {"path", "sha256", "artifact_digest"}, "baseline_artifact")
@@ -170,6 +171,8 @@ def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
         fail("baseline artifact identity mismatch")
     candidate = require_keys(manifest["candidate"], {"path", "sha256", "evaluator", "profile", "opening_depth", "midgame_depth", "endgame_depth", "exact_solver_empty_squares", "time_limit_ms", "node_limit", "book"}, "candidate")
     executable = checked_file(root, {key: candidate[key] for key in ("path", "sha256")}, "candidate executable")
+    if manifest["reset_contract"] != {"protocol": RESET_PROTOCOL, "cache_lifetime": "one-game", "binary_sha256": candidate["sha256"]}:
+        fail("candidate game reset contract or binary identity mismatch")
     if candidate["evaluator"] != "trained" or candidate["profile"] != "strong-engine-hcap-v1" or candidate["book"] != "off":
         fail("candidate must use trained strong-engine profile with book off")
     for key in ("opening_depth", "midgame_depth", "endgame_depth"):
@@ -228,10 +231,10 @@ class Candidate:
         self.timeout = timeout
         self.buffer = bytearray()
 
-    def choose(self, identifier: str, board: str, side: str) -> str:
+    def request(self, identifier: str, request: str) -> str:
         assert self.process.stdin and self.process.stdout
         try:
-            self.process.stdin.write(f"{identifier}\t{board}\t{side}\n".encode("ascii"))
+            self.process.stdin.write((request + "\n").encode("ascii"))
             self.process.stdin.flush()
             deadline = time.monotonic() + self.timeout
             while b"\n" not in self.buffer:
@@ -254,6 +257,17 @@ class Candidate:
             fail(f"candidate failed at {identifier}: {error}")
         except UnicodeDecodeError:
             fail(f"candidate response is not ASCII at {identifier}")
+        return answer
+
+    def new_game(self, identifier: str) -> None:
+        if not identifier or any(character in identifier for character in "\t\r\n"):
+            fail("invalid game reset identifier")
+        answer = self.request(identifier, f"new_game\t{identifier}")
+        if answer != f"new_game\t{identifier}\tready\n":
+            fail(f"candidate reset acknowledgement missing or malformed at {identifier}")
+
+    def choose(self, identifier: str, board: str, side: str) -> str:
+        answer = self.request(identifier, f"{identifier}\t{board}\t{side}")
         if not answer or answer.count("\t") != 1 or not answer.endswith("\n"):
             fail(f"candidate response malformed at {identifier}")
         response_id, move = answer.rstrip("\n").split("\t")
@@ -270,6 +284,11 @@ class Candidate:
 def play(kind: str, pair: int, member: int, board: str, side: str, opening: list[str], rotation: int,
          players: dict[str, Candidate], sides: dict[str, str], remaining: list[int]) -> dict:
     start_board, start_side = board, side
+    game_id = f"{kind}-p{pair}-m{member}"
+    reset_events = []
+    for name in sorted(set(sides.values())):
+        players[name].new_game(game_id)
+        reset_events.append({"player": name, "game_id": game_id, "ack": "ready"})
     decisions = []
     for turn in range(121):
         legal = legal_moves(board, side)
@@ -291,6 +310,7 @@ def play(kind: str, pair: int, member: int, board: str, side: str, opening: list
         fail("game exceeded 120 turns")
     counts = {"B": board.count("B"), "W": board.count("W")}
     game = {"kind": kind, "pair": pair, "member": member, "players": sides, "opening": opening, "rotation": rotation,
+            "cache_lifetime": "one-game", "reset_protocol": RESET_PROTOCOL, "reset_events": reset_events,
             "start_board": start_board, "start_side": start_side, "decisions": decisions,
             "terminal_board": board, "disc_counts": counts, "final_score_black": counts["B"] - counts["W"], "failure": None}
     game["game_digest"] = training.digest(game)
@@ -302,6 +322,11 @@ def replay(game: dict) -> list[dict]:
     actual = expected.pop("game_digest", None)
     if actual != training.digest(expected):
         fail("game digest mismatch")
+    game_id = f"{game['kind']}-p{game['pair']}-m{game['member']}"
+    reset_events = [{"player": name, "game_id": game_id, "ack": "ready"}
+                    for name in sorted(set(game["players"].values()))]
+    if game.get("cache_lifetime") != "one-game" or game.get("reset_protocol") != RESET_PROTOCOL or game.get("reset_events") != reset_events:
+        fail("game reset evidence mismatch")
     board, side = game["start_board"], game["start_side"]
     tuning = []
     for decision in game["decisions"]:
@@ -492,7 +517,7 @@ def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_call
             if pair + 1 == 25:
                 first = match_summary(match_games)
                 continued = first["match_points"] > 25
-                checkpoint = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games], "match": first, "continued": continued}
+                checkpoint = {"schema_version": 3, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games], "match": first, "continued": continued}
                 checkpoint["checkpoint_digest"] = training.digest(checkpoint)
                 if checkpoint_callback:
                     checkpoint_callback(training.canonical_json(checkpoint) + b"\n")
@@ -505,14 +530,14 @@ def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_call
     progress.stage_done("candidate-match", stage)
     first = match_summary(match_games[:50])
     continued = first["match_points"] > 25
-    checkpoint = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
+    checkpoint = {"schema_version": 3, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
     checkpoint["checkpoint_digest"] = training.digest(checkpoint)
     final_match = match_summary(match_games)
     selected_name = selected_from_match(final_match, continued)
     selected = artifact if selected_name == "candidate" else baseline
     stage = progress.stage_start("report-serialization")
-    report = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
-              "candidate_executable_sha256": sha(executable), "self_play_search": manifest["self_play_search"],
+    report = {"schema_version": 3, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
+              "candidate_executable_sha256": sha(executable), "self_play_search": manifest["self_play_search"], "reset_contract": manifest["reset_contract"],
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": artifact["artifact_digest"],
               "selected_artifact_digest": selected["artifact_digest"], "selected": selected_name,
               "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics, "excluded_ids": excluded_validation_ids, "remaining_records": len(validation)},
@@ -593,13 +618,13 @@ def verify(manifest_path: Path, directory: Path) -> None:
     if training.read_json(directory / "selected-artifact.json") != selected:
         fail("selected artifact mismatch")
     checkpoint = training.read_json(directory / "checkpoint.json")
-    expected_checkpoint = {"schema_version": 2, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
+    expected_checkpoint = {"schema_version": 3, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
     expected_checkpoint["checkpoint_digest"] = training.digest(expected_checkpoint)
     if checkpoint != expected_checkpoint:
         fail("checkpoint metadata or decision mismatch")
-    checks = {"schema_version": 2, "producer_version": VERSION,
+    checks = {"schema_version": 3, "producer_version": VERSION,
               "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
-              "candidate_executable_sha256": manifest["candidate"]["sha256"], "self_play_search": manifest["self_play_search"],
+              "candidate_executable_sha256": manifest["candidate"]["sha256"], "self_play_search": manifest["self_play_search"], "reset_contract": manifest["reset_contract"],
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": candidate["artifact_digest"],
               "selected_artifact_digest": selected["artifact_digest"], "selected": selected_name,
               "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics, "excluded_ids": excluded_ids, "remaining_records": len(validation)},
@@ -614,7 +639,7 @@ def prepare(args: argparse.Namespace) -> None:
         fail("manifest already exists; choose a fresh immutable path")
     baseline = training.read_json(args.baseline_artifact)
     training.validate_artifact(baseline)
-    manifest = {"schema_version": 2, "producer_version": VERSION,
+    manifest = {"schema_version": 3, "producer_version": VERSION,
                 "baseline_artifact": {"path": str(args.baseline_artifact.resolve()), "sha256": sha(args.baseline_artifact),
                                       "artifact_digest": baseline["artifact_digest"]},
                 "candidate": {"path": str(args.candidate_executable.resolve()), "sha256": sha(args.candidate_executable),
@@ -625,6 +650,7 @@ def prepare(args: argparse.Namespace) -> None:
                 "self_play_search": {"opening_depth": args.opening_depth, "midgame_depth": args.self_play_midgame_depth,
                                      "endgame_depth": args.endgame_depth, "exact_solver_empty_squares": args.exact_solver_empty_squares,
                                      "time_limit_ms": args.time_limit_ms, "node_limit": args.node_limit},
+                "reset_contract": {"protocol": RESET_PROTOCOL, "cache_lifetime": "one-game", "binary_sha256": sha(args.candidate_executable)},
                 "seed": args.seed, "game_count": args.game_count, "opening_plies": args.opening_plies,
                 "pairing": PAIRING, "decision_timeout_seconds": args.decision_timeout_seconds,
                 "max_decisions": args.max_decisions,
@@ -635,7 +661,12 @@ def prepare(args: argparse.Namespace) -> None:
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_bytes(training.canonical_json(manifest) + b"\n")
     try:
-        validate_manifest(args.manifest)
+        validated, baseline_path, executable, _ = validate_manifest(args.manifest)
+        candidate = Candidate(executable, baseline_path, validated["candidate"], validated["decision_timeout_seconds"])
+        try:
+            candidate.new_game("prepare-reset-probe")
+        finally:
+            candidate.close()
     except Exception:
         args.manifest.unlink(missing_ok=True)
         raise

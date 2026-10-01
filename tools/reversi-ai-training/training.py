@@ -22,6 +22,7 @@ FORMAT_VERSION = 1
 TRAINER_VERSION = "reversi-ai-pattern-training-v1"
 REINFORCEMENT_V1_VERSION = "reversi-ai-pattern-reinforcement-v1"
 REINFORCEMENT_VERSION = "reversi-ai-pattern-reinforcement-v2"
+REINFORCEMENT_V3_VERSION = "reversi-ai-pattern-reinforcement-v3"
 FEATURE_COUNT = 64
 PHASE_COUNT = 60
 SCORE_SCALE = "final_disc_difference"
@@ -309,13 +310,13 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
     if artifact.get("format_version") != FORMAT_VERSION or artifact.get("feature_contract") != {"format_version": FORMAT_VERSION, "catalog_digest": catalog_digest(), "phase_count": PHASE_COUNT, "score_scale": SCORE_SCALE}:
         raise TrainingError("artifact feature contract mismatch")
     provenance = artifact.get("provenance")
-    if not isinstance(provenance, dict) or provenance.get("trainer_version") not in (TRAINER_VERSION, REINFORCEMENT_V1_VERSION, REINFORCEMENT_VERSION):
+    if not isinstance(provenance, dict) or provenance.get("trainer_version") not in (TRAINER_VERSION, REINFORCEMENT_V1_VERSION, REINFORCEMENT_VERSION, REINFORCEMENT_V3_VERSION):
         raise TrainingError("artifact provenance is incomplete")
     manifest_digest = provenance.get("input_manifest_digest")
     if not isinstance(manifest_digest, str) or len(manifest_digest) != 64 or any(character not in "0123456789abcdef" for character in manifest_digest):
         raise TrainingError("artifact provenance has an invalid input manifest digest")
     require_int(provenance.get("seed"), "artifact provenance seed", 0, 2**64 - 1)
-    allowed_optimizer = {TRAINER_VERSION: "sparse_mean_v1", REINFORCEMENT_V1_VERSION: "bounded_td_v1", REINFORCEMENT_VERSION: "bounded_td_v1"}[provenance["trainer_version"]]
+    allowed_optimizer = {TRAINER_VERSION: "sparse_mean_v1", REINFORCEMENT_V1_VERSION: "bounded_td_v1", REINFORCEMENT_VERSION: "bounded_td_v1", REINFORCEMENT_V3_VERSION: "bounded_td_v1"}[provenance["trainer_version"]]
     if provenance.get("optimizer") != {"name": allowed_optimizer, "normalization_divisor": FEATURE_COUNT}:
         raise TrainingError("artifact provenance has an unsupported optimizer")
     licenses = provenance.get("licenses")

@@ -127,6 +127,25 @@ pattern-reinforcement-verify:
 pattern-reinforcement-regret: pattern-reinforcement-verify
 	@candidate_command="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-command --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; regret_timeout="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-timeout --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; $(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output "$(REINFORCEMENT_REGRET_REPORT)" --profile strong-engine-hcap-v1 --timeout "$$regret_timeout" --candidate-command "$$candidate_command"
 
+WHOLE_GAME_PREPARE_TOOL := tools/reversi-ai-benchmark/prepare-whole-game-measurement.py
+WHOLE_GAME_PREPARE_ARGS ?=
+WHOLE_GAME_MANIFEST ?=
+WHOLE_GAME_PROGRESS_EVERY ?= 1
+
+.PHONY: benchmark-whole-game-prepare benchmark-whole-game-run benchmark-whole-game-manifest-verify benchmark-whole-game-inputs-verify
+
+benchmark-whole-game-prepare:
+	$(PYTHON) $(WHOLE_GAME_PREPARE_TOOL) prepare $(WHOLE_GAME_PREPARE_ARGS)
+
+benchmark-whole-game-run:
+	$(PYTHON) $(WHOLE_GAME_PREPARE_TOOL) run --manifest "$(WHOLE_GAME_MANIFEST)" --progress-every $(WHOLE_GAME_PROGRESS_EVERY)
+
+benchmark-whole-game-manifest-verify:
+	$(PYTHON) $(WHOLE_GAME_PREPARE_TOOL) verify --manifest "$(WHOLE_GAME_MANIFEST)"
+
+benchmark-whole-game-inputs-verify:
+	$(PYTHON) $(WHOLE_GAME_PREPARE_TOOL) verify-inputs --manifest "$(WHOLE_GAME_MANIFEST)"
+
 oracle-test:
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-oracle/tests -p 'test_*.py'
 	$(PYTHON) -m unittest discover -s tools/reversi-ai-benchmark -p 'test_*.py'
