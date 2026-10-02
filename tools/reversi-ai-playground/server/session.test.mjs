@@ -1,15 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Session, oracleDepthArgs } from './session.mjs';
+import { Session, catalog, oracleDepthArgs, verifyConfig } from './session.mjs';
+import { legalMoves } from './rules.mjs';
 
 const config = { cli: '/unused', cliSha256: 'fixed', repoRoot: '/tmp', trained: null, oracle: null };
 const strategic = { id: 'strategic', openingDepth: 2, midgameDepth: 4, exact: 16 };
-function game(black = { id: 'human' }, white = { id: 'human' }) {
+function game(black = { id: 'human' }, white = { id: 'human' }, now) {
   const messages = [];
-  const session = new Session({ black, white, seed: 42 }, config, message => messages.push(message));
+  const session = new Session({ black, white, seed: 42 }, config, message => messages.push(message), now);
   return { session, messages };
 }
 
@@ -62,7 +63,7 @@ test('stale AI response and oracle invalid pass cannot advance the board', async
 test('unavailable seats and settings beyond accepted range are rejected', () => {
   assert.throws(() => game({ id: 'trained-baseline' }), /unavailable/);
   assert.throws(() => game({ ...strategic, openingDepth: 13 }), /outside accepted/);
-  assert.throws(() => game({ ...strategic, exact: 20 }), /outside accepted/);
+  assert.throws(() => game({ ...strategic, exact: 31 }), /outside accepted/);
   const legacy = game({ id: 'strategic', depth: 4, exact: 12 }).session.black;
   assert.deepEqual(legacy, { id: 'strategic', openingDepth: 4, midgameDepth: 4, exact: 12 });
 });
@@ -175,4 +176,160 @@ test('Oracle Advisor refuses a binary changed after configuration verification',
     assert.match(session.advisor.error, /oracle binary digest changed/);
     assert.equal(session.error, null);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('catalog and both player roles accept the same search boundaries without rounding', () => {
+  assert.deepEqual(catalog(config).limits, { openingDepth: [1, 12], midgameDepth: [1, 16], exact: [0, 30] });
+  for (const settings of [{ ...strategic, openingDepth: 1, midgameDepth: 1, exact: 0 },
+    { ...strategic, openingDepth: 12, midgameDepth: 16, exact: 30 }]) {
+    assert.deepEqual(game(settings).session.black, settings);
+    assert.deepEqual(game({ id: 'human', advisor: settings }).session.black.advisor, settings);
+  }
+  for (const [field, invalid] of [['openingDepth', [0, 13, 1.5]], ['midgameDepth', [0, 17, 1.5]], ['exact', [-1, 31, 1.5]]]) {
+    for (const value of invalid) {
+      const settings = { ...strategic, [field]: value };
+      assert.throws(() => game(settings), /outside accepted/);
+      assert.throws(() => game({ id: 'human', advisor: settings }), /outside accepted/);
+    }
+  }
+  for (const depth of [1, 12]) {
+    const legacy = { id: 'strategic', depth, exact: 30 };
+    const expected = { id: 'strategic', openingDepth: depth, midgameDepth: depth, exact: 30 };
+    assert.deepEqual(game(legacy).session.black, expected);
+    assert.deepEqual(game({ id: 'human', advisor: legacy }).session.black.advisor, expected);
+  }
+  for (const depth of [0, 13, 16]) {
+    const legacy = { id: 'strategic', depth, exact: 0 };
+    assert.throws(() => game(legacy), /outside accepted/);
+    assert.throws(() => game({ id: 'human', advisor: legacy }), /outside accepted/);
+  }
+});
+
+test('maximum settings reach match CLI and Advisor CLI and Oracle process arguments', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'reversi-search-settings-'));
+  const sessions = [];
+  try {
+    const cli = join(directory, 'cli');
+    writeFileSync(cli, `#!${process.execPath}\nif (process.argv.includes('--print-advisor-config-id')) console.log('project-ai-advisor-v1:0123456789abcdef'); else process.stdin.resume();\n`);
+    chmodSync(cli, 0o755);
+    const local = verifyConfig({ repoRoot: directory, cli, trained: null, oracle: null });
+    const settings = { id: 'strategic', openingDepth: 12, midgameDepth: 16, exact: 30 };
+    const expected = ['--opening-depth', '12', '--midgame-depth', '16', '--exact-solver-empty-squares', '30'];
+    const match = new Session({ black: settings, white: { id: 'human' } }, local, () => {});
+    sessions.push(match); match.open();
+    assert.deepEqual(match.snapshot().thinkingTimeMs, { B: 0, W: 0 });
+    assert.deepEqual(match.processes.B.child.spawnargs.slice(3, 9), expected);
+    const advisor = new Session({ black: { id: 'human', advisor: settings }, white: { id: 'human' } }, local, () => {});
+    sessions.push(advisor);
+    await advisor.startAdvisorProcess('B');
+    assert.deepEqual(advisor.advisorProcesses.B.child.spawnargs.slice(4, 10), expected);
+    const oracleConfig = verifyConfig({ ...local, oracle: { binary: cli, dataDir: directory } });
+    const oracle = new Session({ black: { ...settings, id: 'oracle' }, white: { id: 'human' } }, oracleConfig, () => {});
+    sessions.push(oracle); oracle.open();
+    assert.deepEqual(oracle.processes.B.child.spawnargs.slice(6, -2), oracleDepthArgs(settings));
+    const oracleAdvisor = new Session({ black: { id: 'human', advisor: { ...settings, id: 'oracle' } }, white: { id: 'human' } }, oracleConfig, () => {});
+    sessions.push(oracleAdvisor); await oracleAdvisor.startAdvisorProcess('B');
+    assert.deepEqual(oracleAdvisor.advisorProcesses.B.child.spawnargs.slice(3, 9), expected);
+    assert.deepEqual(oracleDepthArgs(settings).slice(0, 15),
+      ['-depthprobrange', '1', '20', '12', '100', '-depthprobrange', '21', '30', '16', '100', '-depthprobrange', '31', '31', '30', '100']);
+  } finally {
+    for (const session of sessions) session.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('query time accumulates separately for both colors through termination and snapshot republication', async () => {
+  let clock = 100;
+  const { session, messages } = game({ id: 'random' }, { id: 'random' }, () => clock);
+  const initial = session.snapshot();
+  const expected = { B: 0, W: 0 };
+  const query = session.query.bind(session);
+  session.query = async (...args) => {
+    const duration = args[0] === 'B' ? 2.5 : 4.25;
+    clock += duration; expected[args[0]] += duration;
+    return query(...args);
+  };
+  await session.drive();
+  assert.ok(session.result);
+  assert.ok(expected.B > 2.5 && expected.W > 4.25);
+  assert.deepEqual(session.snapshot().thinkingTimeMs, expected);
+  assert.deepEqual(initial.thinkingTimeMs, { B: 0, W: 0 });
+  session.publish(true);
+  assert.deepEqual(messages.at(-1).snapshot.thinkingTimeMs, expected);
+  assert.equal(messages.at(-1).token, session.token);
+  assert.deepEqual(game().session.snapshot().thinkingTimeMs, { B: 0, W: 0 });
+});
+
+test('query failures and timeouts add elapsed time once before publishing the error', async () => {
+  for (const failure of ['query failed', 'process response timed out']) {
+    let clock = 10;
+    const { session, messages } = game(strategic, { id: 'human' }, () => clock);
+    session.query = async () => { clock += 37; throw new Error(failure); };
+    await session.drive();
+    assert.equal(session.error, failure);
+    assert.deepEqual(messages.at(-1).snapshot.thinkingTimeMs, { B: 37, W: 0 });
+    await session.drive(); session.publish();
+    assert.deepEqual(session.snapshot().thinkingTimeMs, { B: 37, W: 0 });
+  }
+});
+
+test('forced pass never requests or times the passed color', async () => {
+  let clock = 0;
+  const { session } = game({ id: 'random' }, { id: 'random' }, () => clock);
+  session.board = 'B'.repeat(62) + 'W.';
+  const queried = [];
+  session.query = async side => { queried.push(side); clock += 8; return 'h8'; };
+  await session.drive();
+  assert.deepEqual(queried, ['B']);
+  assert.equal(session.lastPass, 'W');
+  assert.equal(session.result, 'B');
+  assert.deepEqual(session.snapshot().thinkingTimeMs, { B: 8, W: 0 });
+});
+
+test('Human waiting and completed Advisor analysis are excluded from thinking totals', async () => {
+  let clock = 0;
+  const { session } = game({ id: 'human', advisor: strategic }, { id: 'human' }, () => clock);
+  session.advisorConfigIds.B = 'project-ai-advisor-v1:0123456789abcdef';
+  session.advisorProcesses.B = { command: async () => {
+    clock += 100;
+    return JSON.stringify({ schema_version: 1, position_id: `${session.sessionId}:0:advisor`, board: session.board,
+      side: 'B', config_id: session.advisorConfigIds.B, outcome: 'move', completed_depth: 2, exact: false,
+      scores: legalMoves(session.board, 'B').map(move => ({ move, value: 0, completed_depth: 2, exact: false })) });
+  }, close() {} };
+  session.beginAdvisor();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(session.advisor.pending, false);
+  clock += 1000;
+  await session.humanMove({ sessionId: session.sessionId, revision: 0, move: 'd3' });
+  assert.deepEqual(session.snapshot().thinkingTimeMs, { B: 0, W: 0 });
+});
+
+test('Oracle opponent synchronization is excluded from the next color query time', async () => {
+  let clock = 0;
+  const local = { ...config, oracle: { binary: '/unused-oracle', sha256: 'fixed', dataDir: '/tmp' } };
+  const session = new Session({ black: { id: 'human' }, white: { id: 'oracle', openingDepth: 1, midgameDepth: 1, exact: 0 } }, local, () => {}, () => clock);
+  session.processes.W = { gtp: async input => {
+    if (input.startsWith('play ')) { clock += 500; return ['=']; }
+    clock += 7;
+    return [`= ${legalMoves(session.board, 'W')[0]}`];
+  }, close() {} };
+  await session.humanMove({ sessionId: session.sessionId, revision: 0, move: 'd3' });
+  while (session.busy) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(session.revision, 2);
+  assert.deepEqual(session.snapshot().thinkingTimeMs, { B: 0, W: 7 });
+});
+
+test('a closed session late query completion cannot affect a replacement or publish', async () => {
+  let clock = 0;
+  const old = game(strategic, { id: 'human' }, () => clock);
+  let finish;
+  old.session.query = () => new Promise(resolve => { finish = resolve; });
+  const pending = old.session.drive();
+  const messageCount = old.messages.length;
+  old.session.close();
+  const replacement = game({ id: 'human' }, { id: 'human' }, () => clock);
+  clock += 55; finish('d3'); await pending;
+  assert.equal(old.session.revision, 0);
+  assert.equal(old.messages.length, messageCount);
+  assert.deepEqual(replacement.session.snapshot().thinkingTimeMs, { B: 0, W: 0 });
 });

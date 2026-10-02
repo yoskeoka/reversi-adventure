@@ -73,10 +73,10 @@ impl DecisionMoveConfig {
         exact_solver_empty_squares: u32,
     ) -> Result<Self, String> {
         if !(1..=12).contains(&opening_depth)
-            || !(1..=12).contains(&midgame_depth)
-            || exact_solver_empty_squares > 16
+            || !(1..=16).contains(&midgame_depth)
+            || exact_solver_empty_squares > 30
         {
-            return Err("decision-move depths must be 1..12 and exact threshold 0..16".into());
+            return Err("decision-move opening depth must be 1..12, midgame depth 1..16, and exact threshold 0..30".into());
         }
         Ok(Self {
             opening_depth,
@@ -117,6 +117,7 @@ mod tests {
     #[test]
     fn decision_move_boundaries_and_identity() {
         let config = DecisionMoveConfig::new(2, 5, 16).unwrap();
+        assert_eq!(config.context_fingerprint(), 0xf133_08ed_91cb_84ab);
         assert_eq!(config.depth_for_stones(4), 2);
         assert_eq!(config.depth_for_stones(23), 2);
         assert_eq!(config.depth_for_stones(24), 5);
@@ -134,8 +135,20 @@ mod tests {
                 .context_fingerprint()
         );
         assert!(DecisionMoveConfig::new(0, 1, 0).is_err());
-        assert!(DecisionMoveConfig::new(1, 13, 0).is_err());
-        assert!(DecisionMoveConfig::new(1, 1, 17).is_err());
+        assert!(DecisionMoveConfig::new(13, 1, 0).is_err());
+        assert!(DecisionMoveConfig::new(1, 0, 0).is_err());
+        assert!(DecisionMoveConfig::new(1, 17, 0).is_err());
+        assert!(DecisionMoveConfig::new(1, 1, 31).is_err());
+        assert!(DecisionMoveConfig::new(1, 1, 0).is_ok());
+        let maximum = DecisionMoveConfig::new(12, 16, 30).unwrap();
+        assert_eq!(maximum.depth_for_stones(23), 12); // decision move 20
+        assert_eq!(maximum.depth_for_stones(24), 16); // decision move 21
+        for stones in [33, 34] {
+            // 31 and 30 empty squares
+            let search = maximum.search_config_for_stones(stones);
+            assert_eq!(search.depth_for_phase(stones), 16);
+            assert_eq!(search.exact_solver_empty_squares, 30);
+        }
     }
 
     #[test]

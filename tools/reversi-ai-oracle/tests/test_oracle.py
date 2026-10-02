@@ -44,6 +44,8 @@ class OracleHarnessTests(unittest.TestCase):
 
     def test_advisor_analysis_ranges_and_identity(self):
         config = oracle.analysis_config(3, 5, 16)
+        self.assertEqual(config.config_id,
+                         "oracle-advisor-v1:162caa799632762ba3bce7de1cb84354ebfb9c8dd4fb9a2637ce3489a2faa98f")
         self.assertEqual(oracle.analysis_depth(config, 23), 3)  # move 20
         self.assertEqual(oracle.analysis_depth(config, 24), 5)  # move 21
         self.assertEqual(oracle.analysis_depth(config, 47), 5)  # move 44
@@ -59,6 +61,30 @@ class OracleHarnessTests(unittest.TestCase):
             oracle.analysis_config(0, 5, 16)
         with self.assertRaises(oracle.OracleError):
             oracle.validate_analysis_config(config._replace(config_id="changed"))
+
+    def test_advisor_maximum_ranges_and_inclusive_limits(self):
+        config = oracle.analysis_config(12, 16, 30)
+        self.assertEqual(config.depth_ranges[:3], (
+            oracle.DepthProbabilityRange(1, 20, 12, "100"),
+            oracle.DepthProbabilityRange(21, 30, 16, "100"),
+            oracle.DepthProbabilityRange(31, 31, 30, "100")))
+        for stones, depth in ((23, 12), (24, 16), (33, 16), (34, 30)):
+            self.assertEqual(oracle.analysis_depth(config, stones), depth)
+        argv = oracle.analysis_argv(Path("oracle"), config, Path("positions"))
+        # Solver queries are child boards, one placement beyond decision move 31.
+        self.assertIn(["-depthprobrange", "32", "32", "29", "100"],
+                      [argv[index:index + 5] for index in range(len(argv))])
+        self.assertEqual(config.config_id, oracle.analysis_config(12, 16, 30).config_id)
+        for settings in ((11, 16, 30), (12, 15, 30), (12, 16, 29)):
+            self.assertNotEqual(config.config_id, oracle.analysis_config(*settings).config_id)
+        minimum = oracle.analysis_config(1, 1, 0)
+        self.assertEqual(minimum.depth_ranges, (
+            oracle.DepthProbabilityRange(1, 20, 1, "100"),
+            oracle.DepthProbabilityRange(21, 60, 1, "100")))
+        for invalid in ((0, 1, 0), (13, 1, 0), (1, 0, 0), (1, 17, 0),
+                        (1, 1, -1), (1, 1, 31), (True, 1, 0), (1, 1.5, 0)):
+            with self.subTest(settings=invalid), self.assertRaises(oracle.OracleError):
+                oracle.analysis_config(*invalid)
 
     def test_advisor_position_returns_complete_root_set_and_pass_game_over(self):
         initial = oracle.generate_corpus()[0]
