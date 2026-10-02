@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
+import signal
+import uuid
 import hashlib
 import json
 import os
@@ -104,6 +108,7 @@ class Seat:
         self.kind, self.timeout, self.label, self.depth = kind, timeout, label, depth
         self.stderr = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
         started = time.monotonic_ns()
+        self.started_at_ns = time.time_ns()
         if kind == "oracle":
             self.gtp = oracle.GtpSession(binary, cwd or binary.parent, profile(depth), timeout)
             self.process = self.gtp.process
@@ -122,6 +127,7 @@ class Seat:
             self.buffer = bytearray()
         self.startup_ns = time.monotonic_ns() - started
         self.diagnostics: dict[str, dict] = {}
+        self.diagnostic_offset = 0
 
     def gtp_command(self, command: str) -> list[str]:
         require(self.gtp is not None, "GTP command sent to CLI")
@@ -163,9 +169,17 @@ class Seat:
         shutdown_ns = time.monotonic_ns() - started
         if self.process.stdout:
             self.process.stdout.close()
-        self.stderr.seek(0)
-        for line in self.stderr.read().splitlines():
-            match = DIAGNOSTIC.fullmatch(line)
+        self.collect_diagnostics()
+        self.stderr.close()
+        return {"startup_ns": self.startup_ns, "shutdown_ns": shutdown_ns,
+                "started_at_ns": self.started_at_ns, "ended_at_ns": time.time_ns(), **usage}
+
+    def collect_diagnostics(self) -> None:
+        self.stderr.seek(self.diagnostic_offset)
+        lines = self.stderr.readlines()
+        self.diagnostic_offset = self.stderr.tell()
+        for line in lines:
+            match = DIAGNOSTIC.fullmatch(line.rstrip("\n"))
             if match:
                 identifier, elapsed, nodes, exact, score, completed_depth, outcome, probes, hits, stores = match.groups()
                 require(identifier not in self.diagnostics, "duplicate CLI diagnostic id")
@@ -175,17 +189,53 @@ class Seat:
                     "completed_depth": int(completed_depth), "outcome": outcome,
                     "cache_probes": int(probes), "cache_hits": int(hits), "cache_stores": int(stores),
                 }
-        self.stderr.close()
-        return {"startup_ns": self.startup_ns, "shutdown_ns": shutdown_ns, **usage}
 
-    def abort(self) -> None:
+    def new_game(self, identifier: str) -> dict:
+        started = time.monotonic_ns()
+        if self.gtp:
+            self.gtp.command("clear_board")
+        else:
+            assert self.process.stdin and self.process.stdout
+            self.process.stdin.write(f"new_game\t{identifier}\n".encode("ascii"))
+            self.process.stdin.flush()
+            deadline = time.monotonic() + self.timeout
+            while b"\n" not in self.buffer:
+                remaining = deadline - time.monotonic()
+                require(remaining > 0, "new_game acknowledgement timed out")
+                ready, _, _ = select.select([self.process.stdout], [], [], remaining)
+                require(bool(ready), "new_game acknowledgement timed out")
+                chunk = os.read(self.process.stdout.fileno(), 4096)
+                require(bool(chunk), "new_game acknowledgement missing")
+                self.buffer.extend(chunk)
+                require(len(self.buffer) <= 4096, "new_game acknowledgement too long")
+            line, _, rest = self.buffer.partition(b"\n")
+            self.buffer = bytearray(rest)
+            require(line.decode("ascii") == f"new_game\t{identifier}\tready",
+                    "new_game acknowledgement mismatch")
+        return {"game_id": identifier, "acknowledged": True,
+                "elapsed_ns": time.monotonic_ns() - started,
+                "protocol": "gtp-clear-board" if self.gtp else "new_game-v1"}
+
+    def abort(self) -> dict | None:
+        started = time.monotonic_ns()
+        result = None
         if self.process.returncode is None:
             self.process.kill()
             try:
-                os.wait4(self.process.pid, 0)
+                _, status, usage = os.wait4(self.process.pid, 0)
+                self.process.returncode = os.waitstatus_to_exitcode(status)
+                result = {"startup_ns": self.startup_ns,
+                          "shutdown_ns": max(1, time.monotonic_ns()-started),
+                          "user_cpu_ns": round(usage.ru_utime*1_000_000_000),
+                          "system_cpu_ns": round(usage.ru_stime*1_000_000_000),
+                          "peak_rss_kib": usage.ru_maxrss,
+                          "started_at_ns": self.started_at_ns, "ended_at_ns": time.time_ns()}
             except ChildProcessError:
                 pass
-        self.stderr.close()
+        for stream in (self.process.stdin, self.process.stdout, self.stderr):
+            if stream:
+                stream.close()
+        return result
 
 
 def replay_opening_on_oracle(seats: dict[str, Seat], transcript: str) -> None:
@@ -438,7 +488,36 @@ def run(args: argparse.Namespace) -> dict:
     return report
 
 
-def verify(report: dict, binary: Path | None = None, artifact: Path | None = None) -> None:
+def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: dict) -> None:
+    validate_game(record, row, assignment)
+    require(record.get("search_count") == (sum(step["move"] != "pass" for step in record["steps"])
+            if kind in ("oracle", "cli-legacy") else len(record["steps"])), "search count mismatch")
+    resources, processes = record.get("resources"), record.get("seat_processes")
+    require(isinstance(processes, dict) and set(processes) == {"B", "W"}, "missing seat process data")
+    for seat in processes.values():
+        require(all(type(seat.get(key)) is int and seat[key] >= (1 if key == "peak_rss_kib" or
+                    (kind != "cli-persistent" and key in ("startup_ns", "shutdown_ns")) else 0)
+                    for key in ("startup_ns", "shutdown_ns", "user_cpu_ns", "system_cpu_ns", "peak_rss_kib")),
+                "missing process CPU/RSS/startup/shutdown")
+    expected = {"user_cpu_ns": sum(seat["user_cpu_ns"] for seat in processes.values()),
+                "system_cpu_ns": sum(seat["system_cpu_ns"] for seat in processes.values()),
+                "peak_rss_kib": max(seat["peak_rss_kib"] for seat in processes.values())}
+    require(resources == expected and resources["peak_rss_kib"] <= settings["max_rss_kib"],
+            "game resource totals mismatch")
+    if kind in ("cli", "cli-persistent"):
+        cache = {"probes": 0, "hits": 0, "stores": 0}
+        for step in record["steps"]:
+            sample = step.get("search")
+            validate_cli_diagnostic(step, sample, settings["midgame_depth"])
+            for key in cache:
+                cache[key] += sample[f"cache_{key}"]
+        require(record.get("cache") == cache, "cache totals mismatch")
+    else:
+        require(record.get("cache") is None and all("search" not in step for step in record["steps"]),
+                "legacy/oracle workload has unexpected diagnostics")
+
+
+def verify_v1(report: dict, binary: Path | None = None, artifact: Path | None = None) -> None:
     require(report.get("schema_version") == 1 and report.get("runner_version") == VERSION,
             "unsupported whole-game report")
     saved = report.get("report_digest")
@@ -470,32 +549,7 @@ def verify(report: dict, binary: Path | None = None, artifact: Path | None = Non
     for index, (row, assignment) in enumerate((row, assignment) for row in opening_rows()
                                               for assignment in (0, 1)):
         record = games[index]
-        validate_game(record, row, assignment)
-        require(record.get("search_count") == (sum(step["move"] != "pass" for step in record["steps"])
-                if kind in ("oracle", "cli-legacy") else len(record["steps"])), "search count mismatch")
-        resources, processes = record.get("resources"), record.get("seat_processes")
-        require(isinstance(processes, dict) and set(processes) == {"B", "W"}, "missing seat process data")
-        for seat in processes.values():
-            require(all(type(seat.get(key)) is int and seat[key] >= (1 if key == "peak_rss_kib" or
-                        (kind != "cli-persistent" and key in ("startup_ns", "shutdown_ns")) else 0)
-                        for key in ("startup_ns", "shutdown_ns", "user_cpu_ns", "system_cpu_ns", "peak_rss_kib")),
-                    "missing process CPU/RSS/startup/shutdown")
-        expected = {"user_cpu_ns": sum(seat["user_cpu_ns"] for seat in processes.values()),
-                    "system_cpu_ns": sum(seat["system_cpu_ns"] for seat in processes.values()),
-                    "peak_rss_kib": max(seat["peak_rss_kib"] for seat in processes.values())}
-        require(resources == expected and resources["peak_rss_kib"] <= settings["max_rss_kib"],
-                "game resource totals mismatch")
-        if kind in ("cli", "cli-persistent"):
-            cache = {"probes": 0, "hits": 0, "stores": 0}
-            for step in record["steps"]:
-                sample = step.get("search")
-                validate_cli_diagnostic(step, sample, settings["midgame_depth"])
-                for key in cache:
-                    cache[key] += sample[f"cache_{key}"]
-            require(record.get("cache") == cache, "cache totals mismatch")
-        else:
-            require(record.get("cache") is None and all("search" not in step for step in record["steps"]),
-                    "legacy/oracle workload has unexpected diagnostics")
+        verify_game(record, row, assignment, kind, settings)
     require(report.get("aggregate") == totals(games), "whole-game aggregate mismatch")
     if kind == "cli-persistent":
         process_totals = report.get("process_totals")
@@ -553,7 +607,7 @@ def comparison(baseline: dict, candidate: dict) -> dict:
     return result
 
 
-def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float) -> dict:
+def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float, progress_enabled: bool = True) -> dict:
     """Human-operated independent solve of each exact decision and selected move."""
     verify(report)
     require(report["kind"] in ("cli", "cli-persistent"), "oracle check requires a diagnostic CLI report")
@@ -591,9 +645,10 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float) -> di
         rows.append({"id": step["id"], "board": board, "side": side, "move": move,
                      "cli_score": step["search"]["score"], "oracle_score": root_score,
                      "selected_score": selected_score})
-        print(f"progress whole-game-oracle-check {index}/{len(exact_steps)} "
-              f"position={step['id']} elapsed={time.monotonic() - started:.1f}s",
-              file=sys.stderr, flush=True)
+        if progress_enabled:
+            print(f"progress whole-game-oracle-check {index}/{len(exact_steps)} "
+                  f"position={step['id']} elapsed={time.monotonic() - started:.1f}s",
+                  file=sys.stderr, flush=True)
     result = {"schema_version": 1, "runner_version": VERSION,
               "cli_report_digest": report["report_digest"],
               "oracle_binary_sha256": digest(binary),
@@ -630,11 +685,394 @@ def verify_oracle_evidence(report: dict, evidence: dict, binary: Path | None = N
                 "oracle evidence score or position mismatch")
 
 
+RESUMABLE_VERSION = "reversi-ai-whole-game-v2"
+
+
+def sealed(value: dict, key: str = "report_digest") -> dict:
+    value = {name: item for name, item in value.items() if name != key}
+    value[key] = hashlib.sha256(canonical(value)).hexdigest()
+    return value
+
+
+def read_canonical(path: Path) -> dict:
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    require(isinstance(value, dict) and raw == canonical(value), "noncanonical JSON")
+    return value
+
+
+def atomic_write(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=".unfinished-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(canonical(value))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+@contextlib.contextmanager
+def exclusive_lock(directory: Path):
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / ".lock").open("a+b") as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise BenchmarkError("measurement already locked") from exc
+        yield
+
+
+def progress(stage: str, condition: str, done: int, total: int, games: int,
+             status: str, started: float, every: int = 1) -> None:
+    if status in ("saved", "measuring") and games % every:
+        return
+    print(f"progress whole-game stage={stage} condition={condition} conditions={done}/{total} "
+          f"games={games}/8 status={status} elapsed_s={time.monotonic()-started:.3f}",
+          file=sys.stderr, flush=True)
+
+
+def verify(report: dict, binary: Path | None = None, artifact: Path | None = None) -> None:
+    if report.get("schema_version") == 1:
+        verify_v1(report, binary, artifact)
+        return
+    require(report.get("schema_version") == 2 and report.get("runner_version") == RESUMABLE_VERSION,
+            "unsupported whole-game report")
+    require(report.get("report_digest") == sealed(report)["report_digest"], "report digest mismatch")
+    require(report.get("resource_scopes") == {
+        "aggregate": "completed-game-checkpoints",
+        "segment_aggregate": "seat-process-segments" if report["kind"] == "cli-persistent" else None},
+        "resource scope mismatch")
+    require(report.get("segment_aggregate") == segment_totals(report.get("segments", [])),
+            "segment aggregate mismatch")
+    identity = report.get("identity")
+    require(isinstance(identity, dict) and report.get("condition_digest") == hashlib.sha256(canonical(identity)).hexdigest(),
+            "condition identity mismatch")
+    require(identity.get("cache_lifetime") == "one-game" and identity.get("reset_protocol") == (
+            "gtp-clear-board" if report["kind"] == "oracle" else "new_game-v1"),
+            "game cache/reset identity missing")
+    require(re.fullmatch(r"[0-9a-f]{64}", report.get("manifest_digest", "")) is not None,
+            "manifest identity missing")
+    require(identity["settings"] == report["settings"] and identity["binary"] == report["binary"]
+            and identity["artifact"] == report["artifact"] and identity["kind"] == report["kind"]
+            and identity["host"] == report["environment"]["host"]
+            and identity["openings_sha256"] == report["openings_sha256"], "report identity fields mismatch")
+    require(report["settings"].get("process_lifetime") == (
+        "segments-per-seat" if report["kind"] == "cli-persistent" else "one-game-per-seat"),
+        "resumable process lifetime mismatch")
+    require(report["kind"] == "cli-persistent" or report.get("segments") == [],
+            "unexpected one-game process segments")
+    # The v1 verifier remains the common independent legal-game/resource validator.
+    compatible = dict(report)
+    compatible["schema_version"] = 1
+    compatible["runner_version"] = VERSION
+    compatible["settings"] = dict(report["settings"])
+    if report["kind"] == "cli-persistent":
+        compatible["settings"]["process_lifetime"] = "all-games-per-seat"
+        segments = report.get("segments")
+        require(isinstance(segments, list) and segments, "persistent segments missing")
+        for segment in segments:
+            verify_segment_receipt(segment, report["settings"]["max_rss_kib"])
+        by_id = {segment["segment_id"]: segment for segment in segments}
+        require(len(by_id) == len(segments), "duplicate segment identity")
+        totals_by_side = {}
+        for side in ("B", "W"):
+            items = [segment["process_totals"][side] for segment in segments]
+            totals_by_side[side] = {key: (max(item[key] for item in items) if key == "peak_rss_kib"
+                                        else sum(item[key] for item in items))
+                                    for key in ("startup_ns", "shutdown_ns", "user_cpu_ns", "system_cpu_ns", "peak_rss_kib")}
+        totals_by_side["B"]["shutdown_ns"] = max(1, totals_by_side["B"]["shutdown_ns"])
+        totals_by_side["W"]["shutdown_ns"] = max(1, totals_by_side["W"]["shutdown_ns"])
+        compatible["process_totals"] = totals_by_side
+        for game_record in report["games"]:
+            require(game_record["segment_id"] in by_id, "game segment missing")
+            segment = by_id[game_record["segment_id"]]
+            require(segment.get("report_digest") == sealed(segment)["report_digest"], "segment digest mismatch")
+            require(segment.get("condition_digest") == report["condition_digest"]
+                    and segment.get("manifest_digest") == report["manifest_digest"], "segment measurement identity mismatch")
+            require(segment["session_id"] == game_record["session_id"], "segment session mismatch")
+            require(segment["rss_scope"] == "segment-cumulative", "RSS scope mismatch")
+            require(segment["status"] in ("closed", "process-lost"), "segment closure missing")
+            require(segment.get("resource_observation") == ("wait4" if segment["status"] == "closed" else "proc-checkpoint"),
+                    "segment resource observation mismatch")
+            for usage in segment["process_totals"].values():
+                require(type(usage.get("shutdown_ns")) is int and usage["shutdown_ns"] >= 0,
+                        "segment shutdown invalid")
+                require(usage["shutdown_ns"] > 0 if segment["status"] == "closed" else usage["shutdown_ns"] == 0,
+                        "unobserved shutdown claimed")
+            for side in ("B", "W"):
+                peak = game_record["seat_processes"][side]["peak_rss_kib"]
+                require(peak <= segment["process_totals"][side]["peak_rss_kib"], "segment peak RSS mismatch")
+            for side in ("B", "W"):
+                members = [item for item in report["games"] if item["segment_id"] == segment["segment_id"]]
+                for key in ("user_cpu_ns", "system_cpu_ns"):
+                    require(sum(item["seat_processes"][side][key] for item in members)
+                            <= segment["process_totals"][side][key], "segment CPU mismatch")
+    compatible = sealed(compatible)
+    verify_v1(compatible, binary, artifact)
+    for record in report["games"]:
+        verify_boundary(record, report["kind"])
+        require(type(record.get("started_at_ns")) is int and type(record.get("ended_at_ns")) is int
+                and 0 < record["started_at_ns"] <= record["ended_at_ns"], "game lifecycle timestamps missing")
+        require(record.get("condition_digest") == report["condition_digest"]
+                and record.get("manifest_digest") == report["manifest_digest"], "game measurement identity mismatch")
+        require(isinstance(record.get("session_id"), str) and isinstance(record.get("segment_id"), str),
+                "game lifecycle identity missing")
+
+
+def verify_boundary(record: dict, kind: str) -> None:
+    require(type(record.get("started_at_ns")) is int and type(record.get("ended_at_ns")) is int
+            and 0 < record["started_at_ns"] <= record["ended_at_ns"], "game lifecycle timestamps missing")
+    events = record.get("reset_events")
+    require(isinstance(events, dict) and set(events) == {"B", "W"}, "game reset events missing")
+    for event in events.values():
+        require(event.get("game_id") == f"{record['opening_id']}-seat{record['assignment']}"
+                and event.get("acknowledged") is True and type(event.get("elapsed_ns")) is int
+                and event["elapsed_ns"] >= 0
+                and event.get("protocol") == ("gtp-clear-board" if kind == "oracle" else "new_game-v1"),
+                "game reset acknowledgement mismatch")
+
+
+def segment_totals(segments: list[dict]) -> dict | None:
+    if not segments:
+        return None
+    usages = [usage for segment in segments for usage in segment["process_totals"].values()]
+    return {"user_cpu_ns": sum(usage["user_cpu_ns"] for usage in usages),
+            "system_cpu_ns": sum(usage["system_cpu_ns"] for usage in usages),
+            "peak_rss_kib": max(usage["peak_rss_kib"] for usage in usages),
+            "complete_process_observations": all(segment["status"] == "closed" for segment in segments)}
+
+
+def verify_segment_receipt(segment: dict, max_rss_kib: int) -> None:
+    require(segment.get("report_digest") == sealed(segment)["report_digest"], "segment digest mismatch")
+    require(segment.get("status") in ("live", "closed", "process-lost")
+            and segment.get("resource_observation") == ("wait4" if segment["status"] == "closed" else "proc-checkpoint")
+            and segment.get("rss_scope") == "segment-cumulative", "segment observation invalid")
+    require(isinstance(segment.get("segment_id"), str) and isinstance(segment.get("session_id"), str),
+            "segment lifecycle identity missing")
+    usages = segment.get("process_totals")
+    require(isinstance(usages, dict) and set(usages) == {"B", "W"}, "segment seats missing")
+    for usage in usages.values():
+        require(all(type(usage.get(key)) is int and usage[key] >= 0
+                    for key in ("startup_ns", "shutdown_ns", "user_cpu_ns", "system_cpu_ns", "peak_rss_kib"))
+                and usage["startup_ns"] > 0 and 0 < usage["peak_rss_kib"] <= max_rss_kib,
+                "segment resources invalid")
+        require(type(usage.get("started_at_ns")) is int and usage["started_at_ns"] > 0,
+                "segment startup timestamp missing")
+        if segment["status"] == "closed":
+            require(usage["shutdown_ns"] > 0 and type(usage.get("ended_at_ns")) is int
+                    and usage["ended_at_ns"] >= usage["started_at_ns"], "segment shutdown timestamp missing")
+        else:
+            require(usage["shutdown_ns"] == 0 and usage.get("ended_at_ns") is None,
+                    "unobserved shutdown claimed")
+
+
+def measurement_identity(args) -> dict:
+    require(args.kind in ("oracle", "cli", "cli-persistent"), "legacy CLI cannot measure reset conditions")
+    require(args.kind != "oracle" or args.cache_scope == "game", "Oracle has no CLI turn cache scope")
+    return {"kind": args.kind, "binary": {"path": str(args.binary.resolve()), "sha256": digest(args.binary)},
+            "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)} if args.artifact else None),
+            "openings_sha256": digest(OPENINGS), "source_revision": getattr(args, "source_revision", None),
+            "host": platform.node(), "cache_lifetime": "one-game",
+            "reset_protocol": "gtp-clear-board" if args.kind == "oracle" else "new_game-v1",
+            "settings": {"opening_depth": 12, "midgame_depth": args.midgame_depth, "endgame_depth": 12,
+                         "exact_empty": 16, "timeout_seconds": args.timeout_seconds,
+                         "exact_cache_scope": args.cache_scope, "max_decisions": args.max_decisions,
+                         "max_rss_kib": args.max_rss_kib,
+                         "process_lifetime": "segments-per-seat" if args.kind == "cli-persistent" else "one-game-per-seat"}}
+
+
+def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_dir: Path,
+                      conditions_done: int = 0, conditions_total: int = 1) -> dict:
+    started = time.monotonic()
+    every = getattr(args, "progress_every", 1)
+    require(type(every) is int and every > 0, "progress interval invalid")
+    require(sys.platform == "linux" and args.timeout_seconds > 1 and args.max_rss_kib > 0
+            and args.max_decisions >= 120, "invalid resource measurement settings")
+    identity = measurement_identity(args)
+    condition_digest = hashlib.sha256(canonical(identity)).hexdigest()
+    progress("inputs", condition_id, conditions_done, conditions_total, 0, "verified", started)
+    with exclusive_lock(checkpoint_dir):
+        if args.output.exists():
+            report = read_canonical(args.output)
+            verify(report, args.binary, args.artifact)
+            require(report.get("identity") == identity and report.get("manifest_digest") == manifest_digest
+                    and report.get("condition_id") == condition_id,
+                    "completed report manifest identity mismatch")
+            progress("verify", condition_id, conditions_done+1, conditions_total, 8, "skipped", started)
+            return report
+        rows = [(row, assignment) for row in opening_rows() for assignment in (0, 1)]
+        games = {}
+        known = {f"{row['id']}-seat{assignment}" for row, assignment in rows}
+        for path in checkpoint_dir.iterdir():
+            require(path.name == ".lock" or path.name.startswith(".unfinished-")
+                    or path.name.startswith("game-") and path.suffix == ".json"
+                    or path.name.startswith("segment-") and path.suffix == ".json",
+                    "unknown checkpoint file")
+        prior_segments = {}
+        for path in checkpoint_dir.glob("segment-*.json"):
+            segment = read_canonical(path)
+            verify_segment_receipt(segment, args.max_rss_kib)
+            require(segment.get("report_digest") == sealed(segment)["report_digest"]
+                    and segment.get("condition_digest") == condition_digest
+                    and segment.get("manifest_digest") == manifest_digest, "segment identity mismatch")
+            require(path.name == f"segment-{segment['segment_id']}.json"
+                    and segment["segment_id"] not in prior_segments, "duplicate segment identity")
+            require(segment.get("status") in ("live", "closed")
+                    and segment.get("resource_observation") == ("wait4" if segment["status"] == "closed" else "proc-checkpoint"),
+                    "segment observation invalid")
+            prior_segments[segment["segment_id"]] = segment
+        for path in checkpoint_dir.glob("game-*.json"):
+            item = read_canonical(path)
+            require(item.get("report_digest") == sealed(item)["report_digest"], "checkpoint digest mismatch")
+            key = item.get("game_id")
+            require(key in known and key not in games and path.name == f"game-{key}.json", "duplicate/unknown checkpoint game")
+            require(item.get("condition_digest") == condition_digest and item.get("manifest_digest") == manifest_digest,
+                    "checkpoint measurement identity mismatch")
+            record = item["game"]
+            row, assignment = next(pair for pair in rows if f"{pair[0]['id']}-seat{pair[1]}" == key)
+            verify_game(record, row, assignment, args.kind, identity["settings"])
+            verify_boundary(record, args.kind)
+            require(record.get("condition_digest") == condition_digest and record.get("manifest_digest") == manifest_digest
+                    and isinstance(record.get("session_id"), str) and isinstance(record.get("segment_id"), str),
+                    "checkpoint lifecycle identity mismatch")
+            if args.kind == "cli-persistent":
+                require(record["segment_id"] in prior_segments, "checkpoint segment missing")
+                segment = prior_segments[record["segment_id"]]
+                require(segment.get("session_id") == record["session_id"], "checkpoint segment session mismatch")
+                for side in ("B", "W"):
+                    require(record["seat_processes"][side]["peak_rss_kib"] <= segment["process_totals"][side]["peak_rss_kib"],
+                            "checkpoint segment peak mismatch")
+            games[key] = record
+        session_id = uuid.uuid4().hex
+        segment_id = uuid.uuid4().hex
+        segment_path = checkpoint_dir / f"segment-{segment_id}.json"
+        segments = []
+        seats = {}
+        old_handler = signal.getsignal(signal.SIGTERM)
+        def interrupted(signum, frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, interrupted)
+        try:
+            for row, assignment in rows:
+                key = f"{row['id']}-seat{assignment}"
+                if key in games:
+                    continue
+                progress("measure", condition_id, conditions_done, conditions_total, len(games), "measuring", started, every)
+                if not seats:
+                    for side in ("B", "W"):
+                        seats[side] = Seat("cli" if args.kind == "cli-persistent" else args.kind,
+                                           args.binary, args.artifact, args.midgame_depth, args.timeout_seconds,
+                                           side, getattr(args, "oracle_cwd", None), args.cache_scope)
+                game_started_at_ns = time.time_ns()
+                before = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
+                events = {side: seat.new_game(key) for side, seat in seats.items()}
+                record = game(row, assignment, seats, "cli" if args.kind == "cli-persistent" else args.kind,
+                              args.timeout_seconds, args.max_decisions)
+                if args.kind == "cli-persistent":
+                    after = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
+                    usages = {side: {"startup_ns": 0, "shutdown_ns": 0,
+                                     "user_cpu_ns": after[side]["user_cpu_ns"]-before[side]["user_cpu_ns"],
+                                     "system_cpu_ns": after[side]["system_cpu_ns"]-before[side]["system_cpu_ns"],
+                                     "peak_rss_kib": after[side]["peak_rss_kib"]} for side in ("B", "W")}
+                    for seat in seats.values():
+                        seat.collect_diagnostics()
+                else:
+                    usages = {side: seat.close() for side, seat in seats.items()}
+                attach_diagnostics(record, seats, args.kind)
+                record.update({"seat_processes": usages,
+                               "resources": {"user_cpu_ns": sum(item["user_cpu_ns"] for item in usages.values()),
+                                             "system_cpu_ns": sum(item["system_cpu_ns"] for item in usages.values()),
+                                             "peak_rss_kib": max(item["peak_rss_kib"] for item in usages.values())},
+                               "reset_events": events, "session_id": session_id, "segment_id": segment_id,
+                               "started_at_ns": game_started_at_ns, "ended_at_ns": time.time_ns(),
+                               "manifest_digest": manifest_digest, "condition_digest": condition_digest})
+                verify_game(record, row, assignment, args.kind, identity["settings"])
+                verify_boundary(record, args.kind)
+                if args.kind == "cli-persistent":
+                    # A live segment receipt survives SIGKILL; final wait4 reconciliation supersedes it.
+                    atomic_write(segment_path, sealed({"segment_id": segment_id, "session_id": session_id,
+                        "condition_digest": condition_digest, "manifest_digest": manifest_digest,
+                        "status": "live", "resource_observation": "proc-checkpoint", "rss_scope": "segment-cumulative",
+                        "process_totals": {side: {**after[side], "startup_ns": seats[side].startup_ns,
+                                                   "shutdown_ns": 0, "started_at_ns": seats[side].started_at_ns,
+                                                   "ended_at_ns": None} for side in ("B", "W")}}))
+                atomic_write(checkpoint_dir / f"game-{key}.json", sealed({"game_id": key,
+                    "condition_digest": condition_digest, "manifest_digest": manifest_digest, "game": record}))
+                games[key] = record
+                progress("measure", condition_id, conditions_done, conditions_total, len(games), "saved", started, every)
+                if args.kind != "cli-persistent":
+                    seats = {}
+            if seats:
+                process_totals = {side: seat.close() for side, seat in seats.items()}
+                atomic_write(segment_path, sealed({"segment_id": segment_id, "session_id": session_id,
+                    "condition_digest": condition_digest, "manifest_digest": manifest_digest,
+                    "status": "closed", "resource_observation": "wait4", "rss_scope": "segment-cumulative", "process_totals": process_totals}))
+                seats = {}
+        except BaseException as exc:
+            if seats and args.kind == "cli-persistent":
+                # On orderly interrupt, close idle or working seats with a bounded exit before aborting.
+                interrupted_usages = {side: seat.abort() for side, seat in seats.items()}
+                if segment_path.exists() and all(item is not None for item in interrupted_usages.values()):
+                    atomic_write(segment_path, sealed({"segment_id": segment_id, "session_id": session_id,
+                        "condition_digest": condition_digest, "manifest_digest": manifest_digest,
+                        "status": "closed", "shutdown_reason": "interrupted", "resource_observation": "wait4",
+                        "rss_scope": "segment-cumulative", "process_totals": interrupted_usages}))
+                seats = {}
+            progress("measure", condition_id, conditions_done, conditions_total, len(games),
+                     "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", started)
+            raise
+        finally:
+            signal.signal(signal.SIGTERM, old_handler)
+            for seat in seats.values():
+                seat.abort()
+        if args.kind == "cli-persistent":
+            for path in checkpoint_dir.glob("segment-*.json"):
+                segment = read_canonical(path)
+                require(segment.get("report_digest") == sealed(segment)["report_digest"]
+                        and segment.get("condition_digest") == condition_digest
+                        and segment.get("manifest_digest") == manifest_digest, "segment identity mismatch")
+                if any(record["segment_id"] == segment["segment_id"] for record in games.values()):
+                    segments.append(segment)
+            # A killed process has no wait4 receipt in the resumed parent. Keep checkpoint cumulative
+            # CPU/RSS and explicitly classify this segment as process-lost rather than claiming closure.
+            for segment in segments:
+                if segment["status"] == "live":
+                    segment["status"] = "process-lost"
+                    segment["resource_observation"] = "proc-checkpoint"
+                segment.update(sealed(segment))
+        progress("aggregate", condition_id, conditions_done, conditions_total, 8, "measuring", started)
+        ordered = [games[f"{row['id']}-seat{assignment}"] for row, assignment in rows]
+        report = sealed({"schema_version": 2, "runner_version": RESUMABLE_VERSION,
+            "kind": args.kind, "binary": identity["binary"], "artifact": identity["artifact"],
+            "openings_sha256": identity["openings_sha256"], "identity": identity,
+            "condition_id": condition_id, "condition_digest": condition_digest, "manifest_digest": manifest_digest,
+            "settings": identity["settings"], "environment": {"host": platform.node(), "cpu_model": platform.processor(),
+                "os": platform.platform(), "measurement": "linux-wait4"},
+            "oracle_profile": oracle.profile_metadata(profile(args.midgame_depth)) if args.kind == "oracle" else None,
+            "games": ordered, "aggregate": totals(ordered), "process_totals": None, "segments": segments,
+            "segment_aggregate": segment_totals(segments),
+            "resource_scopes": {"aggregate": "completed-game-checkpoints",
+                                "segment_aggregate": "seat-process-segments" if args.kind == "cli-persistent" else None}})
+        verify(report, args.binary, args.artifact)
+        atomic_write(args.output, report)
+        progress("verify", condition_id, conditions_done+1, conditions_total, 8, "verified", started)
+        return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     measure = sub.add_parser("measure")
-    measure.add_argument("--kind", choices=("oracle", "cli", "cli-persistent", "cli-legacy"), required=True)
+    measure.add_argument("--kind", choices=("oracle", "cli", "cli-persistent"), required=True)
     measure.add_argument("--binary", type=Path, required=True)
     measure.add_argument("--artifact", type=Path)
     measure.add_argument("--oracle-cwd", type=Path)
@@ -644,6 +1082,9 @@ def main(argv: list[str] | None = None) -> int:
     measure.add_argument("--max-rss-kib", type=int, required=True)
     measure.add_argument("--max-decisions", type=int, default=120)
     measure.add_argument("--output", type=Path, required=True)
+    measure.add_argument("--checkpoint-dir", type=Path)
+    measure.add_argument("--progress-every", type=int, default=1)
+    measure.add_argument("--source-revision")
     check = sub.add_parser("verify")
     check.add_argument("--report", type=Path, required=True)
     check.add_argument("--binary", type=Path)
@@ -663,10 +1104,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "measure":
-            require(not args.output.exists(), "output already exists")
-            result = run(args)
-            verify(result, args.binary, args.artifact)
-            args.output.write_bytes(canonical(result))
+            identity = measurement_identity(args)
+            measure_resumable(args, hashlib.sha256(canonical(identity)).hexdigest(),
+                              args.output.stem, args.checkpoint_dir or Path(str(args.output)+".checkpoints"))
         elif args.command == "verify":
             raw = args.report.read_bytes()
             decoded = json.loads(raw)

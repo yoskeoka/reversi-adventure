@@ -19,6 +19,7 @@ const TRAINED_EVALUATOR_VERSION: u64 = 1;
 const TRAINER_VERSION: &str = "reversi-ai-pattern-training-v1";
 const REINFORCEMENT_V1_VERSION: &str = "reversi-ai-pattern-reinforcement-v1";
 const REINFORCEMENT_VERSION: &str = "reversi-ai-pattern-reinforcement-v2";
+const REINFORCEMENT_V3_VERSION: &str = "reversi-ai-pattern-reinforcement-v3";
 
 #[derive(Debug)]
 pub enum TrainedEvaluatorError {
@@ -211,7 +212,10 @@ fn validate_provenance(value: &Value) -> Result<(), TrainedEvaluatorError> {
     let trainer_version = string(provenance, "trainer_version")?;
     if !matches!(
         trainer_version,
-        TRAINER_VERSION | REINFORCEMENT_V1_VERSION | REINFORCEMENT_VERSION
+        TRAINER_VERSION
+            | REINFORCEMENT_V1_VERSION
+            | REINFORCEMENT_VERSION
+            | REINFORCEMENT_V3_VERSION
     ) || u64_value(provenance, "seed").is_err()
     {
         return invalid("provenance is incomplete");
@@ -395,12 +399,18 @@ mod tests {
 
     #[test]
     fn accepts_bounded_reinforcement_provenance() {
-        let mut value = artifact(1);
-        value["provenance"]["trainer_version"] = json!(REINFORCEMENT_VERSION);
-        value["provenance"]["optimizer"]["name"] = json!("bounded_td_v1");
-        value.as_object_mut().unwrap().remove("artifact_digest");
-        let artifact_digest = digest(&value);
-        value["artifact_digest"] = json!(artifact_digest);
-        assert!(TrainedEvaluator::from_json_value(value).is_ok());
+        for version in [
+            REINFORCEMENT_V1_VERSION,
+            REINFORCEMENT_VERSION,
+            REINFORCEMENT_V3_VERSION,
+        ] {
+            let mut value = artifact(1);
+            value["provenance"]["trainer_version"] = json!(version);
+            value["provenance"]["optimizer"]["name"] = json!("bounded_td_v1");
+            value.as_object_mut().unwrap().remove("artifact_digest");
+            let artifact_digest = digest(&value);
+            value["artifact_digest"] = json!(artifact_digest);
+            assert!(TrainedEvaluator::from_json_value(value).is_ok());
+        }
     }
 }

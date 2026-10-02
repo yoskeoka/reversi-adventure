@@ -308,6 +308,12 @@ impl SearchEngine {
         self.exact_table.clear();
     }
 
+    /// Start a game with no proofs, heuristic entries, or prior search context.
+    pub fn new_game(&mut self) {
+        self.clear_tt();
+        self.context_fingerprint = None;
+    }
+
     /// Drop exact proofs between diagnostic turns without changing heuristic TT state.
     pub fn clear_exact_cache(&mut self) {
         self.exact_table.clear();
@@ -323,6 +329,60 @@ impl Default for SearchEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_game_matches_fresh_search_and_preserves_intragame_reuse() {
+        let evaluator = crate::eval::strategic::StrategicEvaluator::new();
+        let mut board = Board::new();
+        let mut side = Color::Black;
+        while board.empty_cells().count_ones() > 8 {
+            let legal = moves::legal_moves(&board, side);
+            if legal != 0 {
+                let square = legal.trailing_zeros() as u8;
+                let position = Position::new(square / 8, square % 8);
+                board = moves::make_move(&board, side, position);
+            }
+            side = side.opponent();
+            if !moves::has_legal_move(&board, side)
+                && !moves::has_legal_move(&board, side.opponent())
+            {
+                break;
+            }
+        }
+        let mut engine = SearchEngine::new();
+        for (position, color, config) in [
+            (
+                Board::new(),
+                Color::Black,
+                AiConfig::new(4, 4, 4).with_exact_solver_empty_squares(0),
+            ),
+            (
+                board,
+                side,
+                AiConfig::new(4, 4, 4).with_exact_solver_empty_squares(16),
+            ),
+        ] {
+            engine.new_game();
+            let first = engine.search(&position, color, &evaluator, &config);
+            let repeated = engine.search(&position, color, &evaluator, &config);
+            assert!(repeated.nodes_searched < first.nodes_searched);
+            if first.exact {
+                assert!(repeated.exact_cache.hits > 0);
+            }
+            engine.new_game();
+            assert!(engine.context_fingerprint.is_none());
+            let reset = engine.search(&position, color, &evaluator, &config);
+            let fresh = SearchEngine::new().search(&position, color, &evaluator, &config);
+            for result in [&reset, &fresh] {
+                assert_eq!(result.outcome, first.outcome);
+                assert_eq!(result.score, first.score);
+                assert_eq!(result.completed_depth, first.completed_depth);
+                assert_eq!(result.exact, first.exact);
+                assert_eq!(result.nodes_searched, first.nodes_searched);
+                assert_eq!(result.exact_cache, first.exact_cache);
+            }
+        }
+    }
+
     #[test]
     fn advisor_returns_complete_common_depth_or_error() {
         let board = Board::new();

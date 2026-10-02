@@ -8,6 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import reinforcement
 
 for line in sys.stdin:
+    if line.startswith("new_game\t"):
+        _, identifier = line.rstrip("\n").split("\t")
+        print(f"new_game\t{identifier}\tready", flush=True)
+        continue
     identifier, board, side = line.rstrip("\n").split("\t")
     legal = reinforcement.legal_moves(board, side)
     print(f"{identifier}\t{legal[0] if legal else 'pass'}", flush=True)

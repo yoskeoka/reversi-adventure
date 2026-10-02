@@ -258,6 +258,19 @@ fn main() -> Result<(), String> {
             continue;
         }
         let fields = line.split('\t').collect::<Vec<_>>();
+        if fields[0] == "new_game" {
+            if fields.len() != 2 || fields[1].is_empty() || fields[1].contains(['\r', '\n']) {
+                return Err(format!(
+                    "stdin line {} must be new_game<TAB>game_id",
+                    line_number + 1
+                ));
+            }
+            engine.new_game();
+            writeln!(stdout, "new_game\t{}\tready", fields[1])
+                .map_err(|error| format!("stdout: {error}"))?;
+            stdout.flush().map_err(|error| format!("stdout: {error}"))?;
+            continue;
+        }
         if fields.len() != 3
             || fields[0].is_empty()
             || fields[0].contains('\r')

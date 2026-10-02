@@ -4,6 +4,10 @@ import copy
 import hashlib
 import importlib.util
 import unittest
+import tempfile
+import contextlib
+import io
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -203,6 +207,274 @@ class WholeGameTests(unittest.TestCase):
             {key: value for key, value in broken.items() if key != "report_digest"})).hexdigest()
         with self.assertRaisesRegex(whole_game.BenchmarkError, "position count mismatch"):
             whole_game.verify_oracle_evidence(report, broken)
+
+
+class FakeSeat:
+    def __init__(self, kind, binary, artifact, depth, timeout, side, *args):
+        self.depth, self.side, self.kind = depth, side, kind
+        self.process = SimpleNamespace(pid=1)
+        self.diagnostics = {}
+        self.startup_ns = 1
+        self.started_at_ns = 1
+
+    def new_game(self, identifier):
+        return {"game_id": identifier, "acknowledged": True, "elapsed_ns": 1,
+                "protocol": "gtp-clear-board" if self.kind == "oracle" else "new_game-v1"}
+
+    def close(self):
+        return {"startup_ns": 1, "shutdown_ns": 1, "user_cpu_ns": 100, "system_cpu_ns": 0,
+                "peak_rss_kib": 100, "started_at_ns": 1, "ended_at_ns": 2}
+
+    def collect_diagnostics(self):
+        pass
+
+    def abort(self):
+        return self.close()
+
+
+class ResumableTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.binary = self.root / "cli"
+        self.artifact = self.root / "artifact"
+        self.binary.write_bytes(b"cli")
+        self.artifact.write_bytes(b"artifact")
+        self.args = SimpleNamespace(kind="cli", binary=self.binary, artifact=self.artifact,
+            midgame_depth=8, cache_scope="game", timeout_seconds=2, max_rss_kib=1000,
+            max_decisions=120, oracle_cwd=None, output=self.root / "report.json", progress_every=1,
+            source_revision="abc")
+        self.checkpoints = self.root / "checkpoints"
+        self.calls = []
+        self.interrupt_after = None
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fixture_game(self, row, assignment, seats, kind, timeout, max_decisions):
+        if self.interrupt_after is not None and len(self.calls) == self.interrupt_after:
+            raise KeyboardInterrupt
+        self.calls.append((row["id"], assignment))
+        record = synthetic_game(row, assignment, 8)
+        for step in record["steps"]:
+            seats[step["seat"]].diagnostics[step["id"]] = step["search"]
+            if kind == "oracle":
+                step.pop("search")
+        return record
+
+    def measure(self):
+        with patch.object(whole_game, "Seat", FakeSeat), patch.object(whole_game, "game", self.fixture_game), \
+             patch.object(whole_game, "proc_usage", return_value={"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 100}):
+            return whole_game.measure_resumable(self.args, "a" * 64, "fixture", self.checkpoints)
+
+    def test_two_saved_games_resume_only_six_and_skip_complete(self):
+        self.interrupt_after = 2
+        with self.assertRaises(KeyboardInterrupt):
+            self.measure()
+        self.assertEqual(len(list(self.checkpoints.glob("game-*.json"))), 2)
+        self.interrupt_after = None
+        report = self.measure()
+        self.assertEqual(len(self.calls), 8)
+        whole_game.verify(report)
+        self.assertEqual(len({item["session_id"] for item in report["games"]}), 2)
+        self.measure()
+        self.assertEqual(len(self.calls), 8)
+
+    def test_resumed_semantics_equal_continuous_and_missing_game_rejected(self):
+        continuous = self.measure()
+        self.checkpoints = self.root / "resumed"
+        self.args.output = self.root / "resumed.json"
+        self.calls = []
+        self.interrupt_after = 2
+        with self.assertRaises(KeyboardInterrupt):
+            self.measure()
+        self.interrupt_after = None
+        resumed = self.measure()
+        self.assertEqual(continuous["aggregate"], resumed["aggregate"])
+        for old, new in zip(continuous["games"], resumed["games"]):
+            self.assertEqual(old["steps"], new["steps"])
+            self.assertEqual(old["terminal_board"], new["terminal_board"])
+            self.assertEqual(old["cache"], new["cache"])
+        changed = copy.deepcopy(resumed)
+        changed["games"].pop()
+        changed = whole_game.sealed(changed)
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "incomplete eight-game"):
+            whole_game.verify(changed)
+
+    def test_corrupt_checkpoint_and_changed_identity_fail_before_launch(self):
+        self.interrupt_after = 1
+        with self.assertRaises(KeyboardInterrupt):
+            self.measure()
+        path = next(self.checkpoints.glob("game-*.json"))
+        original = path.read_bytes()
+        path.write_bytes(b"{}\n")
+        self.interrupt_after = None
+        with self.assertRaises(whole_game.BenchmarkError):
+            self.measure()
+        self.assertEqual(len(self.calls), 1)
+        path.write_bytes(original)
+        self.binary.write_bytes(b"changed")
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "identity"):
+            self.measure()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_atomic_save_crash_before_and_after_commit(self):
+        original = whole_game.atomic_write
+        for after in (False, True):
+            with self.subTest(after=after):
+                self.calls = []
+                self.checkpoints = self.root / str(after)
+                self.args.output = self.root / f"{after}.json"
+                def crashing(path, value):
+                    if after:
+                        original(path, value)
+                    raise KeyboardInterrupt
+                with patch.object(whole_game, "atomic_write", crashing):
+                    with self.assertRaises(KeyboardInterrupt):
+                        self.measure()
+                self.assertEqual(len(list(self.checkpoints.glob("game-*.json"))), int(after))
+                self.measure()
+                self.assertEqual(len(self.calls), 9-int(after))
+
+    def test_lock_duplicate_unknown_and_unfinished_temp(self):
+        with whole_game.exclusive_lock(self.checkpoints):
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "locked"):
+                self.measure()
+        (self.checkpoints / ".unfinished-fixture").write_bytes(b"partial")
+        self.interrupt_after = 1
+        with self.assertRaises(KeyboardInterrupt):
+            self.measure()
+        saved = next(self.checkpoints.glob("game-*.json"))
+        (self.checkpoints / "game-duplicate.json").write_bytes(saved.read_bytes())
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "duplicate/unknown"):
+            self.measure()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_real_seat_protocol_ack_and_missing_ack(self):
+        self.binary.write_text("#!/usr/bin/env python3\nimport sys\nfor line in sys.stdin:\n parts=line.strip().split('\\t')\n print('new_game\\t'+parts[1]+'\\tready', flush=True)\n")
+        self.binary.chmod(0o755)
+        seat = whole_game.Seat("cli", self.binary, self.artifact, 8, 2, "B")
+        try:
+            self.assertTrue(seat.new_game("game-1")["acknowledged"])
+            seat.close()
+        finally:
+            seat.abort()
+        self.binary.write_text("#!/usr/bin/env python3\nimport sys\nsys.stdin.readline()\nprint('bad',flush=True)\n")
+        seat = whole_game.Seat("cli", self.binary, self.artifact, 8, 2, "B")
+        try:
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "acknowledgement"):
+                seat.new_game("game-2")
+        finally:
+            seat.abort()
+
+    def test_reset_ack_rejected(self):
+        with patch.object(FakeSeat, "new_game", return_value={"game_id": "bad", "acknowledged": False}):
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "acknowledgement"):
+                self.measure()
+        self.assertFalse(self.args.output.exists())
+
+    def test_oracle_identity_records_actual_protocol(self):
+        self.args.kind = "oracle"
+        self.args.artifact = None
+        report = self.measure()
+        self.assertEqual(report["identity"]["reset_protocol"], "gtp-clear-board")
+        self.assertEqual(report["settings"]["process_lifetime"], "one-game-per-seat")
+        for record in report["games"]:
+            self.assertEqual({event["protocol"] for event in record["reset_events"].values()}, {"gtp-clear-board"})
+        whole_game.verify(report)
+
+    def test_legacy_measure_kind_rejected_by_argument_parser(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                whole_game.main(["measure", "--kind", "cli-legacy"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("invalid choice", stderr.getvalue())
+        self.assertIn("cli-legacy", stderr.getvalue())
+
+    def test_first_seat_aborted_when_second_constructor_fails(self):
+        original = FakeSeat.__init__
+        started = []
+        aborted = []
+        def construct(seat, kind, binary, artifact, depth, timeout, side, *args):
+            if side == "W":
+                raise whole_game.BenchmarkError("second seat failed")
+            original(seat, kind, binary, artifact, depth, timeout, side, *args)
+            started.append(side)
+        def abort(seat):
+            aborted.append(seat.side)
+            return seat.close()
+        with patch.object(FakeSeat, "__init__", construct), patch.object(FakeSeat, "abort", abort):
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "second seat failed"):
+                self.measure()
+        self.assertEqual(started, ["B"])
+        self.assertEqual(aborted, ["B"])
+        self.assertFalse(self.args.output.exists())
+
+    def test_terminal_segment_peak_above_cap_rejects_before_report(self):
+        self.args.kind = "cli-persistent"
+        original = FakeSeat.close
+        def final_usage(seat):
+            usage = original(seat)
+            usage["peak_rss_kib"] = self.args.max_rss_kib + 1
+            return usage
+        with patch.object(FakeSeat, "close", final_usage):
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "segment resources invalid"):
+                self.measure()
+        self.assertFalse(self.args.output.exists())
+
+    def test_terminal_segment_resources_visible_and_independently_verified(self):
+        self.args.kind = "cli-persistent"
+        original = FakeSeat.close
+        def final_usage(seat):
+            usage = original(seat)
+            usage["peak_rss_kib"] = 200
+            usage["user_cpu_ns"] = 123
+            return usage
+        with patch.object(FakeSeat, "close", final_usage):
+            report = self.measure()
+        self.assertEqual(report["aggregate"]["peak_rss_kib"], 100)
+        self.assertEqual(report["segment_aggregate"]["peak_rss_kib"], 200)
+        self.assertEqual(report["segment_aggregate"]["user_cpu_ns"], 246)
+        self.assertTrue(report["segment_aggregate"]["complete_process_observations"])
+        self.assertEqual(report["resource_scopes"]["aggregate"], "completed-game-checkpoints")
+        incorrect_lifetime = copy.deepcopy(report)
+        incorrect_lifetime["settings"]["process_lifetime"] = "all-games-per-seat"
+        incorrect_lifetime["identity"]["settings"]["process_lifetime"] = "all-games-per-seat"
+        incorrect_lifetime["condition_digest"] = hashlib.sha256(
+            whole_game.canonical(incorrect_lifetime["identity"])).hexdigest()
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "process lifetime mismatch"):
+            whole_game.verify(whole_game.sealed(incorrect_lifetime))
+        changed = copy.deepcopy(report)
+        changed["segment_aggregate"]["peak_rss_kib"] = 100
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "segment aggregate mismatch"):
+            whole_game.verify(whole_game.sealed(changed))
+
+    def test_persistent_saved_diagnostics_and_lost_segment_scope(self):
+        self.args.kind = "cli-persistent"
+        self.interrupt_after = 2
+        with self.assertRaises(KeyboardInterrupt):
+            self.measure()
+        saved = whole_game.read_canonical(next(self.checkpoints.glob("game-*.json")))
+        self.assertIn("search", saved["game"]["steps"][0])
+        receipt_path = next(self.checkpoints.glob("segment-*.json"))
+        receipt = whole_game.read_canonical(receipt_path)
+        self.assertEqual(receipt["resource_observation"], "wait4")
+        # Simulate loss of the parent before it could record wait4.
+        receipt["status"] = "live"
+        receipt["resource_observation"] = "proc-checkpoint"
+        for usage in receipt["process_totals"].values():
+            usage["shutdown_ns"] = 0
+            usage["ended_at_ns"] = None
+        whole_game.atomic_write(receipt_path, whole_game.sealed(receipt))
+        self.interrupt_after = None
+        report = self.measure()
+        self.assertEqual(report["settings"]["process_lifetime"], "segments-per-seat")
+        self.assertEqual({item["status"] for item in report["segments"]}, {"closed", "process-lost"})
+        lost = next(item for item in report["segments"] if item["status"] == "process-lost")
+        self.assertEqual(lost["resource_observation"], "proc-checkpoint")
+        self.assertEqual(lost["process_totals"]["B"]["shutdown_ns"], 0)
+        whole_game.verify(report)
 
 
 if __name__ == "__main__":
