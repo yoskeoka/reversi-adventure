@@ -48,7 +48,7 @@ select, input { width: 100%; background: #0c1c13; color: #f2f8f2; border: 1px so
 .activity { min-height: 26px; color: #b7dbc0; }
 .score { display: flex; justify-content: space-between; gap: 14px; border-block: 1px solid #3b6047; margin: 17px 0; }
 .score strong { font-size: 1.5rem; margin-left: 8px; }
-dl { display: grid; grid-template-columns: 80px 1fr; gap: 10px; font-size: .88rem; }
+dl { display: grid; grid-template-columns: 7em minmax(0, 1fr); gap: 10px; font-size: .88rem; }
 dt { color: #9ec3a5; }
 dd { margin: 0; overflow-wrap: anywhere; }
 .advisor-status { color: #eace7c; font-weight: 700; }

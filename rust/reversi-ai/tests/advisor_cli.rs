@@ -4,6 +4,36 @@ use std::process::{Command, Stdio};
 
 const INITIAL: &str = "...........................WB......BW...........................";
 
+#[test]
+fn maximum_match_and_advisor_settings_remain_budget_bounded() {
+    for mode in ["--decision-move-phases", "--advisor-analysis"] {
+        let (ok, output) = invoke(&[
+            mode,
+            "--opening-depth",
+            "12",
+            "--midgame-depth",
+            "16",
+            "--exact-solver-empty-squares",
+            "30",
+            "--node-limit",
+            "200",
+        ]);
+        assert!(ok, "{mode}");
+        if mode == "--advisor-analysis" {
+            let value: Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(value["exact"], false);
+            let depth = value["completed_depth"].as_u64().unwrap();
+            assert!((1..12).contains(&depth));
+            assert_eq!(value["scores"].as_array().unwrap().len(), 4);
+        } else {
+            assert!(matches!(
+                output.trim(),
+                "p1\tc4" | "p1\td3" | "p1\te6" | "p1\tf5"
+            ));
+        }
+    }
+}
+
 fn invoke(args: &[&str]) -> (bool, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_reversi-ai-cli"))
         .args(args)

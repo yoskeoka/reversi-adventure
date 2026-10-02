@@ -406,10 +406,64 @@ mod tests {
             vec![
                 "--decision-move-phases",
                 "--exact-solver-empty-squares",
-                "17",
+                "31",
             ],
         ] {
             assert!(args(&options).is_err(), "{options:?}");
+        }
+    }
+
+    #[test]
+    fn match_and_advisor_accept_identical_inclusive_limits() {
+        for mode in ["--decision-move-phases", "--advisor-analysis"] {
+            for (opening, midgame, exact, accepted) in [
+                ("1", "1", "0", true),
+                ("12", "16", "30", true),
+                ("0", "1", "0", false),
+                ("13", "1", "0", false),
+                ("1", "0", "0", false),
+                ("1", "17", "0", false),
+                ("1", "1", "31", false),
+            ] {
+                let parsed = args(&[
+                    mode,
+                    "--opening-depth",
+                    opening,
+                    "--midgame-depth",
+                    midgame,
+                    "--exact-solver-empty-squares",
+                    exact,
+                ]);
+                assert_eq!(
+                    parsed.is_ok(),
+                    accepted,
+                    "{mode}: {opening}/{midgame}/{exact}"
+                );
+                if accepted {
+                    let parsed = parsed.unwrap();
+                    let config = parsed
+                        .advisor_config
+                        .or(parsed.decision_move_config)
+                        .unwrap();
+                    assert_eq!(config.opening_depth, opening.parse::<u8>().unwrap());
+                    assert_eq!(config.midgame_depth, midgame.parse::<u8>().unwrap());
+                    for stones in [23, 24, 33, 34] {
+                        let search = config.search_config_for_stones(stones);
+                        assert_eq!(
+                            search.exact_solver_empty_squares,
+                            exact.parse::<u32>().unwrap()
+                        );
+                        assert_eq!(
+                            search.depth_for_phase(stones),
+                            if stones <= 23 {
+                                config.opening_depth
+                            } else {
+                                config.midgame_depth
+                            }
+                        );
+                    }
+                }
+            }
         }
     }
 

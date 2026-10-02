@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { LineProcess } from './processes.mjs';
 import { INITIAL_BOARD, advance, legalMoves, other, play } from './rules.mjs';
 
-export const LIMITS = { depth: [1, 12], exact: [0, 16] };
+export const LIMITS = { openingDepth: [1, 12], midgameDepth: [1, 16], exact: [0, 30] };
 const AI = new Set(['strategic', 'novice', 'trained-baseline']);
 const ADVISORS = new Set([...AI, 'oracle']);
 const IDS = new Set(['human', 'strategic', 'novice', 'trained-baseline', 'random', 'oracle']);
@@ -58,8 +58,8 @@ function validatedSearch(value, config) {
   const openingDepth = legacyDepth ? value.depth : value.openingDepth;
   const midgameDepth = legacyDepth ? value.depth : value.midgameDepth;
   if (!Number.isInteger(openingDepth) || openingDepth < 1 || openingDepth > 12 ||
-      !Number.isInteger(midgameDepth) || midgameDepth < 1 || midgameDepth > 12 ||
-      !Number.isInteger(value.exact) || value.exact < 0 || value.exact > 16) throw new Error('search settings are outside accepted range');
+      !Number.isInteger(midgameDepth) || midgameDepth < 1 || midgameDepth > 16 ||
+      !Number.isInteger(value.exact) || value.exact < 0 || value.exact > 30) throw new Error('search settings are outside accepted range');
   return { id: value.id, openingDepth, midgameDepth, exact: value.exact };
 }
 
@@ -94,9 +94,11 @@ export function oracleConfigId(advisor) {
 }
 
 export class Session {
-  constructor(request, config, send) {
+  constructor(request, config, send, now = () => performance.now()) {
     this.config = config;
     this.send = send;
+    this.now = now;
+    this.thinkingTimeMs = { B: 0, W: 0 };
     this.black = validatedSeat(request.black, config);
     this.white = validatedSeat(request.white, config);
     if (request.seed !== undefined && (!Number.isInteger(request.seed) || request.seed < 0 || request.seed > 0xffffffff)) throw new Error('seed must be an unsigned 32-bit integer');
@@ -115,6 +117,7 @@ export class Session {
       legal: this.turn ? legalMoves(this.board, this.turn) : [], black: this.black, white: this.white,
       counts: { B: [...this.board].filter(cell => cell === 'B').length, W: [...this.board].filter(cell => cell === 'W').length },
       lastMove: this.lastMove, lastPass: this.lastPass, thinking: this.thinking, result: this.result, error: this.error,
+      thinkingTimeMs: { ...this.thinkingTimeMs },
       identities: this.identities, seed: this.seed, advisor: this.advisor };
   }
   publish(withToken = false) { if (!this.closed) this.send({ type: 'snapshot', snapshot: this.snapshot(), ...(withToken ? { token: this.token } : {}) }); }
@@ -282,7 +285,10 @@ export class Session {
         const side = this.turn, revision = this.revision, board = this.board;
         const positionId = `${this.sessionId}:${revision}`;
         this.thinking = true; this.publish();
-        const move = await this.query(side, positionId);
+        const started = this.now();
+        let move;
+        try { move = await this.query(side, positionId); }
+        finally { this.thinkingTimeMs[side] += this.now() - started; }
         if (this.closed) return;
         if (revision !== this.revision || board !== this.board || side !== this.turn) throw new Error('late AI response');
         await this.apply(side, move);

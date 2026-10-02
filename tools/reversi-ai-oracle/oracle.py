@@ -100,9 +100,10 @@ class AnalysisConfig(NamedTuple):
 def analysis_config(opening_depth: int, midgame_depth: int,
                     exact_empty_squares: int) -> AnalysisConfig:
     if not (type(opening_depth) is int and 1 <= opening_depth <= 12
-            and type(midgame_depth) is int and 1 <= midgame_depth <= 12
-            and type(exact_empty_squares) is int and 0 <= exact_empty_squares <= 16):
-        die("advisor depths must be 1..12 and exact empty squares must be 0..16")
+            and type(midgame_depth) is int and 1 <= midgame_depth <= 16
+            and type(exact_empty_squares) is int and 0 <= exact_empty_squares <= 30):
+        die("advisor opening depth must be 1..12, midgame depth 1..16, "
+            "and exact empty squares 0..30")
     first_exact = 61 - exact_empty_squares if exact_empty_squares else 61
     ranges: list[DepthProbabilityRange] = []
     for start, end, depth in ((1, min(20, first_exact - 1), opening_depth),

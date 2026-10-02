@@ -346,9 +346,15 @@ Phase is determined by total stone count on the board:
 
 ### Decision move phase configuration and advisor analysis
 
-`DecisionMoveConfig` is a reusable AI search policy with opening and midgame
-depths (1–12) and an exact-solver threshold (0–16 empty squares). It has no
-endgame depth. The next move number is the number of occupied squares minus
+`DecisionMoveConfig` is a reusable AI search policy with opening depth 1–12,
+midgame depth 1–16, and an exact-solver threshold of 0–30 empty squares.
+Values must be integers in these inclusive ranges and are rejected rather than
+rounded. Legacy single-depth inputs map to equal depths and accept only 1–12.
+Match and Advisor configurations share these limits. Configuring depth 16 or
+a 30-empty threshold does not guarantee completion, speed, or strength;
+existing search budgets apply and interrupted exact search remains inexact.
+Ordinary `AiConfig` defaults and named strength, training, and benchmark
+profiles remain unchanged. It has no endgame depth. The next move number is the number of occupied squares minus
 three; passes do not advance it. Moves 1–20 use the opening depth and moves
 21–60 use the midgame depth. The decision position alone selects the depth
 and whether exact solving applies. Advisor analysis and CLI move search with
