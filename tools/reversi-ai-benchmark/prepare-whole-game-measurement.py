@@ -308,6 +308,10 @@ def execute(path: Path, verify_only: bool, progress_every: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    actual = sys.argv[1:] if argv is None else argv
+    if actual and actual[0] == "exact-threshold":
+        import exact_threshold
+        return exact_threshold.main(actual[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     prep = sub.add_parser("prepare")

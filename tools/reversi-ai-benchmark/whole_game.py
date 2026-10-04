@@ -68,8 +68,8 @@ def opening_rows(path: Path = OPENINGS) -> list[dict]:
     return rows
 
 
-def profile(midgame_depth: int) -> oracle.OracleProfile:
-    return oracle.profile_from_name(f"whole-game-depth-{midgame_depth}-exact-16")
+def profile(midgame_depth: int, exact_empty: int = 16) -> oracle.OracleProfile:
+    return oracle.profile_from_name(f"whole-game-depth-{midgame_depth}-exact-{exact_empty}")
 
 
 def proc_usage(pid: int) -> dict[str, int]:
@@ -104,21 +104,29 @@ def wait_measured(process: subprocess.Popen, timeout: float) -> dict[str, int]:
 class Seat:
     def __init__(self, kind: str, binary: Path, artifact: Path | None, depth: int,
                  timeout: float, label: str, cwd: Path | None = None,
-                 cache_scope: str = "game"):
+                 cache_scope: str = "game", exact_empty: int = 16,
+                 node_limit: int | None = None, max_rss_kib: int | None = None):
+        require(exact_empty in (16, 20, 24), "unsupported exact threshold")
+        require(node_limit is None or type(node_limit) is int and node_limit > 0, "invalid node limit")
+        require(max_rss_kib is None or type(max_rss_kib) is int and max_rss_kib > 0, "invalid RSS limit")
+        self.exact_empty, self.node_limit, self.max_rss_kib = exact_empty, node_limit, max_rss_kib
+        self.last_observation: dict | None = None
         self.kind, self.timeout, self.label, self.depth = kind, timeout, label, depth
         self.stderr = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
         started = time.monotonic_ns()
         self.started_at_ns = time.time_ns()
         if kind == "oracle":
-            self.gtp = oracle.GtpSession(binary, cwd or binary.parent, profile(depth), timeout)
+            self.gtp = oracle.GtpSession(binary, cwd or binary.parent, profile(depth, exact_empty), timeout)
             self.process = self.gtp.process
             self.buffer = bytearray()
         else:
             require(artifact is not None, "CLI requires a trained artifact")
             argv = [str(binary), "--evaluator", "trained", "--trained-artifact", str(artifact),
                     "--opening-depth", "12", "--midgame-depth", str(depth),
-                    "--endgame-depth", "12", "--exact-solver-empty-squares", "16",
+                    "--endgame-depth", "12", "--exact-solver-empty-squares", str(exact_empty),
                     "--time-limit-ms", str(int(timeout * 1000) - 1000)]
+            if node_limit is not None:
+                argv.extend(["--node-limit", str(node_limit)])
             if kind != "cli-legacy":
                 argv.extend(["--exact-cache-scope", cache_scope])
             self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -133,6 +141,13 @@ class Seat:
         require(self.gtp is not None, "GTP command sent to CLI")
         return self.gtp.command(command)
 
+    def observe_resources(self) -> dict:
+        usage = proc_usage(self.process.pid)
+        self.last_observation = usage
+        require(self.max_rss_kib is None or usage["peak_rss_kib"] <= self.max_rss_kib,
+                "peak RSS cap exceeded")
+        return usage
+
     def choose(self, identifier: str, board: str, side: str) -> tuple[str, int]:
         started = time.monotonic_ns()
         if self.gtp:
@@ -146,7 +161,12 @@ class Seat:
             while b"\n" not in self.buffer:
                 remaining = deadline - time.monotonic()
                 require(remaining > 0, f"CLI timed out at {identifier}")
-                ready, _, _ = select.select([self.process.stdout], [], [], remaining)
+                if self.max_rss_kib is not None:
+                    self.observe_resources()
+                ready, _, _ = select.select([self.process.stdout], [], [], min(remaining, 0.05)
+                                            if self.max_rss_kib is not None else remaining)
+                if not ready and self.max_rss_kib is not None:
+                    continue
                 require(bool(ready), f"CLI timed out at {identifier}")
                 chunk = os.read(self.process.stdout.fileno(), 4096)
                 require(bool(chunk), f"CLI exited at {identifier}")
@@ -157,6 +177,8 @@ class Seat:
             answer = line.decode("ascii").split("\t")
             require(len(answer) == 2 and answer[0] == identifier, "CLI response id mismatch")
             move = answer[1]
+        if self.max_rss_kib is not None:
+            self.observe_resources()
         return move, time.monotonic_ns() - started
 
     def close(self) -> dict:
@@ -265,10 +287,13 @@ def game(row: dict, assignment: int, seats: dict[str, Seat], kind: str,
             break
         seat_label = side if assignment == 0 else oracle.other(side)
         identifier = f"{row['id']}-seat{assignment}-turn{turn}"
+        active_seat = seats[seat_label]
+        before_usage = active_seat.observe_resources() if hasattr(active_seat, "observe_resources") else None
         if legal or kind != "oracle":
             move, elapsed = seats[seat_label].choose(identifier, board, side)
         else:
             move, elapsed = "pass", 0
+        after_usage = active_seat.observe_resources() if before_usage is not None else None
         require(move in legal if legal else move == "pass", f"illegal move at {identifier}")
         if kind == "oracle":
             if move == "pass":
@@ -279,6 +304,13 @@ def game(row: dict, assignment: int, seats: dict[str, Seat], kind: str,
                 opponent.gtp_command(f"play {'black' if side == 'B' else 'white'} {move}")
         steps.append({"id": identifier, "board": board, "side": side, "seat": seat_label,
                       "move": move, "decision_elapsed_ns": elapsed})
+        if before_usage is not None:
+            steps[-1].update({"legal_move_count": len(legal),
+                             "phase": decision_phase(board, getattr(active_seat, "exact_empty", 16)),
+                             "resource_observations": {"before": before_usage, "after": after_usage},
+                             "resources": {"user_cpu_ns": after_usage["user_cpu_ns"] - before_usage["user_cpu_ns"],
+                                           "system_cpu_ns": after_usage["system_cpu_ns"] - before_usage["system_cpu_ns"],
+                                           "peak_rss_kib": after_usage["peak_rss_kib"]}})
         if move != "pass":
             board = oracle.apply_move(board, side, move)
         side = oracle.other(side)
@@ -334,7 +366,15 @@ def totals(games: list[dict]) -> dict:
             "cache_stores": sum(game["cache"]["stores"] for game in games if game["cache"])}
 
 
-def validate_cli_diagnostic(step: dict, sample: dict, midgame_depth: int) -> None:
+def decision_phase(board: str, exact_empty: int = 16) -> str:
+    occupied = 64 - board.count(".")
+    return ("exact" if 64 - occupied <= exact_empty else "opening" if occupied <= 20
+            else "endgame" if occupied >= 45 else "midgame")
+
+
+def validate_cli_diagnostic(step: dict, sample: dict, midgame_depth: int,
+                            exact_empty: int = 16) -> None:
+    require(exact_empty in (16, 20, 24), "unsupported exact threshold")
     require(isinstance(sample, dict) and type(sample.get("exact")) is bool
             and sample.get("outcome") in ("move", "pass", "game_over")
             and all(type(sample.get(key)) is int and sample[key] >= 0
@@ -342,7 +382,7 @@ def validate_cli_diagnostic(step: dict, sample: dict, midgame_depth: int) -> Non
                                 "cache_probes", "cache_hits", "cache_stores")),
             "CLI search diagnostic missing")
     occupied = 64 - step["board"].count(".")
-    exact = occupied >= 48
+    exact = 64 - occupied <= exact_empty
     forced_pass = step["move"] == "pass"
     if exact:
         expected_depth = 64 - occupied
@@ -368,7 +408,8 @@ def attach_diagnostics(record: dict, seats: dict[str, Seat], kind: str) -> None:
         diagnostic = seats[step["seat"]].diagnostics.get(step["id"])
         require(diagnostic is not None, f"missing CLI diagnostic for {step['id']}")
         try:
-            validate_cli_diagnostic(step, diagnostic, seats[step["seat"]].depth)
+            validate_cli_diagnostic(step, diagnostic, seats[step["seat"]].depth,
+                                    getattr(seats[step["seat"]], "exact_empty", 16))
         except BenchmarkError as exc:
             raise BenchmarkError(f"{exc} at {step['id']}") from exc
         step["search"] = diagnostic
@@ -504,11 +545,37 @@ def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: d
                 "peak_rss_kib": max(seat["peak_rss_kib"] for seat in processes.values())}
     require(resources == expected and resources["peak_rss_kib"] <= settings["max_rss_kib"],
             "game resource totals mismatch")
+    for step in record["steps"]:
+        if any(key in step for key in ("legal_move_count", "phase", "resources")):
+            require(step.get("legal_move_count") == len(oracle.legal_moves(step["board"], step["side"]))
+                    and step.get("phase") == decision_phase(step["board"], settings["exact_empty"]),
+                    "decision phase or legal move count mismatch")
+            usage = step.get("resources")
+            require(isinstance(usage, dict) and set(usage) == {"user_cpu_ns", "system_cpu_ns", "peak_rss_kib"}
+                    and all(type(usage[key]) is int and usage[key] >= (1 if key == "peak_rss_kib" else 0)
+                            for key in usage)
+                    and usage["peak_rss_kib"] <= settings["max_rss_kib"]
+                    and usage["peak_rss_kib"] <= processes[step["seat"]]["peak_rss_kib"],
+                    "decision resources invalid")
+            if "resource_observations" in step:
+                observations = step["resource_observations"]
+                require(isinstance(observations, dict) and set(observations) == {"before", "after"},
+                        "decision observations missing")
+                for raw in observations.values():
+                    require(isinstance(raw, dict) and set(raw) == set(usage)
+                            and all(type(raw[key]) is int and raw[key] >= (1 if key == "peak_rss_kib" else 0)
+                                    for key in raw), "decision observations invalid")
+                before, after = observations["before"], observations["after"]
+                require(all(after[key] >= before[key] for key in usage)
+                        and usage == {"user_cpu_ns": after["user_cpu_ns"] - before["user_cpu_ns"],
+                                      "system_cpu_ns": after["system_cpu_ns"] - before["system_cpu_ns"],
+                                      "peak_rss_kib": after["peak_rss_kib"]},
+                        "decision resources do not match observations")
     if kind in ("cli", "cli-persistent"):
         cache = {"probes": 0, "hits": 0, "stores": 0}
         for step in record["steps"]:
             sample = step.get("search")
-            validate_cli_diagnostic(step, sample, settings["midgame_depth"])
+            validate_cli_diagnostic(step, sample, settings["midgame_depth"], settings["exact_empty"])
             for key in cache:
                 cache[key] += sample[f"cache_{key}"]
         require(record.get("cache") == cache, "cache totals mismatch")
@@ -518,6 +585,11 @@ def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: d
 
 
 def verify_v1(report: dict, binary: Path | None = None, artifact: Path | None = None) -> None:
+    _verify_complete(report, binary, artifact)
+
+
+def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | None = None,
+                     allowed_exact: tuple[int, ...] = (16,)) -> None:
     require(report.get("schema_version") == 1 and report.get("runner_version") == VERSION,
             "unsupported whole-game report")
     saved = report.get("report_digest")
@@ -536,11 +608,12 @@ def verify_v1(report: dict, binary: Path | None = None, artifact: Path | None = 
     settings = report.get("settings")
     require(isinstance(settings, dict) and settings.get("opening_depth") == 12
             and settings.get("midgame_depth") in (8, 12) and settings.get("endgame_depth") == 12
-            and settings.get("exact_empty") == 16
+            and settings.get("exact_empty") in allowed_exact
+            and settings.get("node_limit") is None
             and settings.get("exact_cache_scope") in ("game", "turn")
             and settings.get("process_lifetime") == ("all-games-per-seat" if kind == "cli-persistent"
                                                      else "one-game-per-seat"), "search settings mismatch")
-    expected_oracle_profile = (oracle.profile_metadata(profile(settings["midgame_depth"]))
+    expected_oracle_profile = (oracle.profile_metadata(profile(settings["midgame_depth"], settings["exact_empty"]))
                                if kind == "oracle" else None)
     require(report.get("oracle_profile") == expected_oracle_profile, "oracle profile mismatch")
     require(report.get("environment", {}).get("measurement") == "linux-wait4", "missing CPU/RSS method")
@@ -612,7 +685,7 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float, progr
     verify(report)
     require(report["kind"] in ("cli", "cli-persistent"), "oracle check requires a diagnostic CLI report")
     require(binary.is_file() and timeout > 0, "oracle binary or timeout invalid")
-    selected_profile = profile(report["settings"]["midgame_depth"])
+    selected_profile = profile(report["settings"]["midgame_depth"], report["settings"]["exact_empty"])
     cached: dict[tuple[str, str, str], tuple[int, int]] = {}
     rows = []
     started = time.monotonic()
@@ -672,7 +745,7 @@ def verify_oracle_evidence(report: dict, evidence: dict, binary: Path | None = N
     require(isinstance(evidence.get("oracle_binary_sha256"), str)
             and re.fullmatch(r"[0-9a-f]{64}", evidence["oracle_binary_sha256"]) is not None,
             "oracle binary digest missing")
-    require(evidence.get("oracle_profile") == oracle.profile_metadata(profile(report["settings"]["midgame_depth"])),
+    require(evidence.get("oracle_profile") == oracle.profile_metadata(profile(report["settings"]["midgame_depth"], report["settings"]["exact_empty"])),
             "oracle evidence profile mismatch")
     steps = [step for game in report["games"] for step in game["steps"] if step.get("search", {}).get("exact")]
     rows = evidence.get("positions")
@@ -817,7 +890,7 @@ def verify(report: dict, binary: Path | None = None, artifact: Path | None = Non
                     require(sum(item["seat_processes"][side][key] for item in members)
                             <= segment["process_totals"][side][key], "segment CPU mismatch")
     compatible = sealed(compatible)
-    verify_v1(compatible, binary, artifact)
+    _verify_complete(compatible, binary, artifact, (16, 20, 24))
     for record in report["games"]:
         verify_boundary(record, report["kind"])
         require(type(record.get("started_at_ns")) is int and type(record.get("ended_at_ns")) is int
@@ -877,6 +950,8 @@ def verify_segment_receipt(segment: dict, max_rss_kib: int) -> None:
 
 def measurement_identity(args) -> dict:
     require(args.kind in ("oracle", "cli", "cli-persistent"), "legacy CLI cannot measure reset conditions")
+    require(getattr(args, "exact_empty", 16) in (16, 20, 24), "unsupported exact threshold")
+    require(getattr(args, "node_limit", None) is None, "whole-game measurement must not use a node cap")
     require(args.kind != "oracle" or args.cache_scope == "game", "Oracle has no CLI turn cache scope")
     return {"kind": args.kind, "binary": {"path": str(args.binary.resolve()), "sha256": digest(args.binary)},
             "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)} if args.artifact else None),
@@ -884,7 +959,7 @@ def measurement_identity(args) -> dict:
             "host": platform.node(), "cache_lifetime": "one-game",
             "reset_protocol": "gtp-clear-board" if args.kind == "oracle" else "new_game-v1",
             "settings": {"opening_depth": 12, "midgame_depth": args.midgame_depth, "endgame_depth": 12,
-                         "exact_empty": 16, "timeout_seconds": args.timeout_seconds,
+                         "exact_empty": getattr(args, "exact_empty", 16), "timeout_seconds": args.timeout_seconds,
                          "exact_cache_scope": args.cache_scope, "max_decisions": args.max_decisions,
                          "max_rss_kib": args.max_rss_kib,
                          "process_lifetime": "segments-per-seat" if args.kind == "cli-persistent" else "one-game-per-seat"}}
@@ -971,7 +1046,9 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                     for side in ("B", "W"):
                         seats[side] = Seat("cli" if args.kind == "cli-persistent" else args.kind,
                                            args.binary, args.artifact, args.midgame_depth, args.timeout_seconds,
-                                           side, getattr(args, "oracle_cwd", None), args.cache_scope)
+                                           side, getattr(args, "oracle_cwd", None), args.cache_scope,
+                                           getattr(args, "exact_empty", 16), getattr(args, "node_limit", None),
+                                           args.max_rss_kib)
                 game_started_at_ns = time.time_ns()
                 before = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
                 events = {side: seat.new_game(key) for side, seat in seats.items()}
@@ -1057,7 +1134,7 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
             "condition_id": condition_id, "condition_digest": condition_digest, "manifest_digest": manifest_digest,
             "settings": identity["settings"], "environment": {"host": platform.node(), "cpu_model": platform.processor(),
                 "os": platform.platform(), "measurement": "linux-wait4"},
-            "oracle_profile": oracle.profile_metadata(profile(args.midgame_depth)) if args.kind == "oracle" else None,
+            "oracle_profile": oracle.profile_metadata(profile(args.midgame_depth, getattr(args, "exact_empty", 16))) if args.kind == "oracle" else None,
             "games": ordered, "aggregate": totals(ordered), "process_totals": None, "segments": segments,
             "segment_aggregate": segment_totals(segments),
             "resource_scopes": {"aggregate": "completed-game-checkpoints",
@@ -1077,6 +1154,7 @@ def main(argv: list[str] | None = None) -> int:
     measure.add_argument("--artifact", type=Path)
     measure.add_argument("--oracle-cwd", type=Path)
     measure.add_argument("--midgame-depth", type=int, choices=(8, 12), required=True)
+    measure.add_argument("--exact-empty", type=int, choices=(16, 20, 24), default=16)
     measure.add_argument("--cache-scope", choices=("game", "turn"), default="game")
     measure.add_argument("--timeout-seconds", type=float, default=310)
     measure.add_argument("--max-rss-kib", type=int, required=True)

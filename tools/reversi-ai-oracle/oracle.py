@@ -207,6 +207,30 @@ WHOLE_GAME_DEPTH_8_EXACT_16 = OracleProfile(
     candidate_depth=12,
     candidate_exact_solver_empty_squares=16,
 )
+
+
+def whole_game_threshold_profile(midgame_depth: int, exact_empty_squares: int) -> OracleProfile:
+    # Egaroucid's decision move is occupied discs minus three, so the first
+    # exact move is 61 minus the empty-square threshold. Keep the existing
+    # whole-game opening depth of 12 and solve every exact position completely.
+    first_exact = 61 - exact_empty_squares
+    ranges = ((DepthProbabilityRange(1, first_exact - 1, 12, "100"),)
+              if midgame_depth == 12 else
+              (DepthProbabilityRange(1, 17, 12, "100"),
+               DepthProbabilityRange(18, first_exact - 1, 8, "100")))
+    return OracleProfile(
+        name=f"whole-game-depth-{midgame_depth}-exact-{exact_empty_squares}",
+        hash_level=25,
+        depth_ranges=(*ranges, DepthProbabilityRange(first_exact, 60, exact_empty_squares, "100")),
+        candidate_depth=12,
+        candidate_exact_solver_empty_squares=exact_empty_squares,
+    )
+
+
+WHOLE_GAME_DEPTH_12_EXACT_20 = whole_game_threshold_profile(12, 20)
+WHOLE_GAME_DEPTH_8_EXACT_20 = whole_game_threshold_profile(8, 20)
+WHOLE_GAME_DEPTH_12_EXACT_24 = whole_game_threshold_profile(12, 24)
+WHOLE_GAME_DEPTH_8_EXACT_24 = whole_game_threshold_profile(8, 24)
 PROFILES = {
     profile.name: profile
     for profile in (
@@ -216,6 +240,10 @@ PROFILES = {
         SEARCH_PERFORMANCE_REFERENCE_V1,
         WHOLE_GAME_DEPTH_12_EXACT_16,
         WHOLE_GAME_DEPTH_8_EXACT_16,
+        WHOLE_GAME_DEPTH_12_EXACT_20,
+        WHOLE_GAME_DEPTH_8_EXACT_20,
+        WHOLE_GAME_DEPTH_12_EXACT_24,
+        WHOLE_GAME_DEPTH_8_EXACT_24,
     )
 }
 
@@ -1149,6 +1177,7 @@ def run_solve(
     timeout: float,
     *,
     child_query: bool,
+    runner=None,
 ) -> list[dict[str, object]]:
     validate_profile(profile)
     validate_budget(1, timeout)
@@ -1163,7 +1192,7 @@ def run_solve(
             # display; only the alphabet and side perspective need conversion.
             problem.write(to_egaroucid_problem(board, side) + "\n")
     try:
-        result = run_external(
+        result = (runner or run_external)(
             oracle_argv(binary, profile, solve_path=problem_path, child_query=child_query),
             cwd=cwd,
             timeout=timeout,

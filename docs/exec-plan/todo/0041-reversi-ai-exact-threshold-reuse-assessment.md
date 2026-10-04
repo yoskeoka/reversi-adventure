@@ -39,6 +39,10 @@ wall/CPU/RSS、全局時間へどの程度効くかを測る。中盤深度8/12�
    source/binary/artifact/openings/host/cache容量/RSS/timeoutを固定し、閾値以外の違いを記録する。
 2. 既存game-8棋譜から空き24の合法decision rootを黒2/白2の計4位置、
    opening/assignment/turn順で最初の異なるboard+sideを選んでfreezeする。
+   白rootが1種類だけの場合は、人間が2026-10-04に承認した補完として、
+   rotate-180→main-diagonal→anti-diagonalの順で最初の異なる対称盤面を追加する。
+   標準初期盤面・色を保持する変換を使い、開局と全履歴のboard/moveを同じ変換で固定して
+   合法replayする。元rootのidentityと変換名を記録し、独立した棋譜とは扱わない。
    各rootから空き12までの同じ局内windowを測り、閾値16でも後続rootの再利用を観測する。
    空き12以下または合法な終局でwindow完了とする。passは空き数を減らさず履歴に残す。
    pilotのheuristic設定は12/8/12に固定する。pilot成功は実行可能性の事前確認であり、
@@ -87,3 +91,20 @@ wall/CPU/RSS、全局時間へどの程度効くかを測る。中盤深度8/12�
 ## Addresses
 
 - N/A
+
+## 実行状況（2026-10-04）
+
+実験spec、16/20/24の診断・Oracle profile、局/window/Oracle位置のatomic保存・検証・失敗skip、
+pilot gate、全局の意味比較・phase/資源集計を実装している。
+`exact_threshold.py` はwindowと全局の共通unit lifecycleを持ち、既存prepareから
+`exact-threshold` subcommandで呼び出す。通常の0039 manifest形式は維持する。
+
+入力監査でブラックボックス契約2の前提不足が見つかった。
+既存 `results/game-8.json` の空き24のlegal rootは重複排除後に黒3・白1で、
+白2は取得できない。opening-4のassignment 0/1の白盤面は同一。
+0039の `resumable-0039-f523d80/game-8.json` も同様だった。
+2026-10-04、人間が白の対称変換追加と変換履歴の保存を承認した。
+元の白rootと、固定順で選ぶ対称variantを別windowにし、独立棋譜の数とは区別する。
+
+監査digestと実行手順は [評価記録](../../references/reversi-ai-exact-threshold-reuse-assessment.md) に残す。
+人間pilot/full/Oracleの実測と0040へ渡す候補判断は未完了であり、この計画は削除しない。

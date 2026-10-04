@@ -776,6 +776,70 @@ games, and the manifest fixes the condition total. Stages without games use
 ordinary progress only; failures, interruptions and completion always flush.
 Long-running production measurements remain human-operated.
 
+### Experimental exact-threshold assessment
+
+Thresholds 16, 20 and 24 are separate experimental workloads. Production
+reinforcement keeps its 16-empty contract. Each window or game starts both
+seats with acknowledged empty heuristic and exact tables. Only subsequent
+roots within that window/game may reuse proofs; turn scope clears the exact
+table at each decision with otherwise identical settings.
+
+Preparation freezes four distinct legal 24-empty roots from a verified game-8
+report, selecting the first two black and first two white roots in
+opening/assignment/turn order. If only one distinct white root exists, preparation
+adds its first distinct transform in the fixed order rotate-180, main-diagonal
+reflection, anti-diagonal reflection. These transforms preserve the standard
+initial board and colors. The transformed opening, every history board and move,
+source root identity and transform name are retained and legally replayed.
+The added window is a correlated symmetry variant, not an independent game.
+No synthetic color or side change supplies the missing root.
+It pins their legal source histories, source and
+harness revisions, binaries, artifact, openings, host, cache capacity, timeout,
+RSS and output identities. It generates a human-operated script without
+starting measurement. Pilot depth is 12/8/12, with a 10,000,000-node cap,
+310-second decision timeout and 1,572,864-KiB seat peak RSS cap. All six
+threshold/scope conditions use these same roots: 24 windows total. Windows
+end at 12 or fewer empties or legal game-over; passes remain explicit and do
+not decrease empties. Starting caches are empty even though the source game
+has earlier history. Pilot timing is never reported as full-depth speed.
+
+Each decision retains legal-move count, phase, move, root score, depth,
+exactness, outcome, nodes, cache counters, wall/CPU and RSS observations.
+An unfinished exact attempt is a failed unit, never an exact result.
+Failure evidence retains partial history and observed resources; verified
+failed units are skipped without automatic retries. Interrupted units can be
+rerun while durably completed units are independently verified and skipped.
+Unknown, corrupt or mismatched existing evidence fails closed. Unit publication
+uses file and directory fsync plus atomic rename under an exclusive lock.
+
+Turn/game comparisons require identical positions, seat histories, moves,
+scores, depths, exactness and outcomes within one threshold. Independent
+bookless, single-thread Oracle profiles completely solve each exact root and
+its selected continuation; incomplete or timed-out solves remain failed
+evidence. Oracle positions are durably saved individually and source reports
+fix their known total. Only four completed windows in both scopes with matching
+semantics and complete Oracle evidence admit a threshold to full measurement.
+The gate freezes a full-stage manifest: admitted thresholds times 32 games,
+at most 96, covering depths 8/12, scopes turn/game and eight games each. Full
+search has no node cap and retains the same timeout/RSS limits. New binary
+threshold-16 controls are required; legacy reports cannot satisfy their identity.
+Only all eight verified games permit averages or improvement ratios. Failure
+of one condition remains visible and forbids partial-success averages.
+
+Reports distinguish first exact roots and subsequent roots, exact node/time
+changes, whole-game fractions, phase depths and legal-move counts. Per-decision
+CPU samples describe process-counter differences and process peak RSS, while
+final wait4 samples reconcile whole-unit resources. Small one-run improvements
+carry no significance claim. Adoption remains a human decision in plan 0040;
+raising production thresholds needs a separate specification/manifest update.
+
+Progress is flushed on stderr as
+`progress exact-threshold stage=<pilot|full|oracle|verify> threshold=<16|20|24> scope=<turn|game> unit=<window|game|position> done=<n> total=<n> status=<running|saved|skipped|interrupted|verified|failed> elapsed_s=<value>`.
+Known totals are frozen by stage manifests. The default emits every completed
+unit; `--progress-every N` limits ordinary updates while failure, interruption
+and stage completion always flush. Long measurements are started by a human;
+agents do not start, wait for or monitor them.
+
 ### SearchEngine
 
 Wrapper around `Negascout` managing the transposition table and Zobrist keys.

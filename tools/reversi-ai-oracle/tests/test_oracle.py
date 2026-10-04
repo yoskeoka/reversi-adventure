@@ -205,6 +205,65 @@ class OracleHarnessTests(unittest.TestCase):
         self.assertEqual(oracle.profile_depth_at(oracle.STRONG_ENGINE_HCAP_V1, 44), 8)
         self.assertEqual(oracle.profile_depth_at(oracle.STRONG_ENGINE_HCAP_V1, 45), 12)
 
+    def test_whole_game_exact_threshold_profiles_and_child_boundaries(self):
+        identities = set()
+        for depth in (8, 12):
+            for threshold in (16, 20, 24):
+                with self.subTest(depth=depth, threshold=threshold):
+                    profile = oracle.profile_from_name(f"whole-game-depth-{depth}-exact-{threshold}")
+                    metadata = oracle.profile_metadata(profile)
+                    identities.add(json.dumps(metadata, sort_keys=True))
+                    self.assertEqual(metadata["candidate"]["exact_solver_empty_squares"], threshold)
+                    self.assertEqual(oracle.profile_depth_at(profile, 4), 12)
+                    self.assertEqual(oracle.profile_depth_at(profile, 20), 12)
+                    self.assertEqual(oracle.profile_depth_at(profile, 21), depth)
+                    self.assertEqual(oracle.profile_depth_at(profile, 63), threshold)
+                    first_exact = 64 - threshold
+                    before_depth = 12 if threshold == 16 else depth
+                    self.assertEqual(oracle.profile_depth_at(profile, first_exact - 1), before_depth)
+                    self.assertEqual(oracle.profile_depth_at(profile, first_exact), threshold)
+                    for child in (False, True):
+                        argv = oracle.oracle_argv(Path("oracle"), profile,
+                                                  solve_path=Path("positions"), child_query=child)
+                        self.assertEqual(argv[:7], ["oracle", "-nobook", "-thread", "1", "-hash", "25", "-depthprobrange"])
+                        self.assertNotIn("-level", argv)
+                        self.assertIn(["-depthprobrange", str(61 - threshold + int(child)),
+                                       "60", str(threshold), "100"],
+                                      [argv[index:index + 5] for index in range(len(argv))])
+        self.assertEqual(len(identities), 6)
+        with self.assertRaises(oracle.OracleError):
+            oracle.profile_from_name("whole-game-depth-8-exact-21")
+
+    def test_whole_game_exact_solve_requires_remaining_empties_for_root_and_child(self):
+        initial = oracle.generate_corpus()[0]
+        for threshold in (16, 20, 24):
+            board, side = str(initial["board"]), str(initial["side_to_move"])
+            while board.count(".") > threshold:
+                moves = oracle.legal_moves(board, side)
+                if moves:
+                    board = oracle.apply_move(board, side, moves[0])
+                side = oracle.other(side)
+            side, _ = oracle.effective_query(board, side)
+            child_board = oracle.apply_move(board, side, oracle.legal_moves(board, side)[0])
+            child_side, _ = oracle.effective_query(child_board, oracle.other(side))
+            for depth in (8, 12):
+                profile = oracle.profile_from_name(f"whole-game-depth-{depth}-exact-{threshold}")
+                for child, query in ((False, (board, side)), (True, (child_board, child_side))):
+                    required = query[0].count(".")
+                    continuation = oracle.legal_moves(*query)[0]
+                    for completed in (required - 1, required):
+                        output = "\n".join([
+                            "| Level | Depth | Move | Score | Time | Nodes | NPS |",
+                            f"| custom | {completed}@100% | {continuation} | +4 | 000:00:00.001 | 1 | 1000 |",
+                            "total 1 nodes in 0.001s NPS 1000",
+                        ])
+                        with self.subTest(threshold=threshold, depth=depth, child=child, completed=completed), \
+                             patch.object(oracle, "run_external") as run:
+                            run.return_value.stdout = output
+                            rows = oracle.run_solve([query], Path("oracle"), Path("."),
+                                                    profile, 1, child_query=child)
+                            self.assertEqual(rows[0]["exact"], completed == required)
+
     def test_parse_solve_output_is_strict_and_normalizes_metrics(self):
         output = "\n".join(
             [

@@ -187,6 +187,52 @@ class WholeGameTests(unittest.TestCase):
         with self.assertRaisesRegex(whole_game.BenchmarkError, "illegal move or pass"):
             whole_game.verify(illegal)
 
+    def test_experimental_thresholds_preserve_strict_legacy_reports(self):
+        for threshold in (20, 24):
+            report = synthetic_report(8)
+            report["settings"]["exact_empty"] = threshold
+            for record in report["games"]:
+                for step in record["steps"]:
+                    occupied = 64 - step["board"].count(".")
+                    exact = 64 - occupied <= threshold
+                    step["search"]["exact"] = exact
+                    step["search"]["completed_depth"] = (64 - occupied if exact else
+                        0 if step["move"] == "pass" else 12 if occupied <= 20 or occupied >= 45 else 8)
+                    step["search"]["score"] = 0 if exact or step["move"] != "pass" else None
+                    whole_game.validate_cli_diagnostic(step, step["search"], 8, threshold)
+            redigest(report)
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "search settings mismatch"):
+                whole_game.verify(report)
+            boundary = next(step for record in report["games"] for step in record["steps"]
+                            if step["board"].count(".") == threshold)
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "incomplete or inconsistent"):
+                whole_game.validate_cli_diagnostic(boundary, boundary["search"], 8, 16)
+
+    def test_decision_phase_legal_count_and_resource_evidence(self):
+        report = synthetic_report(8)
+        step = report["games"][0]["steps"][0]
+        step.update(legal_move_count=len(whole_game.oracle.legal_moves(step["board"], step["side"])),
+                    phase=whole_game.decision_phase(step["board"]),
+                    resources={"user_cpu_ns": 1, "system_cpu_ns": 0, "peak_rss_kib": 100})
+        step["resource_observations"] = {
+            "before": {"user_cpu_ns": 2, "system_cpu_ns": 0, "peak_rss_kib": 99},
+            "after": {"user_cpu_ns": 3, "system_cpu_ns": 0, "peak_rss_kib": 100}}
+        redigest(report)
+        whole_game.verify(report)
+        changed = copy.deepcopy(report)
+        changed["games"][0]["steps"][0]["resource_observations"]["after"]["user_cpu_ns"] += 1
+        redigest(changed)
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "do not match observations"):
+            whole_game.verify(changed)
+        for field, value in (("legal_move_count", 99), ("phase", "exact"),
+                             ("resources", {"user_cpu_ns": -1, "system_cpu_ns": 0, "peak_rss_kib": 100}),
+                             ("resources", {"user_cpu_ns": 1, "system_cpu_ns": 0, "peak_rss_kib": 101})):
+            changed = copy.deepcopy(report)
+            changed["games"][0]["steps"][0][field] = value
+            redigest(changed)
+            with self.assertRaises(whole_game.BenchmarkError):
+                whole_game.verify(changed)
+
     def test_oracle_evidence_requires_every_exact_position(self):
         report = synthetic_report()
         rows = [{"id": step["id"], "board": step["board"], "side": step["side"],
@@ -366,6 +412,61 @@ class ResumableTests(unittest.TestCase):
                 seat.new_game("game-2")
         finally:
             seat.abort()
+
+    def test_seat_threshold_node_flags_and_rss_failure_observation(self):
+        self.binary.write_text("#!/usr/bin/env python3\nimport sys\nfor line in sys.stdin:\n parts=line.strip().split('\\t')\n print('new_game\\t'+parts[1]+'\\tready' if parts[0]=='new_game' else parts[0]+'\\ta1', flush=True)\n")
+        self.binary.chmod(0o755)
+        original = whole_game.subprocess.Popen
+        with patch.object(whole_game.subprocess, "Popen", wraps=original) as popen:
+            seat = whole_game.Seat("cli", self.binary, self.artifact, 8, 2, "B",
+                                   exact_empty=24, node_limit=10_000_000, max_rss_kib=1000)
+        try:
+            argv = popen.call_args.args[0]
+            self.assertEqual(argv[argv.index("--exact-solver-empty-squares") + 1], "24")
+            self.assertEqual(argv[argv.index("--node-limit") + 1], "10000000")
+            self.assertTrue(seat.new_game("reset")["acknowledged"])
+            observed = {"user_cpu_ns": 123, "system_cpu_ns": 45, "peak_rss_kib": 1001}
+            below_cap = {**observed, "peak_rss_kib": 999}
+            with patch.object(whole_game, "proc_usage", side_effect=[below_cap, observed]), \
+                 patch.object(whole_game.select, "select", return_value=([], [], [])) as select_wait:
+                with self.assertRaisesRegex(whole_game.BenchmarkError, "RSS cap exceeded"):
+                    seat.choose("root", whole_game.oracle.initial_board(), "B")
+                self.assertEqual(select_wait.call_count, 1)
+                self.assertLessEqual(select_wait.call_args.args[3], 0.05)
+            self.assertEqual(seat.last_observation, observed)
+        finally:
+            seat.abort()
+
+    def test_resumable_threshold_identity_and_reset_validation(self):
+        report = self.measure()
+        self.args.exact_empty = 20
+        identity = whole_game.measurement_identity(self.args)
+        self.assertEqual(identity["settings"]["exact_empty"], 20)
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "identity mismatch"):
+            self.measure()
+        self.assertEqual(len(self.calls), 8)
+        changed = copy.deepcopy(report)
+        changed["settings"]["exact_empty"] = 20
+        changed["identity"]["settings"]["exact_empty"] = 20
+        changed["condition_digest"] = hashlib.sha256(whole_game.canonical(changed["identity"])).hexdigest()
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "incomplete or inconsistent"):
+            whole_game.verify(whole_game.sealed(changed))
+        for record in changed["games"]:
+            record["condition_digest"] = changed["condition_digest"]
+            for step in record["steps"]:
+                occupied = 64 - step["board"].count(".")
+                exact = 64 - occupied <= 20
+                step["search"]["exact"] = exact
+                step["search"]["completed_depth"] = (64 - occupied if exact else
+                    0 if step["move"] == "pass" else 12 if occupied <= 20 or occupied >= 45 else 8)
+                step["search"]["score"] = 0 if exact or step["move"] != "pass" else None
+        whole_game.verify(whole_game.sealed(changed))
+        changed["games"][0]["reset_events"]["B"]["game_id"] = "other-game"
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "acknowledgement mismatch"):
+            whole_game.verify(whole_game.sealed(changed))
+        self.args.node_limit = 10_000_000
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "must not use a node cap"):
+            whole_game.measurement_identity(self.args)
 
     def test_reset_ack_rejected(self):
         with patch.object(FakeSeat, "new_game", return_value={"game_id": "bad", "acknowledged": False}):
