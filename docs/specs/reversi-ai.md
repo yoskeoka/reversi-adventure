@@ -779,66 +779,84 @@ Long-running production measurements remain human-operated.
 ### Experimental exact-threshold assessment
 
 Thresholds 16, 20 and 24 are separate experimental workloads. Production
-reinforcement keeps its 16-empty contract. Each window or game starts both
-seats with acknowledged empty heuristic and exact tables. Only subsequent
-roots within that window/game may reuse proofs; turn scope clears the exact
-table at each decision with otherwise identical settings.
+reinforcement keeps its 16-empty contract.
+
+Both seats acknowledge empty heuristic and exact tables at each window or game
+start. Later roots within that unit may reuse proofs. Turn scope clears the
+exact table at each decision; other settings stay equal.
 
 Preparation freezes four distinct legal 24-empty roots from a verified game-8
-report, selecting the first two black and first two white roots in
-opening/assignment/turn order. If only one distinct white root exists, preparation
-adds its first distinct transform in the fixed order rotate-180, main-diagonal
-reflection, anti-diagonal reflection. These transforms preserve the standard
-initial board and colors. The transformed opening, every history board and move,
-source root identity and transform name are retained and legally replayed.
-The added window is a correlated symmetry variant, not an independent game.
-No synthetic color or side change supplies the missing root.
-It pins their legal source histories, source and
-harness revisions, binaries, artifact, openings, host, cache capacity, timeout,
-RSS and output identities. It generates a human-operated script without
-starting measurement. Pilot depth is 12/8/12, with a 10,000,000-node cap,
-310-second decision timeout and 1,572,864-KiB seat peak RSS cap. All six
-threshold/scope conditions use these same roots: 24 windows total. Windows
-end at 12 or fewer empties or legal game-over; passes remain explicit and do
-not decrease empties. Starting caches are empty even though the source game
-has earlier history. Pilot timing is never reported as full-depth speed.
+report. It selects the first two black and first two white roots in
+opening/assignment/turn order.
 
-Each decision retains legal-move count, phase, move, root score, depth,
+If only one distinct white root exists, preparation adds its first distinct
+transform in the fixed order rotate-180, main-diagonal reflection,
+anti-diagonal reflection. Each transform preserves the standard initial board
+and colors.
+
+The runner stores and legally replays the transformed opening and every history
+board and move. It keeps the source root identity and transform name. The two
+white windows form a correlated symmetry pair, which the report identifies.
+
+Preparation pins legal source histories, source and harness revisions, binaries,
+artifact, openings, host, cache capacity, timeout, RSS and output identities.
+It writes a human-operated script and leaves measurement to the human.
+
+Pilot depth is 12/8/12, with a 10,000,000-node cap, a 310-second decision timeout
+and a 1,572,864-KiB seat peak RSS cap. All six threshold/scope conditions use the
+same four roots, for 24 windows total.
+
+Windows end at 12 or fewer empties or legal game-over. Passes stay in the
+history and leave the empty count intact. Each window starts with empty caches.
+Pilot timing is reported separately from full-depth speed.
+
+Each decision keeps its legal-move count, phase, move, root score, depth,
 exactness, outcome, nodes, cache counters, wall/CPU and RSS observations.
-An unfinished exact attempt is a failed unit, never an exact result.
-Failure evidence retains partial history and observed resources; verified
-failed units are skipped without automatic retries. Interrupted units can be
-rerun while durably completed units are independently verified and skipped.
-Unknown, corrupt or mismatched existing evidence fails closed. Unit publication
-uses file and directory fsync plus atomic rename under an exclusive lock.
+An unfinished exact attempt is recorded as a failed unit.
 
-Turn/game comparisons require identical positions, seat histories, moves,
-scores, depths, exactness and outcomes within one threshold. Independent
-bookless, single-thread Oracle profiles completely solve each exact root and
-its selected continuation; incomplete or timed-out solves remain failed
-evidence. Oracle positions are durably saved individually and source reports
-fix their known total. Only four completed windows in both scopes with matching
-semantics and complete Oracle evidence admit a threshold to full measurement.
-The gate freezes a full-stage manifest: admitted thresholds times 32 games,
-at most 96, covering depths 8/12, scopes turn/game and eight games each. Full
-search has no node cap and retains the same timeout/RSS limits. New binary
-threshold-16 controls are required; legacy reports cannot satisfy their identity.
-Only all eight verified games permit averages or improvement ratios. Failure
-of one condition remains visible and forbids partial-success averages.
+Failed units keep partial history and observed resources. The runner verifies
+and skips saved failures on resume. It retries interrupted units and verifies
+saved completed units before skipping them.
 
-Reports distinguish first exact roots and subsequent roots, exact node/time
-changes, whole-game fractions, phase depths and legal-move counts. Per-decision
-CPU samples describe process-counter differences and process peak RSS, while
-final wait4 samples reconcile whole-unit resources. Small one-run improvements
-carry no significance claim. Adoption remains a human decision in plan 0040;
-raising production thresholds needs a separate specification/manifest update.
+Unknown, corrupt or mismatched evidence stops the run. Unit publication uses
+file and directory fsync plus atomic rename under an exclusive lock.
+
+Turn/game comparisons within one threshold require equal positions, seat
+histories, moves, scores, depths, exactness and outcomes. Fixed bookless,
+single-thread Oracle profiles completely solve each exact root and its selected
+continuation. Incomplete or timed-out solves remain failed evidence.
+
+Oracle positions are saved individually, with their total fixed by source
+reports. A threshold reaches full measurement only after all four windows in
+both scopes match and have complete Oracle evidence.
+
+The gate freezes a full-stage manifest with 32 games per admitted threshold,
+at most 96. It covers depths 8/12, scopes turn/game and eight games each.
+Full search removes the node cap and keeps the pilot timeout/RSS limits.
+
+Threshold-16 controls use the new binary and its pinned identity. Legacy
+reports keep their original identities. Averages and improvement ratios require
+all eight verified games; failures remain visible in the condition report.
+
+Reports distinguish each seat's first exact root from its later roots. They show
+exact node/time changes, whole-game fractions, phase depths and legal-move counts.
+
+Per-decision CPU samples use process-counter differences and process peak RSS.
+Final wait4 samples reconcile whole-unit resources. Reports limit their claims
+to the measured run and state the lack of repeats.
+
+Plan 0040 leaves adoption to the human. Raising production thresholds needs a
+separate specification/manifest update.
 
 Progress is flushed on stderr as
 `progress exact-threshold stage=<pilot|full|oracle|verify> threshold=<16|20|24> scope=<turn|game> unit=<window|game|position> done=<n> total=<n> status=<running|saved|skipped|interrupted|verified|failed> elapsed_s=<value>`.
-Known totals are frozen by stage manifests. The default emits every completed
-unit; `--progress-every N` limits ordinary updates while failure, interruption
-and stage completion always flush. Long measurements are started by a human;
-agents do not start, wait for or monitor them.
+
+Stage manifests fix the totals. The default emits every completed unit.
+`--progress-every N` limits ordinary updates; failure, interruption and stage
+completion always flush.
+
+Long measurements are started by a human. Agents leave startup, waiting and
+monitoring to the human.
 
 ### SearchEngine
 

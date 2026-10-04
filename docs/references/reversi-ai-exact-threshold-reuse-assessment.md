@@ -71,7 +71,7 @@ pilotとgateだけなら `exact_threshold.py pilot --manifest <path>`、入力�
 
 ## このworkspaceの起動先
 
-固定入力の準備先はworkspace `.local/reversi-ai-whole-game-0035/exact-threshold-0041/`。
+固定入力の準備先はworkspace `.local/reversi-ai-whole-game-0035/exact-threshold-0041-<harness HEAD>/`。
 CLIは `.local/reversi-ai-whole-game-0035/target/exact-0041/release/reversi-ai-cli`、
 source revisionは `fc1c841d4b6e7136dd74f8825d642a671bd96001` のRust sourcesからrelease buildしたもの。
 Oracle/artifact/元game-8は既存0035証拠と同じ実ファイルをpinする。
@@ -80,8 +80,9 @@ manifestはprepare時のharness commitと全依存Pythonのdigestを記録する
 workspace rootで人間が実行する1行:
 
 ```bash
-rtk bash .local/reversi-ai-whole-game-0035/exact-threshold-0041/run-exact-threshold.sh
+rtk bash .local/reversi-ai-whole-game-0035/run-exact-threshold-0041.sh
 ```
 
 script生成と入力のoffline検証だけをagentが行う。測定開始・待機・監視は行わない。
-人間の測定後、同じworktreeで `rtk python3 tools/reversi-ai-benchmark/exact_threshold.py verify --manifest /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-whole-game-0035/exact-threshold-0041/manifest.json` を使って再検証する。
+このlauncherは最後に準備したHEADのscriptを呼ぶ。以前のmanifest/scriptは元のdirectoryへ保存し、上書きしない。
+人間の測定後、同じworktreeで `rtk python3 tools/reversi-ai-benchmark/exact_threshold.py verify --manifest <launcherが使うdirectory>/manifest.json` を使って再検証する。
