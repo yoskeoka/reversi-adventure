@@ -233,6 +233,99 @@ class WholeGameTests(unittest.TestCase):
             with self.assertRaises(whole_game.BenchmarkError):
                 whole_game.verify(changed)
 
+    def test_independent_proc_wait4_rss_peaks_and_fluctuating_sample_reconcile(self):
+        report = synthetic_report(8)
+        game = report["games"][0]
+        step = game["steps"][0]
+        step.update(legal_move_count=len(whole_game.oracle.legal_moves(step["board"], step["side"])),
+                    phase=whole_game.decision_phase(step["board"]),
+                    resources={"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 200},
+                    resource_observations={
+                        "before": {"user_cpu_ns": 1, "system_cpu_ns": 0, "peak_rss_kib": 250},
+                        "after": {"user_cpu_ns": 1, "system_cpu_ns": 0, "peak_rss_kib": 200}})
+        game["resources"]["peak_rss_kib"] = 250
+        report["aggregate"] = whole_game.totals(report["games"])
+        redigest(report)
+        whole_game.verify(report)
+        self.assertEqual(game["seat_processes"][step["seat"]]["peak_rss_kib"], 100)
+        self.assertEqual(step["resource_observations"]["before"]["peak_rss_kib"], 250)
+        for source in ("aggregate", "before", "after", "wait4", "cpu"):
+            changed = copy.deepcopy(report)
+            target_game = changed["games"][0]
+            target_step = target_game["steps"][0]
+            if source == "aggregate":
+                target_game["resources"]["peak_rss_kib"] = 200
+            elif source in ("before", "after"):
+                target_step["resource_observations"][source]["peak_rss_kib"] = changed["settings"]["max_rss_kib"]+1
+                if source == "after":
+                    target_step["resources"]["peak_rss_kib"] = changed["settings"]["max_rss_kib"]+1
+                target_game["resources"]["peak_rss_kib"] = changed["settings"]["max_rss_kib"]+1
+            elif source == "wait4":
+                target_game["seat_processes"][target_step["seat"]]["peak_rss_kib"] = changed["settings"]["max_rss_kib"]+1
+                target_game["resources"]["peak_rss_kib"] = changed["settings"]["max_rss_kib"]+1
+            else:
+                target_step["resource_observations"]["after"]["user_cpu_ns"] = 3
+                target_step["resources"]["user_cpu_ns"] = 2
+            changed["aggregate"] = whole_game.totals(changed["games"])
+            redigest(changed)
+            with self.subTest(source=source), self.assertRaises(whole_game.BenchmarkError):
+                whole_game.verify(changed)
+
+    def test_oracle_forced_pass_does_not_retain_previous_decision_peak(self):
+        self.assertFalse(whole_game.oracle.legal_moves(TARGET_BOARD, "W"))
+        self.assertTrue(whole_game.oracle.legal_moves(TARGET_BOARD, "B"))
+        seats, chosen_ids = {}, []
+        for label in ("B", "W"):
+            seat = SimpleNamespace(exact_empty=16,
+                peak_observation={"user_cpu_ns": 1, "system_cpu_ns": 0, "peak_rss_kib": 900},
+                gtp_command=lambda _command: [])
+            def observe(current=seat):
+                raw = {"user_cpu_ns": 10, "system_cpu_ns": 0, "peak_rss_kib": 100}
+                if current.peak_observation is None or raw["peak_rss_kib"] > current.peak_observation["peak_rss_kib"]:
+                    current.peak_observation = dict(raw)
+                return raw
+            def choose(identifier, board, side):
+                chosen_ids.append(identifier)
+                legal = whole_game.oracle.legal_moves(board, side)
+                return (legal[0] if legal else "pass"), 1
+            seat.observe_resources, seat.choose = observe, choose
+            seats[label] = seat
+        record = whole_game.game({"id": "forced-pass", "board": TARGET_BOARD,
+                                  "side": "W", "moves": ""}, 0, seats, "oracle", 2, 120)
+        first = record["steps"][0]
+        self.assertEqual(first["move"], "pass")
+        self.assertNotIn(first["id"], chosen_ids)
+        self.assertEqual(first["resource_observations"]["peak"],
+                         {"user_cpu_ns": 10, "system_cpu_ns": 0, "peak_rss_kib": 100})
+        self.assertEqual(first["resource_observations"]["before"], first["resource_observations"]["peak"])
+        self.assertEqual(first["resource_observations"]["after"], first["resource_observations"]["peak"])
+
+    def test_polled_peak_raw_resources_verify_and_reaggregate(self):
+        report = synthetic_report(8)
+        game = report["games"][0]
+        step = game["steps"][0]
+        raw = {"user_cpu_ns": 1, "system_cpu_ns": 0}
+        step.update(legal_move_count=len(whole_game.oracle.legal_moves(step["board"], step["side"])),
+                    phase=whole_game.decision_phase(step["board"]),
+                    resources={"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 200},
+                    resource_observations={"before": dict(raw, peak_rss_kib=100),
+                                           "after": dict(raw, peak_rss_kib=200),
+                                           "peak": dict(raw, peak_rss_kib=900)})
+        game["resources"]["peak_rss_kib"] = 900
+        report["aggregate"] = whole_game.totals(report["games"])
+        redigest(report)
+        whole_game.verify(report)
+        self.assertEqual(whole_game.max_observed_rss(game["seat_processes"], game), 900)
+        for field, value in (("user_cpu_ns", 2), ("system_cpu_ns", 1), ("peak_rss_kib", 1001)):
+            changed = copy.deepcopy(report)
+            changed["games"][0]["steps"][0]["resource_observations"]["peak"][field] = value
+            changed["games"][0]["resources"]["peak_rss_kib"] = whole_game.max_observed_rss(
+                changed["games"][0]["seat_processes"], changed["games"][0])
+            changed["aggregate"] = whole_game.totals(changed["games"])
+            redigest(changed)
+            with self.subTest(field=field), self.assertRaises(whole_game.BenchmarkError):
+                whole_game.verify(changed)
+
     def test_oracle_evidence_requires_every_exact_position(self):
         report = synthetic_report()
         rows = [{"id": step["id"], "board": step["board"], "side": step["side"],
@@ -413,6 +506,32 @@ class ResumableTests(unittest.TestCase):
         finally:
             seat.abort()
 
+    def test_seat_retains_peak_poll_and_resets_for_next_decision(self):
+        seat = whole_game.Seat.__new__(whole_game.Seat)
+        seat.process = SimpleNamespace(pid=123, stdin=io.BytesIO(),
+                                       stdout=SimpleNamespace(fileno=lambda: 123))
+        seat.gtp, seat.timeout, seat.max_rss_kib = None, 2, 1000
+        seat.buffer = bytearray()
+        seat.last_observation = seat.peak_observation = None
+        raw = {"user_cpu_ns": 1, "system_cpu_ns": 0}
+        samples = [dict(raw, peak_rss_kib=p) for p in (100, 900, 200)]
+        with patch.object(whole_game, "proc_usage", side_effect=samples), \
+             patch.object(whole_game.select, "select", side_effect=[([], [], []), ([seat.process.stdout], [], [])]), \
+             patch.object(whole_game.os, "read", return_value=b"root\ta1\n"):
+            self.assertEqual(seat.choose("root", whole_game.oracle.initial_board(), "B")[0], "a1")
+        self.assertEqual(seat.peak_observation["peak_rss_kib"], 900)
+        self.assertEqual(seat.last_observation["peak_rss_kib"], 200)
+        with patch.object(whole_game, "proc_usage", side_effect=[dict(raw, peak_rss_kib=300), dict(raw, peak_rss_kib=250)]), \
+             patch.object(whole_game.select, "select", return_value=([seat.process.stdout], [], [])), \
+             patch.object(whole_game.os, "read", return_value=b"next\ta1\n"):
+            seat.choose("next", whole_game.oracle.initial_board(), "B")
+        self.assertEqual(seat.peak_observation["peak_rss_kib"], 300)
+        self.assertEqual(seat.last_observation["peak_rss_kib"], 250)
+        with patch.object(whole_game, "proc_usage", return_value=dict(raw, peak_rss_kib=1001)):
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "RSS cap exceeded"):
+                seat.choose("failed", whole_game.oracle.initial_board(), "B")
+        self.assertEqual(seat.peak_observation["peak_rss_kib"], 1001)
+
     def test_seat_threshold_node_flags_and_rss_failure_observation(self):
         self.binary.write_text("#!/usr/bin/env python3\nimport sys\nfor line in sys.stdin:\n parts=line.strip().split('\\t')\n print('new_game\\t'+parts[1]+'\\tready' if parts[0]=='new_game' else parts[0]+'\\ta1', flush=True)\n")
         self.binary.chmod(0o755)
@@ -511,6 +630,64 @@ class ResumableTests(unittest.TestCase):
         self.assertEqual(started, ["B"])
         self.assertEqual(aborted, ["B"])
         self.assertFalse(self.args.output.exists())
+
+    def test_persistent_sampled_rss_above_wait4_survives_resume_and_reverifies(self):
+        self.args.kind = "cli-persistent"
+        original_game = self.fixture_game
+        original_close = FakeSeat.close
+
+        def sampled_game(*args):
+            record = original_game(*args)
+            step = record["steps"][0]
+            step.update(legal_move_count=len(whole_game.oracle.legal_moves(step["board"], step["side"])),
+                        phase=whole_game.decision_phase(step["board"]),
+                        resources={"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 200},
+                        resource_observations={
+                            "before": {"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 250},
+                            "after": {"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 200}})
+            return record
+
+        def waited(seat):
+            return {**original_close(seat), "peak_rss_kib": 80}
+
+        with patch.object(self, "fixture_game", side_effect=sampled_game), \
+             patch.object(FakeSeat, "close", waited):
+            self.interrupt_after = 2
+            with self.assertRaises(KeyboardInterrupt):
+                self.measure()
+            receipt_path = next(self.checkpoints.glob("segment-*.json"))
+            receipt = whole_game.read_canonical(receipt_path)
+            self.assertEqual(receipt["process_totals"]["B"]["peak_rss_kib"], 80)
+            self.interrupt_after = None
+            report = self.measure()
+            self.assertEqual(len(self.calls), 8)
+            whole_game.verify(report)
+            self.assertEqual(report["aggregate"]["peak_rss_kib"], 250)
+            self.assertEqual(report["segment_aggregate"]["peak_rss_kib"], 80)
+            for game in report["games"]:
+                self.assertEqual(game["seat_processes"]["B"]["peak_rss_kib"], 100)
+
+        changed = copy.deepcopy(report)
+        changed["segments"][0]["process_totals"]["B"]["peak_rss_kib"] = self.args.max_rss_kib + 1
+        changed["segments"][0] = whole_game.sealed(changed["segments"][0])
+        changed["segment_aggregate"] = whole_game.segment_totals(changed["segments"])
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "segment resources invalid"):
+            whole_game.verify(whole_game.sealed(changed))
+
+        changed = copy.deepcopy(report)
+        step = changed["games"][0]["steps"][0]
+        step["resource_observations"]["before"]["peak_rss_kib"] = self.args.max_rss_kib + 1
+        changed["games"][0]["resources"]["peak_rss_kib"] = self.args.max_rss_kib + 1
+        changed["aggregate"] = whole_game.totals(changed["games"])
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "game resource totals mismatch"):
+            whole_game.verify(whole_game.sealed(changed))
+
+        changed = copy.deepcopy(report)
+        step = changed["games"][0]["steps"][0]
+        step["resource_observations"]["after"]["user_cpu_ns"] = 1
+        step["resources"]["user_cpu_ns"] = 1
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "decision CPU exceeds process total"):
+            whole_game.verify(whole_game.sealed(changed))
 
     def test_terminal_segment_peak_above_cap_rejects_before_report(self):
         self.args.kind = "cli-persistent"

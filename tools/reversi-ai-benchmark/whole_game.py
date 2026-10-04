@@ -111,6 +111,7 @@ class Seat:
         require(max_rss_kib is None or type(max_rss_kib) is int and max_rss_kib > 0, "invalid RSS limit")
         self.exact_empty, self.node_limit, self.max_rss_kib = exact_empty, node_limit, max_rss_kib
         self.last_observation: dict | None = None
+        self.peak_observation: dict | None = None
         self.kind, self.timeout, self.label, self.depth = kind, timeout, label, depth
         self.stderr = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
         started = time.monotonic_ns()
@@ -144,11 +145,14 @@ class Seat:
     def observe_resources(self) -> dict:
         usage = proc_usage(self.process.pid)
         self.last_observation = usage
+        if self.peak_observation is None or usage["peak_rss_kib"] > self.peak_observation["peak_rss_kib"]:
+            self.peak_observation = dict(usage)
         require(self.max_rss_kib is None or usage["peak_rss_kib"] <= self.max_rss_kib,
                 "peak RSS cap exceeded")
         return usage
 
     def choose(self, identifier: str, board: str, side: str) -> tuple[str, int]:
+        self.peak_observation = None
         started = time.monotonic_ns()
         if self.gtp:
             command = f"genmove {'black' if side == 'B' else 'white'}"
@@ -288,6 +292,8 @@ def game(row: dict, assignment: int, seats: dict[str, Seat], kind: str,
         seat_label = side if assignment == 0 else oracle.other(side)
         identifier = f"{row['id']}-seat{assignment}-turn{turn}"
         active_seat = seats[seat_label]
+        if hasattr(active_seat, "peak_observation"):
+            active_seat.peak_observation = None
         before_usage = active_seat.observe_resources() if hasattr(active_seat, "observe_resources") else None
         if legal or kind != "oracle":
             move, elapsed = seats[seat_label].choose(identifier, board, side)
@@ -311,6 +317,9 @@ def game(row: dict, assignment: int, seats: dict[str, Seat], kind: str,
                              "resources": {"user_cpu_ns": after_usage["user_cpu_ns"] - before_usage["user_cpu_ns"],
                                            "system_cpu_ns": after_usage["system_cpu_ns"] - before_usage["system_cpu_ns"],
                                            "peak_rss_kib": after_usage["peak_rss_kib"]}})
+            peak = getattr(active_seat, "peak_observation", None)
+            if peak is not None:
+                steps[-1]["resource_observations"]["peak"] = dict(peak)
         if move != "pass":
             board = oracle.apply_move(board, side, move)
         side = oracle.other(side)
@@ -443,7 +452,7 @@ def persistent_games(rows: list[dict], binary: Path, artifact: Path, depth: int,
                 record["seat_processes"] = usages
                 record["resources"] = {"user_cpu_ns": sum(item["user_cpu_ns"] for item in usages.values()),
                                        "system_cpu_ns": sum(item["system_cpu_ns"] for item in usages.values()),
-                                       "peak_rss_kib": max(item["peak_rss_kib"] for item in usages.values())}
+                                       "peak_rss_kib": max_observed_rss(usages, record)}
                 require(record["resources"]["peak_rss_kib"] <= max_rss_kib, "peak RSS cap exceeded")
                 games.append(record)
                 print(f"progress whole-game {len(games)}/8 opening={row['id']} seat={assignment} "
@@ -470,7 +479,7 @@ def measured_game(row: dict, assignment: int, kind: str, binary: Path, artifact:
         attach_diagnostics(record, seats, kind)
         record["resources"] = {"user_cpu_ns": sum(item["user_cpu_ns"] for item in usages.values()),
                                "system_cpu_ns": sum(item["system_cpu_ns"] for item in usages.values()),
-                               "peak_rss_kib": max(item["peak_rss_kib"] for item in usages.values())}
+                               "peak_rss_kib": max_observed_rss(usages, record)}
         record["seat_processes"] = usages
         require(record["resources"]["peak_rss_kib"] <= max_rss_kib, "peak RSS cap exceeded")
         validate_game(record, row, assignment)
@@ -529,6 +538,16 @@ def run(args: argparse.Namespace) -> dict:
     return report
 
 
+def max_observed_rss(processes: dict, record: dict) -> int:
+    peaks = [p["peak_rss_kib"] for p in processes.values()]
+    for step in record["steps"]:
+        raw = step.get("resource_observations", {})
+        peaks.extend(v["peak_rss_kib"] for v in raw.values())
+        if "resources" in step:
+            peaks.append(step["resources"]["peak_rss_kib"])
+    return max(peaks)
+
+
 def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: dict) -> None:
     validate_game(record, row, assignment)
     require(record.get("search_count") == (sum(step["move"] != "pass" for step in record["steps"])
@@ -542,7 +561,7 @@ def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: d
                 "missing process CPU/RSS/startup/shutdown")
     expected = {"user_cpu_ns": sum(seat["user_cpu_ns"] for seat in processes.values()),
                 "system_cpu_ns": sum(seat["system_cpu_ns"] for seat in processes.values()),
-                "peak_rss_kib": max(seat["peak_rss_kib"] for seat in processes.values())}
+                "peak_rss_kib": max_observed_rss(processes, record)}
     require(resources == expected and resources["peak_rss_kib"] <= settings["max_rss_kib"],
             "game resource totals mismatch")
     for step in record["steps"]:
@@ -554,23 +573,34 @@ def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: d
             require(isinstance(usage, dict) and set(usage) == {"user_cpu_ns", "system_cpu_ns", "peak_rss_kib"}
                     and all(type(usage[key]) is int and usage[key] >= (1 if key == "peak_rss_kib" else 0)
                             for key in usage)
-                    and usage["peak_rss_kib"] <= settings["max_rss_kib"]
-                    and usage["peak_rss_kib"] <= processes[step["seat"]]["peak_rss_kib"],
+                    and usage["peak_rss_kib"] <= settings["max_rss_kib"],
                     "decision resources invalid")
             if "resource_observations" in step:
                 observations = step["resource_observations"]
-                require(isinstance(observations, dict) and set(observations) == {"before", "after"},
+                require(isinstance(observations, dict) and set(observations) in (
+                            {"before", "after"}, {"before", "after", "peak"}),
                         "decision observations missing")
                 for raw in observations.values():
                     require(isinstance(raw, dict) and set(raw) == set(usage)
                             and all(type(raw[key]) is int and raw[key] >= (1 if key == "peak_rss_kib" else 0)
-                                    for key in raw), "decision observations invalid")
+                                    for key in raw)
+                            and raw["peak_rss_kib"] <= settings["max_rss_kib"], "decision observations invalid")
                 before, after = observations["before"], observations["after"]
-                require(all(after[key] >= before[key] for key in usage)
+                require(all(after[key] >= before[key] for key in ("user_cpu_ns", "system_cpu_ns"))
+                        and max(before["peak_rss_kib"], after["peak_rss_kib"]) <= settings["max_rss_kib"]
                         and usage == {"user_cpu_ns": after["user_cpu_ns"] - before["user_cpu_ns"],
                                       "system_cpu_ns": after["system_cpu_ns"] - before["system_cpu_ns"],
                                       "peak_rss_kib": after["peak_rss_kib"]},
                         "decision resources do not match observations")
+                if "peak" in observations:
+                    peak = observations["peak"]
+                    require(all(before[key] <= peak[key] <= after[key]
+                                for key in ("user_cpu_ns", "system_cpu_ns")),
+                            "decision peak CPU outside observations")
+    for side in ("B", "W"):
+        for key in ("user_cpu_ns", "system_cpu_ns"):
+            observed = sum(step.get("resources", {}).get(key, 0) for step in record["steps"] if step["seat"] == side)
+            require(observed <= processes[side][key], "decision CPU exceeds process total")
     if kind in ("cli", "cli-persistent"):
         cache = {"probes": 0, "hits": 0, "stores": 0}
         for step in record["steps"]:
@@ -881,9 +911,8 @@ def verify(report: dict, binary: Path | None = None, artifact: Path | None = Non
                         "segment shutdown invalid")
                 require(usage["shutdown_ns"] > 0 if segment["status"] == "closed" else usage["shutdown_ns"] == 0,
                         "unobserved shutdown claimed")
-            for side in ("B", "W"):
-                peak = game_record["seat_processes"][side]["peak_rss_kib"]
-                require(peak <= segment["process_totals"][side]["peak_rss_kib"], "segment peak RSS mismatch")
+            # Game VmHWM and segment wait4 peaks are independently capped;
+            # neither observation is an upper bound for the other.
             for side in ("B", "W"):
                 members = [item for item in report["games"] if item["segment_id"] == segment["segment_id"]]
                 for key in ("user_cpu_ns", "system_cpu_ns"):
@@ -1023,9 +1052,8 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                 require(record["segment_id"] in prior_segments, "checkpoint segment missing")
                 segment = prior_segments[record["segment_id"]]
                 require(segment.get("session_id") == record["session_id"], "checkpoint segment session mismatch")
-                for side in ("B", "W"):
-                    require(record["seat_processes"][side]["peak_rss_kib"] <= segment["process_totals"][side]["peak_rss_kib"],
-                            "checkpoint segment peak mismatch")
+                # Both receipts were independently checked against the RSS cap.
+                # A later proc sample or final wait4 peak may be lower.
             games[key] = record
         session_id = uuid.uuid4().hex
         segment_id = uuid.uuid4().hex
@@ -1068,7 +1096,7 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                 record.update({"seat_processes": usages,
                                "resources": {"user_cpu_ns": sum(item["user_cpu_ns"] for item in usages.values()),
                                              "system_cpu_ns": sum(item["system_cpu_ns"] for item in usages.values()),
-                                             "peak_rss_kib": max(item["peak_rss_kib"] for item in usages.values())},
+                                             "peak_rss_kib": max_observed_rss(usages, record)},
                                "reset_events": events, "session_id": session_id, "segment_id": segment_id,
                                "started_at_ns": game_started_at_ns, "ended_at_ns": time.time_ns(),
                                "manifest_digest": manifest_digest, "condition_digest": condition_digest})

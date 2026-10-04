@@ -392,6 +392,140 @@ class ExactThresholdTests(unittest.TestCase):
                 with self.subTest(mutation=mutation), self.assertRaises(et.wg.BenchmarkError):
                     et.verify_manifest(path)
 
+    def migration_fixture(self, directory):
+        args = self.prepare_args(directory, SOURCE)
+        run = subprocess.run
+        def cat_file_only(argv, **kwargs):
+            if argv[:1] == ["git"] and "cat-file" in argv:
+                return subprocess.CompletedProcess(argv, 0)
+            return run(argv, **kwargs)
+        self.stack.enter_context(patch.object(et.subprocess, "run", side_effect=cat_file_only))
+        self.stack.enter_context(patch.object(et.prep, "probe_reset"))
+        self.stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        old_path = et.prepare(args)
+        old = et.prep.load(old_path)
+        # Pin the actual committed predecessor harness, rather than pretending
+        # the current uncommitted fix was the historical producer.
+        for item in old["harness_files"]:
+            relative = Path(item["path"]).relative_to(et.prep.ROOT)
+            committed = subprocess.check_output(["git", "-C", str(et.prep.ROOT), "show", f"{old['harness_revision']}:{relative}"])
+            item["sha256"] = hashlib.sha256(committed).hexdigest()
+        old = et.wg.sealed(old)
+        et.wg.atomic_write(old_path, old)
+        unit = old["pilot_units"][0]
+        result = et.measure_unit(old, unit)
+        et.verify_unit(old, unit, result)
+        source_unit_path = et.unit_path(args.output_dir/"pilot", unit)
+        et.wg.atomic_write(source_unit_path, result)
+        new_args = copy.copy(args)
+        new_args.output_dir = directory/"migration output"
+        new_args.resume_manifest = old_path
+        return new_args, old_path, source_unit_path, result
+
+    def test_resume_prepare_preserves_source_provenance_and_skips_imported_unit(self):
+        with TemporaryDirectory() as temp:
+            args, old_path, source_unit_path, original = self.migration_fixture(Path(temp))
+            snapshots = old_path.read_bytes(), source_unit_path.read_bytes()
+            new_path = et.prepare(args)
+            manifest = et.verify_manifest(new_path)
+            imported = et.resume_sources(manifest)
+            self.assertEqual(len(imported), 1)
+            saved = et.prep.load(et.unit_path(args.output_dir/"pilot", original["unit"]))
+            self.assertEqual(saved, imported[0])
+            self.assertEqual(saved["manifest_digest"], manifest["report_digest"])
+            self.assertNotEqual(saved["manifest_digest"], original["manifest_digest"])
+            self.assertEqual(saved["steps"], original["steps"])
+            self.assertEqual(saved["seat_processes"], original["seat_processes"])
+            self.assertEqual(saved["imported_from"], {"manifest": et.prep.pin(old_path),
+                "unit": et.prep.pin(source_unit_path), "report_digest": original["report_digest"]})
+            self.assertEqual((old_path.read_bytes(), source_unit_path.read_bytes()), snapshots)
+            with patch.object(et.wg, "Seat", side_effect=AssertionError("imported unit must skip")):
+                self.assertEqual(et.run_units(manifest, [original["unit"]], args.output_dir/"pilot", et.Progress()), [saved])
+
+    def test_resume_rejects_changed_source_pins_and_workload_identity(self):
+        with TemporaryDirectory() as temp:
+            args, old_path, source_unit_path, _ = self.migration_fixture(Path(temp))
+            new_path = et.prepare(args)
+            manifest = et.prep.load(new_path)
+            for field in ("source_revision", "inputs", "caps", "source_report_digest"):
+                changed = copy.deepcopy(manifest)
+                if field == "inputs":
+                    changed[field]["artifact"]["sha256"] = "f"*64
+                elif field == "caps":
+                    changed[field]["pilot_node_limit"] += 1
+                else:
+                    changed[field] = "b"*40
+                with self.subTest(field=field), self.assertRaisesRegex(et.wg.BenchmarkError, "resume source"):
+                    et.resume_sources(et.wg.sealed(changed))
+            for source_path in (old_path, source_unit_path):
+                raw = source_path.read_bytes()
+                source_path.write_bytes(raw+b" ")
+                with self.subTest(path=source_path.name), self.assertRaisesRegex(et.wg.BenchmarkError, "input digest"):
+                    et.resume_sources(manifest)
+                source_path.write_bytes(raw)
+
+    def test_resume_prepare_mismatch_publishes_nothing_and_historical_harness_verified(self):
+        with TemporaryDirectory() as temp:
+            args, old_path, _, _ = self.migration_fixture(Path(temp))
+            args.source_revision = "b"*40
+            with self.assertRaisesRegex(et.wg.BenchmarkError, "source_revision mismatch"):
+                et.prepare(args)
+            self.assertFalse(args.output_dir.exists())
+            args.source_revision = "a"*40
+            old = et.prep.load(old_path)
+            old["harness_files"][0]["sha256"] = "f"*64
+            et.wg.atomic_write(old_path, et.wg.sealed(old))
+            with self.assertRaisesRegex(et.wg.BenchmarkError, "harness differs from recorded commit"):
+                et.prepare(args)
+            self.assertFalse(args.output_dir.exists())
+
+    def test_removed_import_provenance_resealed_checkpoint_rejected_before_launch(self):
+        with TemporaryDirectory() as temp:
+            args, _, _, original = self.migration_fixture(Path(temp))
+            path = et.prepare(args)
+            manifest = et.verify_manifest(path)
+            unit = original["unit"]
+            checkpoint = et.unit_path(args.output_dir/"pilot", unit)
+            changed = et.prep.load(checkpoint)
+            changed.pop("imported_from")
+            et.wg.atomic_write(checkpoint, et.wg.sealed(changed))
+            with patch.object(et.wg, "Seat", side_effect=AssertionError("tampered import must not launch")), \
+                 patch.object(et, "measure_unit", side_effect=AssertionError("tampered import must not measure")):
+                with self.assertRaises(et.wg.BenchmarkError):
+                    et.preflight(manifest, args.output_dir)
+                with self.assertRaises(et.wg.BenchmarkError):
+                    et.run_units(manifest, [unit], args.output_dir/"pilot", et.Progress())
+
+    def test_legacy_failed_unit_wait4_only_aggregate_normalized_without_source_edit(self):
+        with TemporaryDirectory() as temp:
+            args, old_path, source_unit_path, original = self.migration_fixture(Path(temp))
+            old_manifest = et.prep.load(old_path)
+            FakeSeat.failure = et.wg.BenchmarkError("legacy incomplete decision")
+            try:
+                with patch.object(et.wg, "proc_usage", return_value=dict(USAGE, peak_rss_kib=250)):
+                    failed = et.measure_unit(old_manifest, original["unit"])
+            finally:
+                FakeSeat.failure = None
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["resources"]["peak_rss_kib"], 250)
+            failed["resources"] = et.process_resources(failed["seat_processes"])
+            legacy = et.wg.sealed(failed)
+            self.assertEqual(legacy["resources"]["peak_rss_kib"], 100)
+            et.wg.atomic_write(source_unit_path, legacy)
+            snapshots = old_path.read_bytes(), source_unit_path.read_bytes()
+            path = et.prepare(args)
+            manifest = et.verify_manifest(path)
+            imported = et.resume_sources(manifest)[0]
+            self.assertEqual(imported["status"], "failed")
+            self.assertEqual(imported["failure"], legacy["failure"])
+            self.assertEqual(imported["seat_processes"], legacy["seat_processes"])
+            self.assertEqual(imported["failed_attempt"], legacy["failed_attempt"])
+            self.assertEqual(imported["resources"]["peak_rss_kib"], 250)
+            self.assertEqual(imported["imported_from"]["report_digest"], legacy["report_digest"])
+            self.assertEqual((old_path.read_bytes(), source_unit_path.read_bytes()), snapshots)
+            with patch.object(et.wg, "Seat", side_effect=AssertionError("imported failure must skip")):
+                self.assertEqual(et.run_units(manifest, [original["unit"]], args.output_dir/"pilot", et.Progress()), [imported])
+
     def test_pass_window_preserves_board_and_completes(self):
         record = next(r for r in et.wg.oracle.generate_corpus() if r["outcome"]["kind"] == "Pass" and r["board"].count(".") > 12)
         unit = copy.deepcopy(et.units("pilot", self.roots, (24,))[0])
@@ -434,6 +568,135 @@ class ExactThresholdTests(unittest.TestCase):
                 et.wg.atomic_write(et.unit_path(directory, unit), changed)
                 with patch.object(et.wg, "Seat", side_effect=AssertionError("must reject before launch")), self.assertRaises(et.wg.BenchmarkError):
                     et.run_units(self.manifest, [unit], directory, et.Progress())
+
+    def test_sampled_rss_above_wait4_is_preserved_and_verified(self):
+        unit = et.units("pilot", self.roots, (24,))[0]
+        sampled = dict(USAGE, peak_rss_kib=200)
+        with patch.object(et.wg, "proc_usage", return_value=sampled):
+            result = self.measured(unit)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["resources"]["peak_rss_kib"], 200)
+        self.assertEqual(result["seat_processes"]["B"]["peak_rss_kib"], 100)
+        self.assertEqual(result["seat_processes"]["W"]["peak_rss_kib"], 100)
+        self.assertTrue(all(s["cpu_after"]["peak_rss_kib"] == s["process_peak_rss_kib"] == 200 for s in result["steps"]))
+        corrupted = copy.deepcopy(result)
+        corrupted["resources"]["peak_rss_kib"] = 100
+        corrupted = et.wg.sealed(corrupted)
+        with self.assertRaisesRegex(et.wg.BenchmarkError, "aggregate"):
+            et.verify_unit(self.manifest, unit, corrupted)
+
+    def test_wait4_rss_above_samples_is_preserved_and_verified(self):
+        unit = et.units("pilot", self.roots, (24,))[0]
+        waited = dict(USAGE, peak_rss_kib=200)
+        with patch.object(FakeSeat, "close", return_value=waited), \
+             patch.object(FakeSeat, "abort", return_value=waited):
+            result = self.measured(unit)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["resources"]["peak_rss_kib"], 200)
+        self.assertEqual(result["seat_processes"]["B"]["peak_rss_kib"], 200)
+        self.assertTrue(all(s["process_peak_rss_kib"] == 100 for s in result["steps"]))
+
+    def test_sampled_rss_before_above_after_uses_both_raw_observations(self):
+        unit = et.units("pilot", self.roots, (24,))[0]
+        calls = 0
+        def observed(_pid):
+            nonlocal calls
+            calls += 1
+            return dict(USAGE, peak_rss_kib=250 if calls % 2 else 200)
+        with patch.object(et.wg, "proc_usage", side_effect=observed):
+            result = self.measured(unit)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["resources"]["peak_rss_kib"], 250)
+        self.assertTrue(all(s["cpu_before"]["peak_rss_kib"] == 250 and s["cpu_after"]["peak_rss_kib"] == 200 for s in result["steps"]))
+        corrupted = copy.deepcopy(result)
+        corrupted["resources"]["peak_rss_kib"] = 200
+        with self.assertRaisesRegex(et.wg.BenchmarkError, "aggregate"):
+            et.verify_unit(self.manifest, unit, et.wg.sealed(corrupted))
+
+    def test_mid_decision_peak_above_endpoints_and_wait4_is_in_aggregate_and_cap(self):
+        unit = et.units("pilot", self.roots, (24,))[0]
+        wait4 = dict(USAGE, peak_rss_kib=80)
+        with patch.object(FakeSeat, "close", return_value=wait4), \
+             patch.object(FakeSeat, "abort", return_value=wait4):
+            result = self.measured(unit)
+        step = result["steps"][0]
+        step["cpu_after"] = dict(step["cpu_after"], peak_rss_kib=200)
+        step["process_peak_rss_kib"] = 200
+        step["peak_observation"] = {"user_cpu_ns": 1, "system_cpu_ns": 0, "peak_rss_kib": 900}
+        result["resources"]["peak_rss_kib"] = 900
+        result = et.wg.sealed(result)
+        self.assertEqual(et.process_resources(result["seat_processes"], result["steps"])["peak_rss_kib"], 900)
+        et.verify_unit(self.manifest, unit, result)
+        self.assertEqual(result["seat_processes"]["B"]["peak_rss_kib"], 80)
+        self.assertEqual(result["steps"][0]["cpu_before"]["peak_rss_kib"], 100)
+        self.assertEqual(result["steps"][0]["cpu_after"]["peak_rss_kib"], 200)
+        for corruption in ("under-aggregate", "over-cap"):
+            changed = copy.deepcopy(result)
+            if corruption == "under-aggregate":
+                changed["resources"]["peak_rss_kib"] = 200
+            else:
+                peak = et.CAPS["max_rss_kib"]+1
+                changed["steps"][0]["peak_observation"]["peak_rss_kib"] = peak
+                changed["resources"]["peak_rss_kib"] = peak
+            with self.subTest(corruption=corruption), self.assertRaises(et.wg.BenchmarkError):
+                et.verify_unit(self.manifest, unit, et.wg.sealed(changed))
+
+    def test_failed_attempt_mid_decision_peak_preserved_in_aggregate(self):
+        unit = et.units("pilot", self.roots, (24,))[0]
+        wait4 = dict(USAGE, peak_rss_kib=80)
+        FakeSeat.failure = et.wg.BenchmarkError("fixture incomplete decision")
+        try:
+            with patch.object(FakeSeat, "abort", return_value=wait4):
+                result = self.measured(unit)
+        finally:
+            FakeSeat.failure = None
+        self.assertEqual(result["status"], "failed")
+        result["failed_attempt"]["peak_observation"] = {"user_cpu_ns": 1, "system_cpu_ns": 0, "peak_rss_kib": 900}
+        result["resources"]["peak_rss_kib"] = 900
+        result = et.wg.sealed(result)
+        self.assertEqual(et.process_resources(result["seat_processes"], result["steps"], result["failed_attempt"])["peak_rss_kib"], 900)
+        et.verify_unit(self.manifest, unit, result)
+        self.assertEqual(result["failed_attempt"]["before_usage"]["peak_rss_kib"], 100)
+        self.assertEqual(result["seat_processes"]["B"]["peak_rss_kib"], 80)
+        changed = copy.deepcopy(result)
+        changed["resources"]["peak_rss_kib"] = 100
+        with self.assertRaisesRegex(et.wg.BenchmarkError, "aggregate"):
+            et.verify_unit(self.manifest, unit, et.wg.sealed(changed))
+
+    def test_rss_cap_enforced_on_both_raw_sources_and_failures_reverify(self):
+        unit = et.units("pilot", self.roots, (24,))[0]
+        over = dict(USAGE, peak_rss_kib=et.CAPS["max_rss_kib"]+1)
+        for source in ("proc-before", "proc-after", "wait4"):
+            with self.subTest(source=source), contextlib.ExitStack() as patches:
+                if source.startswith("proc"):
+                    observations = iter([over, dict(USAGE)] if source == "proc-before" else [dict(USAGE), over])
+                    patches.enter_context(patch.object(et.wg, "proc_usage", side_effect=lambda _pid: next(observations)))
+                else:
+                    patches.enter_context(patch.object(FakeSeat, "close", return_value=over))
+                    patches.enter_context(patch.object(FakeSeat, "abort", return_value=over))
+                result = self.measured(unit)
+                self.assertEqual(result["status"], "failed")
+                self.assertIn("RSS", result["failure"])
+                self.assertEqual(result["resources"]["peak_rss_kib"], over["peak_rss_kib"])
+                if source.startswith("proc"):
+                    self.assertIsNotNone(result["failed_attempt"])
+                    self.assertEqual(result["seat_processes"]["B"]["peak_rss_kib"], 100)
+                else:
+                    self.assertTrue(result["steps"])
+                    self.assertEqual(result["seat_processes"]["B"]["peak_rss_kib"], over["peak_rss_kib"])
+
+    def test_relaxed_rss_relationship_keeps_wait4_cpu_reconciliation(self):
+        unit = et.units("pilot", self.roots, (24,))[0]
+        with patch.object(et.wg, "proc_usage", return_value=dict(USAGE, peak_rss_kib=200)):
+            result = self.measured(unit)
+        changed = copy.deepcopy(result)
+        step = changed["steps"][0]
+        step["cpu_after"] = dict(step["cpu_after"])
+        step["cpu_after"]["user_cpu_ns"] = step["cpu_before"]["user_cpu_ns"]+2
+        step["decision_cpu_ns"] = 2
+        changed = et.wg.sealed(changed)
+        with self.assertRaisesRegex(et.wg.BenchmarkError, "CPU exceeds wait4"):
+            et.verify_unit(self.manifest, unit, changed)
 
     def test_interrupted_unit_not_saved_completed_unit_resumes(self):
         rows = et.units("pilot", self.roots, (24,))[:2]

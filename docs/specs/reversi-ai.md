@@ -762,8 +762,13 @@ RSS is the absolute cumulative process/segment peak, never a per-game difference
 or an independent per-game peak. Segment closure records wait4 CPU and peak RSS
 for reconciliation, including enforcement of the RSS cap against the final
 segment peak. Persistent reports label completed-game checkpoint aggregates
-separately from segment aggregates; segment totals include process overhead
-and measured work in an interrupted game. After process loss, remaining games start from empty caches,
+separately from segment aggregates. Raw wait4 RSS remains separate from sampled
+VmHWM. Either peak may be larger, and sampled peaks need not be monotonic.
+Both are capped; game RSS
+aggregates use the largest available raw observation, including the largest
+polling sample retained during a decision. CPU differences remain
+monotonic and reconcile against segment CPU totals. Segment totals include process
+overhead and measured work in an interrupted game. After process loss, remaining games start from empty caches,
 without replaying completed games. The interrupted game is measured again in full.
 Session/segment startup and shutdown distinguish resumed segments from one
 uninterrupted eight-game process lifetime.
@@ -842,8 +847,19 @@ Reports distinguish each seat's first exact root from its later roots. They show
 exact node/time changes, whole-game fractions, phase depths and legal-move counts.
 
 Per-decision CPU samples use process-counter differences and process peak RSS.
-Final wait4 samples reconcile whole-unit resources. Reports limit their claims
-to the measured run and state the lack of repeats.
+The raw sampled VmHWM and final wait4 RSS are separate observations; either may
+be larger. Sampled VmHWM need not be monotonic. Each raw peak is checked against
+the cap, and the unit RSS aggregate is their maximum, including the largest
+polling sample retained during a decision. CPU counters retain their
+monotonic and wait4 reconciliation checks.
+
+A harness correction may import saved pilot units through an explicitly pinned
+source manifest and unit files. Binary, source, artifact, host, roots, caps and
+search conditions must match. Each source unit is independently verified;
+the new receipt retains its source digest and changes only manifest binding
+and recalculated resource aggregate. Source files remain immutable.
+
+Reports limit their claims to the measured run and state the lack of repeats.
 
 Plan 0040 leaves adoption to the human. Raising production thresholds needs a
 separate specification/manifest update.

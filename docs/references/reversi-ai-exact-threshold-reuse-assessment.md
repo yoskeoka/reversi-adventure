@@ -1,7 +1,7 @@
 # 空き16/20/24・局内完全読み再利用の評価記録
 
-2026-10-04時点では測定基盤を実装し、入力を監査・補完した。pilot/full/独立Oracleの長時間測定は
-起動していない。速度改善や採用候補を示す実測証拠はまだない。0041はactiveのまま残し、
+2026-10-04時点では測定基盤を実装し、入力を監査・補完した。人間がpilotを起動し、
+1windowを保存した後、2window目のRSS検証で停止した。速度改善や採用候補を示す実測証拠はまだない。0041はactiveのまま残し、
 production exact=16と0018の候補対戦設定は維持する。
 
 ## 入力監査と承認された補完
@@ -59,6 +59,11 @@ prepareは `rtk make benchmark-exact-threshold-prepare EXACT_THRESHOLD_PREPARE_A
 `--output-dir`、binaryの `--source-revision`、実行checkoutの `--harness-revision`。
 revisionは40桁のcommit SHAで固定する。prepareはreset protocolの短いprobeだけを行い、探索を開始しない。
 
+harnessの修正後に保存済みpilotを引き継ぐ場合は、prepareへ `--resume-manifest <元manifest>` を渡す。
+元manifestと保存済みunitをdigestで固定し、binary/source/artifact/host/roots/caps/search条件の一致と
+元harnessのcommitを検証する。新しいdirectoryに出所付きreceiptを生成し、元ファイルは変更しない。
+未保存のwindowは再実行する。
+
 prepare完了後、人間が表示された `rtk bash /absolute/path/run-exact-threshold.sh` を別terminalで1回実行する。
 scriptはpilot→独立Oracle→gate→full→独立Oracle→assessmentを同一hostで逐次実行する。
 再開も同じ1行。`--progress-every N` をscriptへ追加できる。
@@ -86,3 +91,18 @@ rtk bash .local/reversi-ai-whole-game-0035/run-exact-threshold-0041.sh
 script生成と入力のoffline検証だけをagentが行う。測定開始・待機・監視は行わない。
 このlauncherは最後に準備したHEADのscriptを呼ぶ。以前のmanifest/scriptは元のdirectoryへ保存し、上書きしない。
 人間の測定後、同じworktreeで `rtk python3 tools/reversi-ai-benchmark/exact_threshold.py verify --manifest <launcherが使うdirectory>/manifest.json` を使って再検証する。
+
+## RSS検証停止の修正
+
+最初の実行はharness `c3fdcfaeae4d2869f0c56c3dcf5e76f24d22d206` で、
+`pilot-16-8-turn-window-1-seat0` を保存した。2window目は
+`decision resource totals mismatch` で停止し、unitは未保存だった。
+
+原因は実行中の `/proc` VmHWMが終了時のwait4 RSS以下になるという検証条件だった。
+短い8 MiB child probeでもVmHWM 16,524 KiB、wait4 16,440 KiBとなり再現した。
+生値はworkspace `.local/reversi-ai-whole-game-0035/rss-accounting-probe.json` に保存した。
+Linuxの[proc_pid_status(5)](https://man7.org/linux/man-pages/man5/proc_pid_status.5.html)は
+VmHWMの値をinaccurateと記載している。
+
+修正後は両方の生値を保持して最大値をunit RSSに使い、各値の上限を検証する。
+CPU差分とwait4合計の照合は維持する。保存済み1windowは上の引継ぎ手順で再利用する。

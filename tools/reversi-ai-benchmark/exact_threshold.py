@@ -152,6 +152,42 @@ def harness_paths():
     return [*prep.harness_paths(), Path(__file__).resolve()]
 
 
+def resume_sources(m):
+    resume = m.get("resume")
+    if not resume:
+        return []
+    old = prep.load(prep.check_pin(resume["manifest"]))
+    verify_seal(old)
+    wg.require(old["version"] == VERSION, "resume source version mismatch")
+    for key in ("source_revision", "host", "inputs", "caps", "roots", "source_report_digest",
+                "cache_lifetime", "reset_protocol", "oracle_cwd", "pilot_units", "pilot_total"):
+        wg.require(old[key] == m[key], f"resume source {key} mismatch")
+    wg.require(re.fullmatch(r"[0-9a-f]{40}", old["harness_revision"]), "resume harness revision invalid")
+    wg.require([p["path"] for p in old["harness_files"]] == [str(p.resolve()) for p in harness_paths()],
+               "resume harness registry mismatch")
+    for item in old["harness_files"]:
+        relative = Path(item["path"]).relative_to(prep.ROOT)
+        raw = subprocess.check_output(["git", "-C", str(prep.ROOT), "show", f"{old['harness_revision']}:{relative}"])
+        wg.require(hashlib.sha256(raw).hexdigest() == item["sha256"], "resume source harness differs from recorded commit")
+    results, seen = [], set()
+    for pin in resume["units"]:
+        raw = prep.load(prep.check_pin(pin))
+        unit = raw["unit"]
+        wg.require(unit in m["pilot_units"] and unit["id"] not in seen, "resume source unit duplicate/unknown")
+        wg.require(Path(pin["path"]) == unit_path(Path(old["output_directory"])/"pilot", unit),
+                   "resume source unit path mismatch")
+        seen.add(unit["id"])
+        verify_seal(raw)
+        resources = process_resources(raw["seat_processes"], raw["steps"], raw["failed_attempt"])
+        wg.require(raw["resources"] in (process_resources(raw["seat_processes"]), resources),
+                   "resume source resource aggregate mismatch")
+        verify_unit(old, unit, wg.sealed({**raw, "resources": resources}))
+        results.append(wg.sealed({**raw, "manifest_digest": m["report_digest"],
+            "resources": resources,
+            "imported_from": {"manifest": resume["manifest"], "unit": pin, "report_digest": raw["report_digest"]}}))
+    return results
+
+
 def prepare(args) -> Path:
     Progress().emit("verify", LAST_PROGRESS["unit"], 0, 24, "running")
     wg.require(sys.platform == "linux", "CPU/RSS assessment requires Linux")
@@ -168,16 +204,25 @@ def prepare(args) -> Path:
         wg.require(os.access(inputs[name]["path"], os.X_OK), "input binary is not executable")
     # Probe protocol only: no decision search or long measurement during prepare.
     prep.probe_reset(args.cli_binary, args.artifact, CAPS["timeout_seconds"])
+    resume_path = getattr(args, "resume_manifest", None)
+    resume = None
+    if resume_path:
+        old = prep.load(resume_path)
+        folder = Path(old["output_directory"])/"pilot"
+        resume = {"manifest": prep.pin(resume_path), "units": [prep.pin(p) for p in sorted(folder.glob("*.json"))]}
     manifest = wg.sealed({"version": VERSION, "source_revision": args.source_revision,
         "harness_revision": args.harness_revision, "harness_files": [prep.pin(p) for p in harness_paths()],
         "host": prep.host(), "inputs": inputs, "caps": CAPS, "roots": roots,
         "source_report_digest": source["report_digest"], "cache_lifetime": "one-game",
         "reset_protocol": "new_game-v1", "output_directory": str(args.output_dir),
         "oracle_cwd": str((args.oracle_cwd or args.oracle_binary.parent).resolve(strict=True)),
-        "pilot_units": units("pilot", roots), "pilot_total": 24})
+        "pilot_units": units("pilot", roots), "pilot_total": 24, "resume": resume})
+    imported = resume_sources(manifest)
     args.output_dir.mkdir(parents=True)
     path = args.output_dir / "manifest.json"
     wg.atomic_write(path, manifest)
+    for result in imported:
+        wg.atomic_write(unit_path(args.output_dir/"pilot", result["unit"]), result)
     script = args.output_dir / "run-exact-threshold.sh"
     command = " ".join(shlex.quote(p) for p in ["rtk", "python3", str(Path(__file__).resolve()), "run", "--manifest", str(path)])
     prep.atomic(script, ("#!/usr/bin/env bash\nset -euo pipefail\n"+command+' "$@"\n').encode())
@@ -202,6 +247,7 @@ def verify_manifest(path: Path) -> dict:
     wg.require(m["roots"] == freeze_roots(source) and m["source_report_digest"] == source["report_digest"], "root selection changed")
     wg.require(m["pilot_units"] == units("pilot", m["roots"]) and m["pilot_total"] == 24
                and m["cache_lifetime"] == "one-game" and m["reset_protocol"] == "new_game-v1", "pilot identity mismatch")
+    resume_sources(m)
     return m
 
 
@@ -218,10 +264,16 @@ def reached(unit, board, side):
     return terminal(board, side) or unit["stage"] == "pilot" and board.count(".") <= 12
 
 
-def process_resources(usages):
+def process_resources(usages, steps=(), attempt=None):
+    peaks = [v["peak_rss_kib"] for v in usages.values()]
+    peaks.extend(raw["peak_rss_kib"] for step in steps for raw in (step["cpu_before"], step["cpu_after"]))
+    peaks.extend(step["peak_observation"]["peak_rss_kib"] for step in steps if step.get("peak_observation"))
+    if attempt:
+        peaks.extend(attempt[k]["peak_rss_kib"] for k in ("before_usage", "after_usage", "last_resource_observation", "peak_observation")
+                     if isinstance(attempt.get(k), dict))
     return {"user_cpu_ns": sum(v["user_cpu_ns"] for v in usages.values()),
             "system_cpu_ns": sum(v["system_cpu_ns"] for v in usages.values()),
-            "peak_rss_kib": max((v["peak_rss_kib"] for v in usages.values()), default=0)}
+            "peak_rss_kib": max(peaks, default=0)}
 
 
 def measure_unit(m, unit) -> dict:
@@ -251,6 +303,7 @@ def measure_unit(m, unit) -> dict:
             finally:
                 attempt["observed_elapsed_ns"] = time.monotonic_ns()-decision_started
                 attempt["last_resource_observation"] = getattr(seat, "last_observation", None)
+                attempt["peak_observation"] = getattr(seat, "peak_observation", None)
                 seat.collect_diagnostics()
                 attempt["observed_search"] = seat.diagnostics.get(attempt["id"])
             after = wg.proc_usage(seat.process.pid)
@@ -262,8 +315,10 @@ def measure_unit(m, unit) -> dict:
                 cpu_before=before, cpu_after=after,
                 decision_cpu_ns=after["user_cpu_ns"]+after["system_cpu_ns"]-before["user_cpu_ns"]-before["system_cpu_ns"],
                 process_peak_rss_kib=after["peak_rss_kib"])
+            if attempt["peak_observation"] is not None:
+                step["peak_observation"] = attempt["peak_observation"]
             wg.validate_cli_diagnostic(step, sample, unit["depth"], unit["threshold"])
-            wg.require(after["peak_rss_kib"] <= CAPS["max_rss_kib"], "peak RSS cap exceeded")
+            wg.require(process_resources({}, [step])["peak_rss_kib"] <= CAPS["max_rss_kib"], "peak RSS cap exceeded")
             wg.require(unit["stage"] != "pilot" or sample["nodes"] <= CAPS["pilot_node_limit"], "pilot node cap exceeded")
             steps.append(step)
             attempt = None
@@ -274,7 +329,7 @@ def measure_unit(m, unit) -> dict:
             raise wg.BenchmarkError("assessment exceeded maximum decisions")
         for label, seat in seats.items():
             usages[label] = seat.close()
-        wg.require(process_resources(usages)["peak_rss_kib"] <= CAPS["max_rss_kib"], "peak RSS cap exceeded")
+        wg.require(process_resources(usages, steps)["peak_rss_kib"] <= CAPS["max_rss_kib"], "peak RSS cap exceeded")
     except KeyboardInterrupt:
         interrupted = True
         raise
@@ -290,7 +345,7 @@ def measure_unit(m, unit) -> dict:
         "status": "failed" if failure else "completed", "failure": failure, "failed_attempt": attempt,
         "session_id": uuid.uuid4().hex, "started_at_ns": timestamp, "ended_at_ns": time.time_ns(),
         "wall_ns": time.monotonic_ns()-started, "steps": steps, "reset_events": resets,
-        "seat_processes": usages, "resources": process_resources(usages), "end_board": board, "end_side": side})
+        "seat_processes": usages, "resources": process_resources(usages, steps, attempt), "end_board": board, "end_side": side})
 
 
 def verify_unit(m, unit, result):
@@ -305,7 +360,7 @@ def verify_unit(m, unit, result):
     for item in usages.values():
         wg.require(all(type(item.get(k)) is int and item[k] >= 0 for k in
             ("user_cpu_ns", "system_cpu_ns", "peak_rss_kib", "startup_ns", "shutdown_ns")), "raw resources missing")
-    wg.require(result["resources"] == process_resources(usages), "unit resource aggregate mismatch")
+    wg.require(result["resources"] == process_resources(usages, result["steps"], result["failed_attempt"]), "unit resource aggregate mismatch")
     board, side = unit["start"]["board"], unit["start"]["side"]
     wg.require(isinstance(result["steps"], list) and len(result["steps"]) <= CAPS["max_decisions"], "unit step count invalid")
     for turn, step in enumerate(result["steps"]):
@@ -320,10 +375,19 @@ def verify_unit(m, unit, result):
         wg.validate_cli_diagnostic(step, step["search"], unit["depth"], unit["threshold"])
         wg.require(unit["stage"] != "pilot" or step["search"]["nodes"] <= CAPS["pilot_node_limit"], "node cap violated")
         before, after = step["cpu_before"], step["cpu_after"]
+        if "peak_observation" in step:
+            raw = step["peak_observation"]
+            wg.require(isinstance(raw, dict) and set(raw) == {"user_cpu_ns", "system_cpu_ns", "peak_rss_kib"}
+                       and all(type(raw[k]) is int and raw[k] >= 0 for k in raw)
+                       and raw["peak_rss_kib"] <= CAPS["max_rss_kib"]
+                       and all(before[k] <= raw[k] <= after[k] for k in ("user_cpu_ns", "system_cpu_ns")),
+                       "decision polling resources invalid")
         for key in ("user_cpu_ns", "system_cpu_ns", "peak_rss_kib"):
-            wg.require(type(before.get(key)) is int and type(after.get(key)) is int and 0 <= before[key] <= after[key], "decision raw resources invalid")
+            wg.require(type(before.get(key)) is int and type(after.get(key)) is int and before[key] >= 0 and after[key] >= 0
+                       and (key == "peak_rss_kib" or before[key] <= after[key]), "decision raw resources invalid")
         wg.require(step["decision_cpu_ns"] == after["user_cpu_ns"]+after["system_cpu_ns"]-before["user_cpu_ns"]-before["system_cpu_ns"]
-                   and step["process_peak_rss_kib"] == after["peak_rss_kib"] <= usages[label]["peak_rss_kib"]
+                   and step["process_peak_rss_kib"] == after["peak_rss_kib"]
+                   and max(before["peak_rss_kib"], after["peak_rss_kib"]) <= CAPS["max_rss_kib"]
                    and type(step["decision_elapsed_ns"]) is int and step["decision_elapsed_ns"] >= 0, "decision resource totals mismatch")
         if move != "pass":
             board = wg.oracle.apply_move(board, side, move)
@@ -501,6 +565,7 @@ def run_units(m, rows, directory, progress, verify_only=False):
     directory.mkdir(parents=True, exist_ok=True)
     known = {u["id"] for u in rows}
     results = {}
+    imports = {r["unit"]["id"]: r for r in resume_sources(m)}
     for path in directory.iterdir():
         if path.name.startswith(".unfinished-"):
             continue
@@ -508,6 +573,8 @@ def run_units(m, rows, directory, progress, verify_only=False):
         unit = next(u for u in rows if u["id"] == path.stem)
         result = prep.load(path)
         verify_unit(m, unit, result)
+        if unit["id"] in imports or "imported_from" in result:
+            wg.require(result == imports.get(unit["id"]), "imported unit provenance mismatch")
         results[unit["id"]] = result
     for index, unit in enumerate(rows):
         if unit["id"] in results:
@@ -661,6 +728,7 @@ def assessment_summary(results, receipts, admitted, reasons):
 
 def preflight(m, directory):
     """Recompute saved derived evidence before starting any process."""
+    imported = {r["unit"]["id"]: r for r in resume_sources(m)}
     known = {u["id"]: u for u in m["pilot_units"]}
     gate_path, gate = directory/"full-manifest.json", None
     if gate_path.exists():
@@ -683,6 +751,8 @@ def preflight(m, directory):
                        and known[file.stem]["stage"] == stage, "unknown saved stage unit")
             result = prep.load(file)
             verify_unit(m, known[file.stem], result)
+            if file.stem in imported or "imported_from" in result:
+                wg.require(result == imported.get(file.stem), "imported unit provenance mismatch")
             sources[file.stem] = result
     ordered = {stage: [sources[u["id"]] for u in known.values()
                        if u["stage"] == stage and u["id"] in sources]
@@ -777,6 +847,7 @@ def main(argv=None):
     for name in ("cli-binary", "oracle-binary", "artifact", "source-report", "output-dir"):
         p.add_argument("--"+name, type=Path, required=True)
     p.add_argument("--oracle-cwd", type=Path)
+    p.add_argument("--resume-manifest", type=Path)
     p.add_argument("--source-revision", required=True)
     p.add_argument("--harness-revision", required=True)
     for name in ("run", "pilot", "verify", "verify-inputs"):
