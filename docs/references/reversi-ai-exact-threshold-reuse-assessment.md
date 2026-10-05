@@ -143,3 +143,30 @@ projectのterminal scoreはwipeout以外で石数差を使う一方、固定Egar
 勝者へ加算する。終局評価の違いが1点差を説明する可能性があるが、該当するterminal leafは
 保存されておらず、原因の確証やroot点数の機械的な変換は行わない。
 新測定も点数不一致を失敗として保存し、full/adoptionのgateを通さない。
+
+## node上限なしのpilotと終了待機の修正
+
+人間がharness `32f62173e34e5ec6b1e4b7b8c6cc12d6fed77a09` のrunを完了した。
+元directoryはworkspace `.local/reversi-ai-whole-game-0035/exact-threshold-0041-32f6217/`、
+manifest digestは `f76e7e7d988ed5b7c1657584492ee464d9def48be8e180081521ecee4f80868a`。
+全証拠のoffline verifyは通ったが、fullへ進めた閾値はまだない。
+
+| 閾値 | 完成 / 失敗window | 失敗理由 |
+| --- | --- | --- |
+| 16 | 8 / 0 | — |
+| 20 | 8 / 0 | — |
+| 24 | 4 / 4 | 黒window1/2が両scopeで約309秒のCLI時間上限に到達 |
+
+Oracleは全112位置がRSS取得エラーの失敗として保存された。全112processの最終wait4は
+終了status/returncodeとも0、peak RSSは1,394,040–1,394,512 KiBで上限内だった。
+即座のwait4再確認でも終了処理が済んでいない間は回収できず、前回修正はこの間を失敗にしていた。
+
+修正後はRSSが消えた際にLinuxの終了flag/stateを観測する。
+`PF_EXITING` はメモリ情報の解放より前に設定され、親への終了通知は後になる。
+根拠はLinuxの[do_exit](https://github.com/torvalds/linux/blob/v6.18/kernel/exit.c#L862)と
+[PF_EXITING定義](https://github.com/torvalds/linux/blob/v6.18/include/linux/sched.h#L1631)。
+終了途中を示す生値があれば既存deadline内でwait4をpollし、正常終了と最終RSS上限を確認する。
+終了を観測できない生存processのRSS欠落、deadline超過、異常終了、RSS超過は失敗のまま残す。
+
+新しいmanifestは同じ探索条件の24pilotを出所付きで引き継ぎ、Oracleから再開する。
+元112失敗は書き換えず保持する。点数不一致のgateも維持する。

@@ -854,9 +854,11 @@ polling sample retained during a decision. CPU counters retain their
 monotonic and wait4 reconciliation checks.
 
 If Oracle exits between a nonblocking wait and a live RSS sample, the runner
-rechecks wait4. A confirmed exit with status zero and final resources within
-the cap may complete without a final live sample. A missing sample while the
-process is still running remains a failure. Receipts retain the exit status;
+rechecks wait4. If the kernel reports an exiting process before wait4 can reap
+it, the runner retains that raw exit observation and polls until the existing
+deadline. It accepts only status zero and final resources within the cap.
+Missing RSS from a process without an observed exit remains a failure.
+Receipts retain the exit status;
 stdout and resource data alone do not recover a failed historical receipt
 whose exit status was not recorded.
 

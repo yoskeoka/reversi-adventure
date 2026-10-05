@@ -440,6 +440,19 @@ def oracle_jobs(results):
             for index, step in enumerate(result["steps"]) if step["search"]["exact"]]
 
 
+def proc_exit_observation(pid):
+    """Linux PF_EXITING is set before exit_mm, before wait4 can reap the task."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return {"missing": True, "exiting": True}
+    fields = raw[raw.rfind(")")+2:].split()
+    state, flags = fields[0], int(fields[6])
+    # include/linux/sched.h: PF_EXITING=0x4; stat field 9 exposes task flags.
+    return {"stat": raw, "state": state, "flags": flags,
+            "exiting": bool(flags & 0x4) or state in ("X", "Z")}
+
+
 def measured_oracle(argv, *, cwd, timeout, observations):
     """Bound an independent solve and retain CPU/RSS plus raw console output."""
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
@@ -453,10 +466,11 @@ def measured_oracle(argv, *, cwd, timeout, observations):
             receipt.update(exit_status=status, returncode=process.returncode,
                 resources={"user_cpu_ns": round(usage.ru_utime*1e9),
                            "system_cpu_ns": round(usage.ru_stime*1e9), "peak_rss_kib": usage.ru_maxrss})
+        exiting = False
         try:
             while True:
                 pid, status, usage = os.wait4(process.pid, os.WNOHANG)
-                if not pid:
+                if not pid and not exiting:
                     try:
                         receipt["last_observation"] = wg.proc_usage(process.pid)
                     except (FileNotFoundError, wg.BenchmarkError) as exc:
@@ -466,13 +480,18 @@ def measured_oracle(argv, *, cwd, timeout, observations):
                         receipt["sampling_failure"] = str(exc)
                         pid, status, usage = os.wait4(process.pid, os.WNOHANG)
                         if not pid:
-                            raise
+                            receipt["exit_observation"] = proc_exit_observation(process.pid)
+                            if not receipt["exit_observation"]["exiting"]:
+                                raise
+                            exiting = True
                 if pid:
                     record_exit(status, usage)
+                    wg.require(time.monotonic() < deadline, "Oracle decision timeout")
                     wg.require(process.returncode == 0, "Oracle process failed")
                     wg.require(usage.ru_maxrss <= CAPS["max_rss_kib"], "Oracle peak RSS cap exceeded")
                     break
-                wg.require(receipt["last_observation"]["peak_rss_kib"] <= CAPS["max_rss_kib"], "Oracle peak RSS cap exceeded")
+                if receipt["last_observation"] is not None:
+                    wg.require(receipt["last_observation"]["peak_rss_kib"] <= CAPS["max_rss_kib"], "Oracle peak RSS cap exceeded")
                 wg.require(time.monotonic() < deadline, "Oracle decision timeout")
                 time.sleep(0.02)
         finally:
@@ -554,6 +573,23 @@ def verify_position(m, job, result):
                    and raw["completed_depth"] >= board.count(".")
                    and sign*int(raw["value"]) == score, "Oracle raw solve mismatch")
         argv, resources = observation["argv"], observation["resources"]
+        if "exit_observation" in observation:
+            exit_raw = observation["exit_observation"]
+            wg.require(isinstance(exit_raw, dict) and exit_raw.get("exiting") is True
+                       and isinstance(observation.get("sampling_failure"), str)
+                       and bool(observation["sampling_failure"]), "Oracle exit observation invalid")
+            if "missing" in exit_raw:
+                wg.require(set(exit_raw) == {"missing", "exiting"} and exit_raw["missing"] is True,
+                           "Oracle exit observation invalid")
+            else:
+                wg.require(set(exit_raw) == {"stat", "state", "flags", "exiting"}
+                           and isinstance(exit_raw["stat"], str), "Oracle exit observation invalid")
+                fields = exit_raw["stat"][exit_raw["stat"].rfind(")")+2:].split()
+                wg.require(len(fields) > 6 and fields[6].isdigit(), "Oracle exit observation invalid")
+                flags = int(fields[6])
+                wg.require(type(exit_raw["flags"]) is int and exit_raw["flags"] == flags
+                           and exit_raw["state"] == fields[0] and (flags & 0x4 or fields[0] in ("X", "Z")),
+                           "Oracle exit observation invalid")
         wg.require(type(observation.get("exit_status")) is int
                    and type(observation.get("returncode")) is int
                    and observation["returncode"] == 0

@@ -861,6 +861,41 @@ class ExactThresholdTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaises((et.wg.BenchmarkError, et.wg.oracle.OracleError)):
                 et.verify_position(self.manifest, changed["job"], changed)
 
+    def test_completed_oracle_exit_observation_matches_raw_stat_or_missing_shape(self):
+        result = self.measured(et.units("pilot", self.roots, (24,))[0])
+        base = self.receipts([result])[0]
+        raw_stat = "42 (oracle (worker) name) R 1 2 3 4 5 4 0 0"
+        valid_stat = {"stat": raw_stat, "state": "R", "flags": 4, "exiting": True}
+        for exit_raw in (valid_stat, {"missing": True, "exiting": True}):
+            receipt = copy.deepcopy(base)
+            observation = receipt["process_observations"][0]
+            observation.update(exit_observation=exit_raw, sampling_failure="process peak RSS is unavailable")
+            with self.subTest(valid=exit_raw):
+                et.verify_position(self.manifest, receipt["job"], et.wg.sealed(receipt))
+        for mutation in ("raw-flags", "flags", "state", "exiting", "missing-failure", "empty-failure", "missing-shape", "missing-false"):
+            receipt = copy.deepcopy(base)
+            observation = receipt["process_observations"][0]
+            observation.update(exit_observation=copy.deepcopy(valid_stat), sampling_failure="process peak RSS is unavailable")
+            exit_raw = observation["exit_observation"]
+            if mutation == "raw-flags":
+                exit_raw["stat"] = raw_stat.replace("5 4 0 0", "5 0 0 0")
+            elif mutation == "flags":
+                exit_raw["flags"] = 0
+            elif mutation == "state":
+                exit_raw["state"] = "Z"
+            elif mutation == "exiting":
+                exit_raw["exiting"] = False
+            elif mutation == "missing-failure":
+                observation.pop("sampling_failure")
+            elif mutation == "empty-failure":
+                observation["sampling_failure"] = ""
+            elif mutation == "missing-shape":
+                observation["exit_observation"] = {"missing": True, "exiting": True, "stat": raw_stat}
+            else:
+                observation["exit_observation"] = {"missing": False, "exiting": True}
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(et.wg.BenchmarkError, "exit observation invalid"):
+                et.verify_position(self.manifest, receipt["job"], et.wg.sealed(receipt))
+
     def test_gate_all_four_both_scopes_complete_matching_and_oracle(self):
         pilots = self.pilots()
         receipts = self.receipts(pilots)
@@ -918,6 +953,7 @@ class OracleExitRaceTests(unittest.TestCase):
         with patch.object(et.subprocess, "Popen", side_effect=started), \
              patch.object(et.os, "wait4", side_effect=waits), \
              patch.object(et.wg, "proc_usage", side_effect=snapshots), \
+             patch.object(et, "proc_exit_observation", return_value={"missing": False, "exiting": False, "state": "R", "flags": 0}, create=True), \
              patch.object(et.time, "sleep"):
             try:
                 result = et.measured_oracle(["fake-oracle"], cwd=Path("/tmp"), timeout=2,
@@ -994,6 +1030,115 @@ class OracleExitRaceTests(unittest.TestCase):
                 self.assertIn(message, str(result))
                 self.assertEqual(receipt["exit_status"], status)
                 self.assertFalse(killed)
+
+    def delayed_exit(self, *, status=0, rss=100, timeout=False):
+        killed, observations = [], []
+        monotonic = et.time.monotonic
+        process = SimpleNamespace(pid=42, returncode=None, kill=lambda: killed.append(True))
+        usage = SimpleNamespace(ru_utime=0.1, ru_stime=0.2, ru_maxrss=rss)
+        waits = [(0, 0, None)]*6 + [(42, status, usage)]
+        calls = 0
+        def sample(_pid):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return dict(USAGE)
+            raise et.wg.BenchmarkError("process peak RSS is unavailable")
+        def started(_argv, *, cwd, stdout, stderr):
+            stdout.write(b"completed raw stdout\n")
+            stderr.write(b"retained raw stderr\n")
+            return process
+        with patch.object(et.subprocess, "Popen", side_effect=started), \
+             patch.object(et.os, "wait4", side_effect=waits if not timeout else [(0, 0, None)]*3+[(42, 9, usage)]), \
+             patch.object(et.wg, "proc_usage", side_effect=sample), \
+             patch.object(et, "proc_exit_observation", return_value={"raw_stat": "42 (exiting worker) R 1 2 3 4 5 4", "state": "R", "flags": 4, "exiting": True}, create=True) as state, \
+             patch.object(et.time, "monotonic", side_effect=[0, 0, 3] if timeout else monotonic), \
+             patch.object(et.time, "sleep") as sleep:
+            try:
+                result = et.measured_oracle(["fake-oracle"], cwd=Path("/tmp"), timeout=2, observations=observations)
+            except et.wg.BenchmarkError as exc:
+                result = exc
+        self.assertEqual(len(observations), 1)
+        self.assertTrue(state.called)
+        self.assertTrue(sleep.called)
+        receipt = observations[0]
+        self.assertEqual(receipt["resources"]["peak_rss_kib"], rss)
+        self.assertEqual(receipt["stdout"], "completed raw stdout\n")
+        self.assertEqual(receipt["stderr"], "retained raw stderr\n")
+        return result, receipt, killed
+
+    def test_exit_teardown_waits_for_delayed_final_wait4_without_zero_resources(self):
+        result, receipt, killed = self.delayed_exit()
+        self.assertIsInstance(result, subprocess.CompletedProcess)
+        self.assertEqual(receipt["returncode"], 0)
+        self.assertEqual(receipt["exit_status"], 0)
+        self.assertFalse(killed)
+
+    def test_delayed_reap_still_rejects_nonzero_exit_and_final_rss_over_cap(self):
+        for status, rss, message in ((3 << 8, 100, "Oracle process failed"),
+                                     (0, et.CAPS["max_rss_kib"]+1, "RSS cap exceeded")):
+            with self.subTest(status=status, rss=rss):
+                result, receipt, killed = self.delayed_exit(status=status, rss=rss)
+                self.assertIsInstance(result, et.wg.BenchmarkError)
+                self.assertIn(message, str(result))
+                self.assertEqual(receipt["exit_status"], status)
+                self.assertFalse(killed)
+
+    def test_exit_teardown_deadline_aborts_and_records_reaped_resources(self):
+        result, receipt, killed = self.delayed_exit(timeout=True)
+        self.assertIsInstance(result, et.wg.BenchmarkError)
+        self.assertIn("timeout", str(result))
+        self.assertEqual(killed, [True])
+        self.assertEqual(receipt["returncode"], -9)
+        self.assertEqual(receipt["exit_status"], 9)
+
+    def test_confirmed_normal_exit_after_deadline_fails_with_final_resources_without_abort(self):
+        observations, killed = [], []
+        process = SimpleNamespace(pid=42, returncode=None, kill=lambda: killed.append(True))
+        usage = SimpleNamespace(ru_utime=0.1, ru_stime=0.2, ru_maxrss=100)
+        def started(_argv, *, cwd, stdout, stderr):
+            stdout.write(b"late completed output\n")
+            return process
+        with patch.object(et.subprocess, "Popen", side_effect=started), \
+             patch.object(et.os, "wait4", return_value=(42, 0, usage)) as reap, \
+             patch.object(et.time, "monotonic", side_effect=[0, 3]), \
+             patch.object(et.wg, "proc_usage", side_effect=AssertionError("already reaped")), \
+             self.assertRaisesRegex(et.wg.BenchmarkError, "timeout"):
+            et.measured_oracle(["fake-oracle"], cwd=Path("/tmp"), timeout=2, observations=observations)
+        self.assertEqual(reap.call_count, 1)
+        self.assertEqual(killed, [])
+        self.assertEqual(observations[0]["returncode"], 0)
+        self.assertEqual(observations[0]["exit_status"], 0)
+        self.assertEqual(observations[0]["resources"], {"user_cpu_ns": 100000000, "system_cpu_ns": 200000000, "peak_rss_kib": 100})
+        self.assertEqual(observations[0]["stdout"], "late completed output\n")
+
+    def test_proc_exit_flags_state_and_parenthesized_comm_are_parsed(self):
+        for state, flags, exiting in (("R", 4, True), ("R", 0, False), ("Z", 0, True), ("X", 0, True)):
+            raw = f"42 (worker (nested) name) {state} 1 2 3 4 5 {flags} 0 0"
+            with self.subTest(state=state, flags=flags), patch.object(et.Path, "read_text", return_value=raw):
+                result = et.proc_exit_observation(42)
+            self.assertEqual(result["state"], state)
+            self.assertEqual(result["flags"], flags)
+            self.assertIs(result["exiting"], exiting)
+            self.assertTrue(any(value == raw for value in result.values()))
+
+    def test_proc_exit_missing_file_is_retained_as_exit_observation(self):
+        with patch.object(et.Path, "read_text", side_effect=FileNotFoundError):
+            result = et.proc_exit_observation(42)
+        self.assertIs(result["missing"], True)
+        self.assertIs(result["exiting"], True)
+
+    def test_real_tiny_memory_child_reaps_successfully_three_times(self):
+        code = "import sys; data=bytearray(64*1024*1024); print('allocated', flush=True)"
+        for repetition in range(3):
+            observations = []
+            with self.subTest(repetition=repetition):
+                result = et.measured_oracle([sys.executable, "-c", code], cwd=Path("/tmp"), timeout=2, observations=observations)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "allocated\n")
+                self.assertEqual(observations[0]["returncode"], 0)
+                self.assertEqual(observations[0]["exit_status"], 0)
+                self.assertGreater(observations[0]["resources"]["peak_rss_kib"], 60*1024)
 
 
 if __name__ == "__main__":
