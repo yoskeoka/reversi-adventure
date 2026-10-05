@@ -48,7 +48,7 @@ wall/CPU/RSS、全局時間へどの程度効くかを測る。中盤深度8/12�
    pilotのheuristic設定は12/8/12に固定する。pilot成功は実行可能性の事前確認であり、
    full12/12/12の完了や速度を保証しない。
    閾値16/20/24×turn/gameの6条件、各4window（既知total24window）とする。
-   各decisionは10,000,000 nodeまたは310秒、peak RSS 1,572,864 KiBをpilot上限とする。
+   2026-10-05の人間指示でnode上限を撤廃する。各decisionは310秒、peak RSS 1,572,864 KiBをpilot上限とする。
    未完成resultをexactと扱わず、その条件の失敗reportを保存して同じ失敗を自動再測定しない。
 3. 同一閾値のturn/gameは同じrootと各seatの履歴を使い、move/score/depth/exactness/outcomeが
    一致することを確認する。閾値間で棋譜や点数が変わることは許容し、別workloadとして報告する。
@@ -57,13 +57,13 @@ wall/CPU/RSS、全局時間へどの程度効くかを測る。中盤深度8/12�
    Oracle timeout/未完了は証拠不足として記録し、採用できる成功へ数えない。
 4. 閾値ごとにturn/gameの全4windowが完了し独立Oracle照合が通った条件だけを
    深度12/8×turn/game×8全局へ進める（最大6閾値深度組×2scope×8=96局）。
-   fullではnode capを外し、従来と同じ310秒/decision、RSS capを固定する。
+   fullもnode capなしとし、従来と同じ310秒/decision、RSS capを固定する。
    新binaryの閾値16をcontrolとして測る。旧binaryの既存reportを新条件としてskipしない。
    0039で新binary同設定の完成controlがある場合は検証して利用する。条件の失敗は保存し、
    成功した局だけを抽出して8局平均や改善率を作らない。
 5. 各full条件の8局で比較reportを作り、完全読みのnode/CPU/wall削減、全局wallの割合、
    heuristic8/12の時間と合法手数を報告する。新exact領域を独立Oracleで照合する。
-   改善幅が小さければ反復不足を明記し、有意性を主張しない。pilotのnode制限時間を
+   改善幅が小さければ反復不足を明記し、有意性を主張しない。pilotのwindow時間を
    full-depth速度と混ぜない。閾値24が失敗して20が成功した場合も両方を報告する。
 6. scriptのパラメータをprepareで固定し、人間が1行で起動する。pilotは1window、fullは1局、
    Oracleは1位置が完了単位で、atomic保存→verify→resume/skipを行う。各stage totalはmanifestで
@@ -108,3 +108,9 @@ pilot gate、全局の意味比較・phase/資源集計を実装している。
 
 監査digestと実行手順は [評価記録](../../references/reversi-ai-exact-threshold-reuse-assessment.md) に残す。
 人間pilot/full/Oracleの実測と0040へ渡す候補判断は未完了であり、この計画は削除しない。
+
+2026-10-05、人間がnode制限ありの24window/32Oracle位置を完走した。
+pilotは16が8/8、20が4/8、24が0/8完成。失敗は全て10,000,000 node到達であり、
+Oracleは全件が終了時RSS観測のraceで失敗した。raw Consoleにはwindow2のCLI/Oracle点数不一致もある。
+元の失敗証拠を保持してRSS観測を修正し、人間指示どおりnode上限なしの新manifestを用意する。
+条件変更のため旧pilotをskipせず再測定し、既存の正確性gateを維持する。

@@ -28,7 +28,7 @@ THRESHOLDS = (16, 20, 24)
 SCOPES = ("turn", "game")
 LAST_PROGRESS = {"stage": "verify", "unit": {"threshold": 16, "scope": "turn", "stage": "pilot"}, "done": 0, "total": 24}
 CAPS = {"timeout_seconds": 310, "max_rss_kib": 1572864,
-        "pilot_node_limit": 10000000, "max_decisions": 120,
+        "pilot_node_limit": None, "max_decisions": 120,
         "heuristic_tt_entries": 1048576, "exact_table_entries": 262144}
 
 
@@ -319,7 +319,8 @@ def measure_unit(m, unit) -> dict:
                 step["peak_observation"] = attempt["peak_observation"]
             wg.validate_cli_diagnostic(step, sample, unit["depth"], unit["threshold"])
             wg.require(process_resources({}, [step])["peak_rss_kib"] <= CAPS["max_rss_kib"], "peak RSS cap exceeded")
-            wg.require(unit["stage"] != "pilot" or sample["nodes"] <= CAPS["pilot_node_limit"], "pilot node cap exceeded")
+            wg.require(unit["stage"] != "pilot" or CAPS["pilot_node_limit"] is None
+                       or sample["nodes"] <= CAPS["pilot_node_limit"], "pilot node cap exceeded")
             steps.append(step)
             attempt = None
             if move != "pass":
@@ -373,7 +374,8 @@ def verify_unit(m, unit, result):
         move = step["move"]
         wg.require(move in legal if legal else move == "pass" and not terminal(board, side), "invalid unit move/pass")
         wg.validate_cli_diagnostic(step, step["search"], unit["depth"], unit["threshold"])
-        wg.require(unit["stage"] != "pilot" or step["search"]["nodes"] <= CAPS["pilot_node_limit"], "node cap violated")
+        wg.require(unit["stage"] != "pilot" or CAPS["pilot_node_limit"] is None
+                   or step["search"]["nodes"] <= CAPS["pilot_node_limit"], "node cap violated")
         before, after = step["cpu_before"], step["cpu_after"]
         if "peak_observation" in step:
             raw = step["peak_observation"]
@@ -443,19 +445,33 @@ def measured_oracle(argv, *, cwd, timeout, observations):
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         process = subprocess.Popen(argv, cwd=cwd, stdout=out, stderr=err)
         started, deadline = time.monotonic_ns(), time.monotonic()+timeout
-        receipt = {"argv": [str(p) for p in argv], "wall_ns": 0, "last_observation": None, "resources": None}
+        receipt = {"argv": [str(p) for p in argv], "wall_ns": 0, "last_observation": None,
+                   "resources": None, "exit_status": None, "returncode": None}
         observations.append(receipt)
+        def record_exit(status, usage):
+            process.returncode = os.waitstatus_to_exitcode(status)
+            receipt.update(exit_status=status, returncode=process.returncode,
+                resources={"user_cpu_ns": round(usage.ru_utime*1e9),
+                           "system_cpu_ns": round(usage.ru_stime*1e9), "peak_rss_kib": usage.ru_maxrss})
         try:
             while True:
                 pid, status, usage = os.wait4(process.pid, os.WNOHANG)
+                if not pid:
+                    try:
+                        receipt["last_observation"] = wg.proc_usage(process.pid)
+                    except (FileNotFoundError, wg.BenchmarkError) as exc:
+                        # Exit can remove VmHWM between the nonblocking wait
+                        # and /proc sampling. Final wait4 evidence is required;
+                        # a still-running child with no RSS remains a failure.
+                        receipt["sampling_failure"] = str(exc)
+                        pid, status, usage = os.wait4(process.pid, os.WNOHANG)
+                        if not pid:
+                            raise
                 if pid:
-                    process.returncode = os.waitstatus_to_exitcode(status)
-                    receipt["resources"] = {"user_cpu_ns": round(usage.ru_utime*1e9),
-                        "system_cpu_ns": round(usage.ru_stime*1e9), "peak_rss_kib": usage.ru_maxrss}
+                    record_exit(status, usage)
                     wg.require(process.returncode == 0, "Oracle process failed")
                     wg.require(usage.ru_maxrss <= CAPS["max_rss_kib"], "Oracle peak RSS cap exceeded")
                     break
-                receipt["last_observation"] = wg.proc_usage(process.pid)
                 wg.require(receipt["last_observation"]["peak_rss_kib"] <= CAPS["max_rss_kib"], "Oracle peak RSS cap exceeded")
                 wg.require(time.monotonic() < deadline, "Oracle decision timeout")
                 time.sleep(0.02)
@@ -463,9 +479,7 @@ def measured_oracle(argv, *, cwd, timeout, observations):
             if process.returncode is None:
                 process.kill()
                 _, status, usage = os.wait4(process.pid, 0)
-                process.returncode = os.waitstatus_to_exitcode(status)
-                receipt["resources"] = {"user_cpu_ns": round(usage.ru_utime*1e9),
-                    "system_cpu_ns": round(usage.ru_stime*1e9), "peak_rss_kib": usage.ru_maxrss}
+                record_exit(status, usage)
             receipt["wall_ns"] = time.monotonic_ns()-started
             out.seek(0)
             err.seek(0)
@@ -540,6 +554,11 @@ def verify_position(m, job, result):
                    and raw["completed_depth"] >= board.count(".")
                    and sign*int(raw["value"]) == score, "Oracle raw solve mismatch")
         argv, resources = observation["argv"], observation["resources"]
+        wg.require(type(observation.get("exit_status")) is int
+                   and type(observation.get("returncode")) is int
+                   and observation["returncode"] == 0
+                   and os.waitstatus_to_exitcode(observation["exit_status"]) == 0,
+                   "Oracle normal exit evidence missing")
         wg.require(isinstance(argv, list) and len(argv) >= 2 and argv[-2] == "-solve"
                    and argv == wg.oracle.oracle_argv(Path(m["inputs"]["oracle"]["path"]), profile,
                        solve_path=Path(argv[-1]), child_query=child_query), "Oracle raw command mismatch")
@@ -723,7 +742,7 @@ def assessment_summary(results, receipts, admitted, reasons):
     return wg.sealed({"version": VERSION, "admitted_thresholds": admitted, "pilot_exclusions": reasons,
         "conditions": conditions, "unit_digests": [r["report_digest"] for r in results],
         "oracle_digests": [r["report_digest"] for r in receipts],
-        "interpretation": "Single serial run; no significance claim. Pilot node-capped timings excluded. Production adoption requires human decision in 0040."})
+        "interpretation": "Single serial run; no significance claim. Pilot window timings excluded from full-game comparisons. Production adoption requires human decision in 0040."})
 
 
 def preflight(m, directory):

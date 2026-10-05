@@ -100,7 +100,7 @@ def fake_oracle_solve(replies=None):
 def fake_measured(argv, *, cwd, timeout, observations, fake_stdout):
     observations.append({"argv": list(argv), "wall_ns": 1000, "last_observation": dict(USAGE),
                          "resources": {k: USAGE[k] for k in ("user_cpu_ns", "system_cpu_ns", "peak_rss_kib")},
-                         "stdout": fake_stdout, "stderr": ""})
+                         "stdout": fake_stdout, "stderr": "", "exit_status": 0, "returncode": 0})
     return subprocess.CompletedProcess(argv, 0, fake_stdout, "")
 
 
@@ -278,7 +278,7 @@ class ExactThresholdTests(unittest.TestCase):
                 for field in ("caps", "roots", "pilot_units", "host", "source_report_digest"):
                     changed = copy.deepcopy(manifest)
                     if field == "caps":
-                        changed[field]["pilot_node_limit"] += 1
+                        changed[field]["pilot_node_limit"] = 10000000
                     elif field == "roots":
                         changed[field][0]["assignment"] ^= 1
                     elif field == "pilot_units":
@@ -452,7 +452,7 @@ class ExactThresholdTests(unittest.TestCase):
                 if field == "inputs":
                     changed[field]["artifact"]["sha256"] = "f"*64
                 elif field == "caps":
-                    changed[field]["pilot_node_limit"] += 1
+                    changed[field]["pilot_node_limit"] = 10000000
                 else:
                     changed[field] = "b"*40
                 with self.subTest(field=field), self.assertRaisesRegex(et.wg.BenchmarkError, "resume source"):
@@ -476,6 +476,17 @@ class ExactThresholdTests(unittest.TestCase):
             old["harness_files"][0]["sha256"] = "f"*64
             et.wg.atomic_write(old_path, et.wg.sealed(old))
             with self.assertRaisesRegex(et.wg.BenchmarkError, "harness differs from recorded commit"):
+                et.prepare(args)
+            self.assertFalse(args.output_dir.exists())
+
+    def test_resume_rejects_prior_node_capped_workload_under_uncapped_manifest(self):
+        with TemporaryDirectory() as temp:
+            args, old_path, _, _ = self.migration_fixture(Path(temp))
+            old = et.prep.load(old_path)
+            old["caps"]["pilot_node_limit"] = 10000000
+            et.wg.atomic_write(old_path, et.wg.sealed(old))
+            self.assertIsNone(et.CAPS["pilot_node_limit"])
+            with self.assertRaisesRegex(et.wg.BenchmarkError, "resume source caps mismatch"):
                 et.prepare(args)
             self.assertFalse(args.output_dir.exists())
 
@@ -538,15 +549,35 @@ class ExactThresholdTests(unittest.TestCase):
 
     def test_failure_saved_and_skipped_without_launch(self):
         unit = et.units("pilot", self.roots, (24,))[0]
-        FakeSeat.failure = et.wg.BenchmarkError("decision node limit exhausted")
+        FakeSeat.failure = et.wg.BenchmarkError("decision timeout")
         with TemporaryDirectory() as temp:
             directory = Path(temp)/"pilot"
             rows = et.run_units(self.manifest, [unit], directory, et.Progress())
             self.assertEqual(rows[0]["status"], "failed")
-            self.assertIn("node limit", rows[0]["failure"])
+            self.assertIn("timeout", rows[0]["failure"])
             self.assertIsNotNone(rows[0]["failed_attempt"])
             with patch.object(et.wg, "Seat", side_effect=AssertionError("must skip saved failure")):
                 self.assertEqual(et.run_units(self.manifest, [unit], directory, et.Progress()), rows)
+
+    def test_uncapped_pilot_accepts_completed_search_above_ten_million_nodes(self):
+        unit = et.units("pilot", self.roots, (24,))[0]
+        choose = FakeSeat.choose
+        def many_nodes(seat, identifier, board, side):
+            result = choose(seat, identifier, board, side)
+            if seat.diagnostics[identifier]["outcome"] == "move":
+                seat.diagnostics[identifier]["nodes"] = 25000001
+            return result
+        with patch.object(FakeSeat, "choose", new=many_nodes), \
+             patch.object(et.wg, "Seat", side_effect=FakeSeat) as seats:
+            result = self.measured(unit)
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(any(s["search"]["nodes"] > 10000000 for s in result["steps"]))
+        self.assertIsNone(et.CAPS["pilot_node_limit"])
+        self.assertEqual(seats.call_count, 2)
+        for call in seats.call_args_list:
+            self.assertIsNone(call.kwargs["node_limit"])
+            self.assertEqual(call.kwargs["max_rss_kib"], 1572864)
+            self.assertEqual(call.args[4], 310)
 
     def test_corrupt_unit_is_rejected_before_launch(self):
         unit = et.units("pilot", self.roots, (24,))[0]
@@ -868,6 +899,101 @@ class ExactThresholdTests(unittest.TestCase):
                 self.assertNotIn("totals", condition)
                 self.assertNotIn("wall_ratio", condition)
                 self.assertIn("no partial averages", condition["failure"])
+
+
+class OracleExitRaceTests(unittest.TestCase):
+    def run_mocked(self, *, still_alive=False, status=0, rss=100):
+        killed, observations = [], []
+        process = SimpleNamespace(pid=42, returncode=None, kill=lambda: killed.append(True))
+        usage = SimpleNamespace(ru_utime=0.1, ru_stime=0.2, ru_maxrss=rss)
+        snapshots = [dict(USAGE), et.wg.BenchmarkError("process peak RSS is unavailable")]
+        waits = [(0, 0, None), (0, 0, None),
+                 (0, 0, None) if still_alive else (42, status, usage)]
+        if still_alive:
+            waits.append((42, 9, usage))
+        def started(_argv, *, cwd, stdout, stderr):
+            stdout.write(b"complete solve output\n")
+            stderr.write(b"retained stderr\n")
+            return process
+        with patch.object(et.subprocess, "Popen", side_effect=started), \
+             patch.object(et.os, "wait4", side_effect=waits), \
+             patch.object(et.wg, "proc_usage", side_effect=snapshots), \
+             patch.object(et.time, "sleep"):
+            try:
+                result = et.measured_oracle(["fake-oracle"], cwd=Path("/tmp"), timeout=2,
+                                           observations=observations)
+            except et.wg.BenchmarkError as exc:
+                result = exc
+        self.assertEqual(len(observations), 1)
+        receipt = observations[0]
+        self.assertEqual(receipt["last_observation"], USAGE)
+        self.assertEqual(receipt["stdout"], "complete solve output\n")
+        self.assertEqual(receipt["stderr"], "retained stderr\n")
+        self.assertEqual(receipt["resources"]["peak_rss_kib"], rss)
+        self.assertGreater(receipt["wall_ns"], 0)
+        return result, receipt, killed
+
+    def test_completed_position_requires_verified_normal_exit_evidence(self):
+        roots = et.freeze_roots(SOURCE)
+        manifest = {"report_digest": "exit-status-fixture", "inputs": {
+            "cli": {"path": "/fake/cli"}, "artifact": {"path": "/fake/artifact"},
+            "oracle": {"path": "/fake/oracle", "sha256": "1" * 64}}, "oracle_cwd": "/fake"}
+        FakeSeat.failure = None
+        unit = et.units("pilot", roots, (24,))[0]
+        with patch.object(et.wg, "Seat", FakeSeat), \
+             patch.object(et.wg, "proc_usage", side_effect=lambda _pid: dict(USAGE)):
+            source = et.measure_unit(manifest, unit)
+        job = et.oracle_jobs([source])[0]
+        with patch.object(et.wg.oracle, "run_solve", side_effect=fake_oracle_solve()), \
+             patch.object(et, "measured_oracle", side_effect=fake_measured):
+            receipt = et.solve_position(manifest, job)
+        et.verify_position(manifest, job, receipt)
+        for mutation in ("missing", "nonzero", "signal", "boolean"):
+            changed = copy.deepcopy(receipt)
+            observation = changed["process_observations"][0]
+            if mutation == "missing":
+                observation.pop("exit_status")
+            elif mutation == "nonzero":
+                observation["returncode"] = 3
+            elif mutation == "signal":
+                observation["exit_status"] = 9
+            else:
+                observation["exit_status"] = False
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(et.wg.BenchmarkError, "normal exit evidence"):
+                et.verify_position(manifest, job, et.wg.sealed(changed))
+        legacy_failure = copy.deepcopy(receipt)
+        legacy_failure.update(status="failed", failure="process peak RSS is unavailable", queries=[])
+        for observation in legacy_failure["process_observations"]:
+            observation.pop("exit_status", None)
+            observation.pop("returncode", None)
+        et.verify_position(manifest, job, et.wg.sealed(legacy_failure))
+
+    def test_exit_between_wait_and_rss_uses_confirmed_final_resources(self):
+        result, receipt, killed = self.run_mocked()
+        self.assertIsInstance(result, subprocess.CompletedProcess)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(receipt["returncode"], 0)
+        self.assertEqual(receipt["exit_status"], 0)
+        self.assertIn("peak RSS", receipt["sampling_failure"])
+        self.assertFalse(killed)
+
+    def test_missing_rss_for_still_running_child_fails_closed(self):
+        result, receipt, killed = self.run_mocked(still_alive=True)
+        self.assertIsInstance(result, et.wg.BenchmarkError)
+        self.assertIn("peak RSS is unavailable", str(result))
+        self.assertEqual(killed, [True])
+        self.assertEqual(receipt["returncode"], -9)
+        self.assertEqual(receipt["exit_status"], 9)
+
+    def test_confirmed_exit_keeps_nonzero_status_and_rss_cap_failures(self):
+        for status, rss, message in ((3 << 8, 100, "Oracle process failed"),
+                                     (0, et.CAPS["max_rss_kib"] + 1, "RSS cap exceeded")):
+            with self.subTest(status=status, rss=rss):
+                result, receipt, killed = self.run_mocked(status=status, rss=rss)
+                self.assertIsInstance(result, et.wg.BenchmarkError)
+                self.assertIn(message, str(result))
+                self.assertEqual(receipt["exit_status"], status)
+                self.assertFalse(killed)
 
 
 if __name__ == "__main__":

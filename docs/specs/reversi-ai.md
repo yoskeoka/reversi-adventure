@@ -807,7 +807,7 @@ Preparation pins legal source histories, source and harness revisions, binaries,
 artifact, openings, host, cache capacity, timeout, RSS and output identities.
 It writes a human-operated script and leaves measurement to the human.
 
-Pilot depth is 12/8/12, with a 10,000,000-node cap, a 310-second decision timeout
+Pilot depth is 12/8/12, with no node cap, a 310-second decision timeout
 and a 1,572,864-KiB seat peak RSS cap. All six threshold/scope conditions use the
 same four roots, for 24 windows total.
 
@@ -837,7 +837,7 @@ both scopes match and have complete Oracle evidence.
 
 The gate freezes a full-stage manifest with 32 games per admitted threshold,
 at most 96. It covers depths 8/12, scopes turn/game and eight games each.
-Full search removes the node cap and keeps the pilot timeout/RSS limits.
+Full search also has no node cap and keeps the pilot timeout/RSS limits.
 
 Threshold-16 controls use the new binary and its pinned identity. Legacy
 reports keep their original identities. Averages and improvement ratios require
@@ -852,6 +852,13 @@ be larger. Sampled VmHWM need not be monotonic. Each raw peak is checked against
 the cap, and the unit RSS aggregate is their maximum, including the largest
 polling sample retained during a decision. CPU counters retain their
 monotonic and wait4 reconciliation checks.
+
+If Oracle exits between a nonblocking wait and a live RSS sample, the runner
+rechecks wait4. A confirmed exit with status zero and final resources within
+the cap may complete without a final live sample. A missing sample while the
+process is still running remains a failure. Receipts retain the exit status;
+stdout and resource data alone do not recover a failed historical receipt
+whose exit status was not recorded.
 
 A harness correction may import saved pilot units through an explicitly pinned
 source manifest and unit files. Binary, source, artifact, host, roots, caps and

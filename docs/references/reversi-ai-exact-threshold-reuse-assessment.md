@@ -1,7 +1,8 @@
 # 空き16/20/24・局内完全読み再利用の評価記録
 
-2026-10-04時点では測定基盤を実装し、入力を監査・補完した。人間がpilotを起動し、
-1windowを保存した後、2window目のRSS検証で停止した。速度改善や採用候補を示す実測証拠はまだない。0041はactiveのまま残し、
+2026-10-05、人間がnode制限ありのpilot/Oracleを完走した。Oracleの終了時RSS観測に不具合があり、
+fullへ進めた閾値はなかった。人間指示でnode制限を撤廃し、新条件を別directoryで測定する。
+速度改善や採用候補を示す証拠はまだない。0041はactiveのまま残し、
 production exact=16と0018の候補対戦設定は維持する。
 
 ## 入力監査と承認された補完
@@ -34,7 +35,7 @@ fallback順序はrotate-180→main-diagonal→anti-diagonalで、最初の異な
 
 ## 測定の構成
 
-- pilot: 16/20/24 × turn/game × 4window = 24。depth12/8/12、10,000,000 nodes、310秒/decision、1,572,864 KiB/seat。
+- pilot: 16/20/24 × turn/game × 4window = 24。depth12/8/12、node capなし、310秒/decision、1,572,864 KiB/seat。
 - pilot独立Oracle: 保存済み完成windowの各exact rootと選択継続を完全solve。位置totalを別manifestで固定し、1位置ごとにraw Console output・wait4 CPU/RSS・profileを保存する。
 - gate: 同じ閾値のturn/gameで全4windowが完成し、履歴・着手・score/depth/exactness/outcomeが一致し、全Oracle位置が完成した閾値のみ通過する。
 - full: gate通過閾値 × depth12/8 × turn/game × 8局、最大96局。node capなし、同じtimeout/RSS cap。閾値16も同じbinaryを使って測定する。
@@ -106,3 +107,39 @@ VmHWMの値をinaccurateと記載している。
 
 修正後は両方の生値を保持して最大値をunit RSSに使い、各値の上限を検証する。
 CPU差分とwait4合計の照合は維持する。保存済み1windowは上の引継ぎ手順で再利用する。
+
+## node制限ありの初回結果と再測定
+
+人間がharness `8e69c1949e7b2cf239202f5f7ed47c8e7838449e` のrunを完了した。
+元directoryはworkspace `.local/reversi-ai-whole-game-0035/exact-threshold-0041-8e69c19/`。
+manifest digestは `d033f428cddd197d7540755dce39be551ddfd0a312f5f57ffb2bd15f80b2f6e1`、
+gate digestは `804e51f354b11123e5857d8f72e063b978883447edf44a46ce7b346abdb0862e`、
+assessment digestは `8ce914b3aa4cebb39ac682726791b2e7c660b9c60ebd137b9a6cc3b5f8d58f21`。
+
+| 閾値 | 完成 / 失敗window | 観測nodes合計 | window wall / CPU合計（秒） | 最大RSS（KiB） |
+| --- | --- | --- | --- | --- |
+| 16 | 8 / 0 | 13,024,262 | 78.899 / 78.603 | 71,568 |
+| 20 | 4 / 4 | 47,005,260 | 59.131 / 58.962 | 69,724 |
+| 24 | 0 / 8 | 80,000,000 | 76.042 / 75.982 | 69,728 |
+
+合計には失敗attemptを含み、全局の平均や改善率ではない。失敗12windowは全て
+最初のexact rootで10,000,000 nodesに達し、`exact=false`、`score=null`、`completed_depth=0` だった。
+20は黒window1/2、24は全windowで失敗した。後続exact rootへ到達しておらず、再利用の効力や
+310秒以内の実行可否はこのrunから判断できない。
+
+Oracleは全32位置が `process peak RSS is unavailable` で失敗し、queriesは空だった。
+非blocking waitと `/proc` 観測の間にprocessが終了すると、終了直後のRSS欄がなくなる。
+修正後はwait4を再確認し、正常終了と最終RSS上限を確認できた場合だけ完成へ進む。
+まだ実行中なら観測失敗を維持する。終了statusも新しいraw receiptへ保存する。
+旧receiptのstdout/資源だけでは正常終了を証明できず、成功へ書き換えない。
+
+2026-10-05、人間がnode上限を不要と指示した。新pilot/fullはnode上限なし、
+310秒/decisionと1,572,864 KiBのRSS上限を使う。探索条件が違うため旧24windowをskipせず、
+新しいmanifest/directoryで再測定する。元runの全unit・失敗・gateはそのまま保存する。
+
+保存済みのwindow2・空き16/15/14/13のroot Console出力は、両scopeでOracleが
+`-40/+40/-40/+40`、CLIが `-39/+39/-39/+39` だった。これは成功証拠として回収しない。
+projectのterminal scoreはwipeout以外で石数差を使う一方、固定Egaroucidは残り空きマスを
+勝者へ加算する。終局評価の違いが1点差を説明する可能性があるが、該当するterminal leafは
+保存されておらず、原因の確証やroot点数の機械的な変換は行わない。
+新測定も点数不一致を失敗として保存し、full/adoptionのgateを通さない。
