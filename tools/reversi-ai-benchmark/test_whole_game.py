@@ -396,6 +396,10 @@ class ResumableTests(unittest.TestCase):
         self.calls.append((row["id"], assignment))
         record = synthetic_game(row, assignment, 8)
         for step in record["steps"]:
+            raw = {"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 100}
+            step.update(legal_move_count=len(whole_game.oracle.legal_moves(step["board"], step["side"])),
+                        phase=whole_game.decision_phase(step["board"]),
+                        resources=dict(raw), resource_observations={"before": dict(raw), "after": dict(raw)})
             seats[step["seat"]].diagnostics[step["id"]] = step["search"]
             if kind == "oracle":
                 step.pop("search")
@@ -405,6 +409,54 @@ class ResumableTests(unittest.TestCase):
         with patch.object(whole_game, "Seat", FakeSeat), patch.object(whole_game, "game", self.fixture_game), \
              patch.object(whole_game, "proc_usage", return_value={"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 100}):
             return whole_game.measure_resumable(self.args, "a" * 64, "fixture", self.checkpoints)
+
+    def test_v2_report_requires_every_decision_resource_field(self):
+        fields = ("legal_move_count", "phase", "resources", "resource_observations")
+        for kind in ("cli", "cli-persistent", "oracle"):
+            self.args.kind = kind
+            self.args.artifact = None if kind == "oracle" else self.artifact
+            self.args.output = self.root / f"{kind}.json"
+            self.checkpoints = self.root / f"{kind}-checkpoints"
+            report = self.measure()
+            whole_game.verify(report)
+            for removed in [(field,) for field in fields] + [fields]:
+                changed = copy.deepcopy(report)
+                for field in removed:
+                    changed["games"][0]["steps"][0].pop(field)
+                with self.subTest(kind=kind, removed=removed), self.assertRaisesRegex(
+                        whole_game.BenchmarkError, "complete decision resources required"):
+                    whole_game.verify(whole_game.sealed(changed))
+
+    def test_stripped_v2_checkpoint_rejected_before_process_launch(self):
+        self.interrupt_after = 1
+        with self.assertRaises(KeyboardInterrupt):
+            self.measure()
+        path = next(self.checkpoints.glob("game-*.json"))
+        original = whole_game.read_canonical(path)
+        fields = ("legal_move_count", "phase", "resources", "resource_observations")
+        self.interrupt_after = None
+        for removed in [(field,) for field in fields] + [fields]:
+            changed = copy.deepcopy(original)
+            for field in removed:
+                changed["game"]["steps"][0].pop(field)
+            whole_game.atomic_write(path, whole_game.sealed(changed))
+            with self.subTest(removed=removed), patch.object(whole_game, "Seat") as seat, \
+                 self.assertRaisesRegex(whole_game.BenchmarkError, "complete decision resources required"):
+                whole_game.measure_resumable(self.args, "a" * 64, "fixture", self.checkpoints)
+            seat.assert_not_called()
+            self.assertEqual(len(self.calls), 1)
+
+    def test_genuine_v1_reports_without_decision_resources_remain_valid(self):
+        report = synthetic_report(8)
+        self.assertEqual(report["schema_version"], 1)
+        whole_game.verify(report)
+        changed = copy.deepcopy(report)
+        changed["games"][0]["steps"][0]["resource_observations"] = {
+            "before": {"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 100},
+            "after": {"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 100}}
+        redigest(changed)
+        with self.assertRaises(whole_game.BenchmarkError):
+            whole_game.verify(changed)
 
     def test_two_saved_games_resume_only_six_and_skip_complete(self):
         self.interrupt_after = 2
@@ -568,6 +620,9 @@ class ResumableTests(unittest.TestCase):
         changed["settings"]["exact_empty"] = 20
         changed["identity"]["settings"]["exact_empty"] = 20
         changed["condition_digest"] = hashlib.sha256(whole_game.canonical(changed["identity"])).hexdigest()
+        for record in changed["games"]:
+            for step in record["steps"]:
+                step["phase"] = whole_game.decision_phase(step["board"], 20)
         with self.assertRaisesRegex(whole_game.BenchmarkError, "incomplete or inconsistent"):
             whole_game.verify(whole_game.sealed(changed))
         for record in changed["games"]:

@@ -180,6 +180,12 @@ workspace `.local/reversi-ai-whole-game-0035/exact-threshold-0041-42f6d57/` の�
 新しい測定は起動していない。以下は反復なしの単一serial runであり、有意性や本番採用を主張しない。
 本書のcloseout commitとは測定producer SHAを区別し、再検証は上の固定harnessで行う。
 
+PRレビュー後、失敗Oracleの途中queryとprocess観測も検証し、v2報告のdecision資源情報を
+必須化した。現行validatorで保存済み752 receipt（pilot 24、full 32、pilot Oracle 112、
+full Oracle 584）の内容を追加照合し、元の成功・失敗結果を確認した。
+これはreceipt内容のoffline照合であり、現行HEADと固定manifestのproducer同一性を
+検証したものではない。固定manifest・測定ファイルは変更していない。
+
 | 証拠 | report digest |
 | --- | --- |
 | manifest | `7d3104d720fdbe605839af893a0ff4c47207e423d9b3eec633a6add1728de960` |

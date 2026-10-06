@@ -817,6 +817,8 @@ Pilot timing is reported separately from full-depth speed.
 
 Each decision keeps its legal-move count, phase, move, root score, depth,
 exactness, outcome, nodes, cache counters, wall/CPU and RSS observations.
+Schema-v2 verification requires this decision evidence on every saved step;
+legacy optional fields are accepted only for genuine schema-v1 reports.
 An unfinished exact attempt is recorded as a failed unit.
 
 Failed units keep partial history and observed resources. The runner verifies
@@ -834,6 +836,10 @@ continuation. Incomplete or timed-out solves remain failed evidence.
 Oracle positions are saved individually, with their total fixed by source
 reports. A threshold reaches full measurement only after all four windows in
 both scopes match and have complete Oracle evidence.
+Failed Oracle receipts also verify every retained query and process observation
+against the stage reached, including raw output, command, exit and resource
+evidence. A score mismatch preserves independently valid root/continuation
+values rather than requiring them to match the project score.
 
 The gate freezes a full-stage manifest with 32 games per admitted threshold,
 at most 96. It covers depths 8/12, scopes turn/game and eight games each.

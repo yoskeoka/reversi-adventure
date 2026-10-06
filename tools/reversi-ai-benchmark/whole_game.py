@@ -548,7 +548,8 @@ def max_observed_rss(processes: dict, record: dict) -> int:
     return max(peaks)
 
 
-def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: dict) -> None:
+def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: dict,
+                require_decision_resources: bool = False) -> None:
     validate_game(record, row, assignment)
     require(record.get("search_count") == (sum(step["move"] != "pass" for step in record["steps"])
             if kind in ("oracle", "cli-legacy") else len(record["steps"])), "search count mismatch")
@@ -559,14 +560,18 @@ def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: d
                     (kind != "cli-persistent" and key in ("startup_ns", "shutdown_ns")) else 0)
                     for key in ("startup_ns", "shutdown_ns", "user_cpu_ns", "system_cpu_ns", "peak_rss_kib")),
                 "missing process CPU/RSS/startup/shutdown")
+    decision_fields = {"legal_move_count", "phase", "resources", "resource_observations"}
+    if require_decision_resources:
+        require(all(decision_fields.issubset(step) for step in record["steps"]),
+                "complete decision resources required")
     expected = {"user_cpu_ns": sum(seat["user_cpu_ns"] for seat in processes.values()),
                 "system_cpu_ns": sum(seat["system_cpu_ns"] for seat in processes.values()),
                 "peak_rss_kib": max_observed_rss(processes, record)}
     require(resources == expected and resources["peak_rss_kib"] <= settings["max_rss_kib"],
             "game resource totals mismatch")
     for step in record["steps"]:
-        if any(key in step for key in ("legal_move_count", "phase", "resources")):
-            require(step.get("legal_move_count") == len(oracle.legal_moves(step["board"], step["side"]))
+        if any(key in step for key in decision_fields):
+            require(type(step.get("legal_move_count")) is int and step.get("legal_move_count") == len(oracle.legal_moves(step["board"], step["side"]))
                     and step.get("phase") == decision_phase(step["board"], settings["exact_empty"]),
                     "decision phase or legal move count mismatch")
             usage = step.get("resources")
@@ -619,7 +624,8 @@ def verify_v1(report: dict, binary: Path | None = None, artifact: Path | None = 
 
 
 def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | None = None,
-                     allowed_exact: tuple[int, ...] = (16,)) -> None:
+                     allowed_exact: tuple[int, ...] = (16,),
+                     require_decision_resources: bool = False) -> None:
     require(report.get("schema_version") == 1 and report.get("runner_version") == VERSION,
             "unsupported whole-game report")
     saved = report.get("report_digest")
@@ -652,7 +658,7 @@ def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | 
     for index, (row, assignment) in enumerate((row, assignment) for row in opening_rows()
                                               for assignment in (0, 1)):
         record = games[index]
-        verify_game(record, row, assignment, kind, settings)
+        verify_game(record, row, assignment, kind, settings, require_decision_resources)
     require(report.get("aggregate") == totals(games), "whole-game aggregate mismatch")
     if kind == "cli-persistent":
         process_totals = report.get("process_totals")
@@ -919,7 +925,7 @@ def verify(report: dict, binary: Path | None = None, artifact: Path | None = Non
                     require(sum(item["seat_processes"][side][key] for item in members)
                             <= segment["process_totals"][side][key], "segment CPU mismatch")
     compatible = sealed(compatible)
-    _verify_complete(compatible, binary, artifact, (16, 20, 24))
+    _verify_complete(compatible, binary, artifact, (16, 20, 24), require_decision_resources=True)
     for record in report["games"]:
         verify_boundary(record, report["kind"])
         require(type(record.get("started_at_ns")) is int and type(record.get("ended_at_ns")) is int
@@ -1043,7 +1049,7 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                     "checkpoint measurement identity mismatch")
             record = item["game"]
             row, assignment = next(pair for pair in rows if f"{pair[0]['id']}-seat{pair[1]}" == key)
-            verify_game(record, row, assignment, args.kind, identity["settings"])
+            verify_game(record, row, assignment, args.kind, identity["settings"], require_decision_resources=True)
             verify_boundary(record, args.kind)
             require(record.get("condition_digest") == condition_digest and record.get("manifest_digest") == manifest_digest
                     and isinstance(record.get("session_id"), str) and isinstance(record.get("segment_id"), str),
@@ -1100,7 +1106,7 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                                "reset_events": events, "session_id": session_id, "segment_id": segment_id,
                                "started_at_ns": game_started_at_ns, "ended_at_ns": time.time_ns(),
                                "manifest_digest": manifest_digest, "condition_digest": condition_digest})
-                verify_game(record, row, assignment, args.kind, identity["settings"])
+                verify_game(record, row, assignment, args.kind, identity["settings"], require_decision_resources=True)
                 verify_boundary(record, args.kind)
                 if args.kind == "cli-persistent":
                     # A live segment receipt survives SIGKILL; final wait4 reconciliation supersedes it.

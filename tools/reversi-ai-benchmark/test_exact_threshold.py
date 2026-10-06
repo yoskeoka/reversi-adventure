@@ -87,6 +87,8 @@ def fake_oracle_solve(replies=None):
     def solve(queries, binary, cwd, profile, timeout, *, child_query, runner):
         raw = dict(next(pending) if pending else {"value": 0, "exact": True, "completed_depth": 24})
         board, side = queries[0]
+        if not raw["exact"]:
+            raw["completed_depth"] = 0
         raw.update(move=et.wg.oracle.legal_moves(board, side)[0], nodes=1, elapsed_ms=1, nps=1000)
         output = "\n".join(["| Level | Depth | Move | Score | Time | Nodes | NPS |",
             f"| custom | {raw['completed_depth']}@100% | {raw['move']} | {raw['value']:+d} | 000:00:00.001 | 1 | 1000 |",
@@ -772,6 +774,128 @@ class ExactThresholdTests(unittest.TestCase):
                 with patch.object(et, "solve_position", side_effect=AssertionError("skip failed Oracle")):
                     self.assertEqual(et.run_oracle(self.manifest, [result], directory, et.Progress()), saved)
 
+    def test_failed_oracle_retained_queries_and_processes_are_verified(self):
+        unit_result = self.measured(et.units("pilot", self.roots, (24,))[0])
+        job = et.oracle_jobs([unit_result])[0]
+        good = {"value": 0, "exact": True, "completed_depth": 24}
+        with patch.object(et.wg.oracle, "run_solve", side_effect=fake_oracle_solve([good, dict(good, value=2)])), \
+             patch.object(et, "measured_oracle", side_effect=fake_measured):
+            mismatch = et.solve_position(self.manifest, job)
+        et.verify_position(self.manifest, job, mismatch)
+        for change in ("board", "side", "child", "argv", "stdout", "rss", "sample-rss", "sample-cpu",
+                       "normal-exit", "erased-exits", "missing-process", "extra-query", "reason", "complete-as-failed"):
+            receipt = copy.deepcopy(mismatch)
+            if change == "board":
+                receipt["queries"][1]["board"] = receipt["queries"][0]["board"]
+            elif change == "side":
+                receipt["queries"][0]["effective_side"] = "wrong"
+            elif change == "child":
+                receipt["queries"][1]["child_query"] = False
+            elif change == "argv":
+                receipt["process_observations"][1]["argv"][0] = "/wrong/binary"
+            elif change == "stdout":
+                receipt["process_observations"][1]["stdout"] = "corrupt"
+            elif change == "rss":
+                receipt["process_observations"][0]["resources"]["peak_rss_kib"] = et.CAPS["max_rss_kib"]+1
+            elif change == "sample-rss":
+                receipt["process_observations"][0]["last_observation"]["peak_rss_kib"] = et.CAPS["max_rss_kib"]+1
+            elif change == "sample-cpu":
+                receipt["process_observations"][0]["last_observation"]["user_cpu_ns"] = -1
+            elif change == "normal-exit":
+                receipt["process_observations"][0].update(exit_status=256, returncode=1)
+            elif change == "erased-exits":
+                for observation in receipt["process_observations"]:
+                    observation.pop("exit_status")
+                    observation.pop("returncode")
+            elif change == "missing-process":
+                receipt["process_observations"].pop()
+            elif change == "extra-query":
+                receipt["queries"].append(copy.deepcopy(receipt["queries"][0]))
+            elif change == "reason":
+                receipt["failure"] = "arbitrary failure"
+            else:
+                receipt = self.receipts([unit_result])[0]
+                receipt.update(status="failed", failure="independent Oracle score/continuation mismatch")
+            with self.subTest(change=change), self.assertRaises((et.wg.BenchmarkError, et.wg.oracle.OracleError)):
+                et.verify_position(self.manifest, job, et.wg.sealed(receipt))
+
+    def test_failed_oracle_partial_process_stages_and_raw_failure_causes(self):
+        unit_result = self.measured(et.units("pilot", self.roots, (24,))[0])
+        base = self.receipts([unit_result])[0]
+        for stage in (0, 1):
+            for cause in ("nonzero", "rss", "timeout", "timeout-rss", "nonzero-rss", "sampling", "parse"):
+                receipt = copy.deepcopy(base)
+                receipt["queries"] = receipt["queries"][:stage]
+                receipt["process_observations"] = receipt["process_observations"][:stage+1]
+                observation = receipt["process_observations"][-1]
+                if cause in ("nonzero", "nonzero-rss"):
+                    observation.update(exit_status=256, returncode=1)
+                    if cause == "nonzero-rss":
+                        observation["resources"]["peak_rss_kib"] = et.CAPS["max_rss_kib"]+1
+                    reason = "Oracle process failed"
+                elif cause == "rss":
+                    observation["last_observation"]["peak_rss_kib"] = et.CAPS["max_rss_kib"]+1
+                    reason = "Oracle peak RSS cap exceeded"
+                elif cause in ("timeout", "timeout-rss"):
+                    observation["wall_ns"] = et.CAPS["timeout_seconds"]*1_000_000_000
+                    if cause == "timeout-rss":
+                        observation["resources"]["peak_rss_kib"] = et.CAPS["max_rss_kib"]+1
+                    reason = "Oracle decision timeout"
+                elif cause == "sampling":
+                    observation["sampling_failure"] = "process peak RSS is unavailable"
+                    reason = observation["sampling_failure"]
+                else:
+                    observation["stdout"] = "corrupt"
+                    try:
+                        et.wg.oracle.parse_solve_output("corrupt", [24], et.wg.oracle.profile_from_name("whole-game-depth-8-exact-24"))
+                    except et.wg.oracle.OracleError as exc:
+                        reason = str(exc)
+                receipt.update(status="failed", failure=reason)
+                with self.subTest(stage=stage, cause=cause):
+                    et.verify_position(self.manifest, receipt["job"], et.wg.sealed(receipt))
+                receipt["failure"] = "unrelated failure"
+                with self.subTest(stage=stage, wrong_cause=cause), self.assertRaises(et.wg.BenchmarkError):
+                    et.verify_position(self.manifest, receipt["job"], et.wg.sealed(receipt))
+        # No process was started (e.g. Popen failed); retain the reached prefix.
+        for stage in (0, 1):
+            receipt = copy.deepcopy(base)
+            receipt.update(status="failed", failure="[Errno 2] No such file or directory")
+            receipt["queries"] = receipt["queries"][:stage]
+            receipt["process_observations"] = receipt["process_observations"][:stage]
+            et.verify_position(self.manifest, receipt["job"], et.wg.sealed(receipt))
+            for reason in ("arbitrary failure", "Oracle process failed", "Oracle peak RSS cap exceeded", "Oracle decision timeout"):
+                receipt["failure"] = reason
+                with self.subTest(stage=stage, missing_attempt=reason), self.assertRaises(et.wg.BenchmarkError):
+                    et.verify_position(self.manifest, receipt["job"], et.wg.sealed(receipt))
+
+    def test_oracle_incomplete_root_cannot_have_child_evidence(self):
+        result = self.measured(et.units("pilot", self.roots, (24,))[0])
+        job = et.oracle_jobs([result])[0]
+        with patch.object(et.wg.oracle, "run_solve", side_effect=fake_oracle_solve([{"value": 0, "exact": False, "completed_depth": 0}])), \
+             patch.object(et, "measured_oracle", side_effect=fake_measured):
+            incomplete = et.solve_position(self.manifest, job)
+        child = self.receipts([result])[0]
+        incomplete["queries"].append(child["queries"][1])
+        incomplete["process_observations"].append(child["process_observations"][1])
+        with self.assertRaisesRegex(et.wg.BenchmarkError, "invalid query stage"):
+            et.verify_position(self.manifest, job, et.wg.sealed(incomplete))
+
+    def test_progress_saved_interval_final_failure_and_interruption_flush(self):
+        with patch("sys.stderr") as stderr:
+            progress = et.Progress(3)
+            unit = {"threshold": 24, "scope": "game", "stage": "pilot"}
+            for done in range(1, 8):
+                progress.emit("pilot", unit, done, 7, "saved")
+            progress.emit("pilot", unit, 1, 7, "failed")
+            progress.emit("pilot", unit, 2, 7, "interrupted")
+        output = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertEqual(output.count("status=saved"), 3)
+        for done in (3, 6, 7):
+            self.assertIn(f"done={done} total=7 status=saved", output)
+        self.assertIn("status=failed", output)
+        self.assertIn("status=interrupted", output)
+        self.assertEqual(stderr.flush.call_count, 5)
+
     def test_resealed_incomplete_oracle_checkpoint_rejected(self):
         result = self.measured(et.units("pilot", self.roots, (24,))[0])
         receipt = self.receipts([result])[0]
@@ -999,10 +1123,13 @@ class OracleExitRaceTests(unittest.TestCase):
                 et.verify_position(manifest, job, et.wg.sealed(changed))
         legacy_failure = copy.deepcopy(receipt)
         legacy_failure.update(status="failed", failure="process peak RSS is unavailable", queries=[])
+        legacy_failure["process_observations"] = legacy_failure["process_observations"][:1]
+        legacy_failure["process_observations"][0]["sampling_failure"] = legacy_failure["failure"]
         for observation in legacy_failure["process_observations"]:
             observation.pop("exit_status", None)
             observation.pop("returncode", None)
-        et.verify_position(manifest, job, et.wg.sealed(legacy_failure))
+        with self.assertRaisesRegex(et.wg.BenchmarkError, "exit evidence invalid"):
+            et.verify_position(manifest, job, et.wg.sealed(legacy_failure))
 
     def test_exit_between_wait_and_rss_uses_confirmed_final_resources(self):
         result, receipt, killed = self.run_mocked()

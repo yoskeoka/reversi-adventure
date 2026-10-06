@@ -140,7 +140,7 @@ class Progress:
 
     def emit(self, stage, unit, done, total, status):
         LAST_PROGRESS.update(stage=stage, unit=unit, done=done, total=total)
-        if status in ("running", "skipped", "verified") and done % self.every and done != total:
+        if status in ("running", "skipped", "verified", "saved") and done % self.every and done != total:
             return
         print(f"progress exact-threshold stage={stage} threshold={unit['threshold']} scope={unit['scope']} "
               f"unit={'position' if stage == 'oracle' else 'window' if unit['stage'] == 'pilot' else 'game'} "
@@ -549,60 +549,141 @@ def verify_position(m, job, result):
                and result["job"] == job and result["oracle_binary"] == m["inputs"]["oracle"]
                and result["profile"] == expected_profile, "Oracle checkpoint identity mismatch")
     wg.require(result["status"] in ("completed", "failed") and isinstance(result["queries"], list), "Oracle status invalid")
-    if result["status"] == "failed":
-        wg.require(isinstance(result["failure"], str) and bool(result["failure"]), "Oracle failure reason missing")
-        return
-    wg.require(result["failure"] is None, "completed Oracle has failure")
-    expected = [(step["board"], step["side"], False, step["search"]["score"])]
+    failed = result["status"] == "failed"
+    wg.require(isinstance(result["failure"], str) and bool(result["failure"]) if failed
+               else result["failure"] is None, "Oracle failure reason invalid")
+    expected = [(step["board"], step["side"], False)]
+    terminal_score = None
     if step["move"] != "pass":
         child = wg.oracle.apply_move(step["board"], step["side"], step["move"])
         if not terminal(child, wg.oracle.other(step["side"])):
-            expected.append((child, wg.oracle.other(step["side"]), True, -step["search"]["score"]))
+            expected.append((child, wg.oracle.other(step["side"]), True))
         else:
             own, other = child.count(step["side"]), child.count(wg.oracle.other(step["side"]))
-            wg.require(step["search"]["score"] == (64 if other == 0 else -64 if own == 0 else own-other), "terminal selected score mismatch")
-    wg.require(len(result["queries"]) == len(expected), "Oracle query count mismatch")
-    observations = result.get("process_observations")
-    wg.require(isinstance(observations, list) and len(observations) == len(expected), "Oracle raw process evidence missing")
-    for query, observation, (board, side, child_query, score) in zip(result["queries"], observations, expected):
+            terminal_score = 64 if other == 0 else -64 if own == 0 else own-other
+    queries, observations = result["queries"], result.get("process_observations")
+    wg.require(isinstance(observations, list) and len(queries) <= len(expected)
+               and len(queries) <= len(observations) <= min(len(expected), len(queries)+1),
+               "Oracle raw process evidence/count mismatch")
+    if not failed:
+        wg.require(len(queries) == len(expected), "Oracle query count mismatch")
+    values, incomplete = [], False
+    for index, observation in enumerate(observations):
+        board, side, child_query = expected[index]
         effective, sign = wg.oracle.effective_query(board, side)
-        raw = query["result"]
-        wg.require(query["board"] == board and query["side"] == side and query["effective_side"] == effective
-                   and query["sign"] == sign and query["child_query"] == child_query
-                   and raw["exact"] is True and type(raw["completed_depth"]) is int
-                   and raw["completed_depth"] >= board.count(".")
-                   and sign*int(raw["value"]) == score, "Oracle raw solve mismatch")
-        argv, resources = observation["argv"], observation["resources"]
+        paired = index < len(queries)
+        wg.require(not incomplete and isinstance(observation, dict), "Oracle invalid query stage")
+        argv, resources = observation.get("argv"), observation.get("resources")
+        wg.require(isinstance(argv, list) and len(argv) >= 2 and isinstance(argv[-1], str)
+                   and argv[-2] == "-solve"
+                   and argv == wg.oracle.oracle_argv(Path(m["inputs"]["oracle"]["path"]), profile,
+                       solve_path=Path(argv[-1]), child_query=child_query), "Oracle raw command mismatch")
+        wg.require(isinstance(resources, dict)
+                   and all(type(resources.get(k)) is int and resources[k] >= 0
+                           for k in ("user_cpu_ns", "system_cpu_ns"))
+                   and type(resources.get("peak_rss_kib")) is int and resources["peak_rss_kib"] > 0
+                   and type(observation.get("wall_ns")) is int and observation["wall_ns"] > 0
+                   and isinstance(observation.get("stdout"), str) and isinstance(observation.get("stderr"), str),
+                   "Oracle raw resources/output missing")
+        sampled = observation.get("last_observation")
+        if sampled is not None:
+            wg.require(isinstance(sampled, dict)
+                       and all(type(sampled.get(k)) is int and sampled[k] >= 0
+                               for k in ("user_cpu_ns", "system_cpu_ns"))
+                       and type(sampled.get("peak_rss_kib")) is int and sampled["peak_rss_kib"] > 0,
+                       "Oracle raw sampled resources invalid")
+        cap_exceeded = max(resources["peak_rss_kib"], sampled["peak_rss_kib"] if sampled else 0) > CAPS["max_rss_kib"]
+        if "sampling_failure" in observation:
+            wg.require(isinstance(observation["sampling_failure"], str) and bool(observation["sampling_failure"]),
+                       "Oracle exit observation invalid" if "exit_observation" in observation else "Oracle sampling failure invalid")
         if "exit_observation" in observation:
             exit_raw = observation["exit_observation"]
-            wg.require(isinstance(exit_raw, dict) and exit_raw.get("exiting") is True
-                       and isinstance(observation.get("sampling_failure"), str)
-                       and bool(observation["sampling_failure"]), "Oracle exit observation invalid")
+            wg.require(isinstance(exit_raw, dict) and type(exit_raw.get("exiting")) is bool
+                       and bool(observation.get("sampling_failure")), "Oracle exit observation invalid")
             if "missing" in exit_raw:
-                wg.require(set(exit_raw) == {"missing", "exiting"} and exit_raw["missing"] is True,
-                           "Oracle exit observation invalid")
+                wg.require(set(exit_raw) == {"missing", "exiting"} and exit_raw["missing"] is True
+                           and exit_raw["exiting"] is True, "Oracle exit observation invalid")
             else:
                 wg.require(set(exit_raw) == {"stat", "state", "flags", "exiting"}
-                           and isinstance(exit_raw["stat"], str), "Oracle exit observation invalid")
+                           and isinstance(exit_raw["stat"], str) and ")" in exit_raw["stat"],
+                           "Oracle exit observation invalid")
                 fields = exit_raw["stat"][exit_raw["stat"].rfind(")")+2:].split()
                 wg.require(len(fields) > 6 and fields[6].isdigit(), "Oracle exit observation invalid")
                 flags = int(fields[6])
                 wg.require(type(exit_raw["flags"]) is int and exit_raw["flags"] == flags
-                           and exit_raw["state"] == fields[0] and (flags & 0x4 or fields[0] in ("X", "Z")),
-                           "Oracle exit observation invalid")
+                           and exit_raw["state"] == fields[0]
+                           and exit_raw["exiting"] == bool(flags & 0x4 or fields[0] in ("X", "Z"))
+                           and (not paired or exit_raw["exiting"]), "Oracle exit observation invalid")
+        # Failed attempts retain their actual exit, including signals. Missing
+        # historical evidence remains immutable and needs its pinned verifier.
+        has_exit = "exit_status" in observation or "returncode" in observation
         wg.require(type(observation.get("exit_status")) is int
                    and type(observation.get("returncode")) is int
-                   and observation["returncode"] == 0
-                   and os.waitstatus_to_exitcode(observation["exit_status"]) == 0,
-                   "Oracle normal exit evidence missing")
-        wg.require(isinstance(argv, list) and len(argv) >= 2 and argv[-2] == "-solve"
-                   and argv == wg.oracle.oracle_argv(Path(m["inputs"]["oracle"]["path"]), profile,
-                       solve_path=Path(argv[-1]), child_query=child_query), "Oracle raw command mismatch")
-        wg.require(all(type(resources.get(k)) is int and resources[k] >= 0 for k in ("user_cpu_ns", "system_cpu_ns"))
-                   and type(resources.get("peak_rss_kib")) is int and 0 < resources["peak_rss_kib"] <= CAPS["max_rss_kib"]
-                   and type(observation["wall_ns"]) is int and observation["wall_ns"] > 0, "Oracle raw resources missing")
-        wg.require(wg.oracle.parse_solve_output(observation["stdout"], [board.count(".")], profile) == [raw]
-                   and raw["move"] in wg.oracle.legal_moves(board, effective), "Oracle raw output mismatch")
+                   and os.waitstatus_to_exitcode(observation["exit_status"]) == observation["returncode"],
+                   "Oracle normal exit evidence invalid" if paired else "Oracle exit evidence invalid")
+        if paired:
+            wg.require(observation["returncode"] == 0, "Oracle normal exit evidence missing")
+            wg.require(not cap_exceeded and observation["wall_ns"] < CAPS["timeout_seconds"]*1_000_000_000,
+                       "Oracle successful process exceeded resource cap")
+            query = queries[index]
+            wg.require(isinstance(query, dict) and query.get("board") == board and query.get("side") == side
+                       and query.get("effective_side") == effective and type(query.get("sign")) is int and query["sign"] == sign
+                       and query.get("child_query") is child_query and isinstance(query.get("result"), dict),
+                       "Oracle raw query identity mismatch")
+            raw = query["result"]
+            wg.require(type(raw.get("exact")) is bool
+                       and all(type(raw.get(k)) is int for k in ("completed_depth", "value", "nodes", "elapsed_ms", "nps")),
+                       "Oracle raw solve types invalid")
+            wg.require(wg.oracle.parse_solve_output(observation["stdout"], [board.count(".")], profile) == [raw]
+                       and raw["move"] in wg.oracle.legal_moves(board, effective), "Oracle raw output mismatch")
+            incomplete = raw["exact"] is not True or raw["completed_depth"] < board.count(".")
+            values.append(sign*int(raw["value"]))
+        else:
+            # This last attempt did not produce an accepted parsed query. Check
+            # retained raw evidence without converting its failure into success.
+            if result["failure"] == "Oracle peak RSS cap exceeded":
+                wg.require(cap_exceeded, "Oracle RSS failure lacks exceeded cap")
+            if result["failure"] == "Oracle decision timeout":
+                wg.require(observation["wall_ns"] >= CAPS["timeout_seconds"]*1_000_000_000,
+                           "Oracle timeout lacks elapsed deadline")
+            if result["failure"] == "Oracle process failed":
+                wg.require(has_exit and observation["returncode"] != 0, "Oracle process failure lacks nonzero exit")
+            reason = result["failure"]
+            known_process_failure = (
+                cap_exceeded and reason == "Oracle peak RSS cap exceeded"
+                or observation["wall_ns"] >= CAPS["timeout_seconds"]*1_000_000_000 and reason == "Oracle decision timeout"
+                or has_exit and observation["returncode"] != 0 and reason == "Oracle process failed"
+                or reason == observation.get("sampling_failure")
+                   and not observation.get("exit_observation", {}).get("exiting", False))
+            if not known_process_failure:
+                wg.require(not cap_exceeded, "Oracle failure reason does not match exceeded cap")
+                if has_exit:
+                    wg.require(observation["returncode"] == 0 and not cap_exceeded,
+                               "Oracle failure reason does not match process")
+                try:
+                    parsed = wg.oracle.parse_solve_output(observation["stdout"], [board.count(".")], profile)
+                    move = parsed[0]["move"]
+                    parse_failure = (f"Egaroucid returned an illegal continuation move for {effective}: {move!r}"
+                                     if move not in wg.oracle.legal_moves(board, effective) else None)
+                except wg.oracle.OracleError as exc:
+                    parse_failure = str(exc)
+                wg.require(parse_failure is not None and reason == parse_failure,
+                           "Oracle failure reason does not match raw output")
+    if incomplete:
+        wg.require(failed and len(observations) == len(queries)
+                   and result["failure"] == "independent Oracle incomplete", "Oracle incomplete stage mismatch")
+    elif len(queries) == len(expected):
+        selected = terminal_score if terminal_score is not None else -values[1] if len(values) == 2 else values[0]
+        matches = values[0] == selected == step["search"]["score"]
+        wg.require((failed and not matches and result["failure"] == "independent Oracle score/continuation mismatch")
+                   or (not failed and matches), "Oracle score/failure stage mismatch")
+    else:
+        wg.require(failed and result["failure"] not in
+                   ("independent Oracle incomplete", "independent Oracle score/continuation mismatch"),
+                   "Oracle failure does not match reached stage")
+        if len(observations) == len(queries):
+            wg.require(re.fullmatch(r"\[Errno -?\d+\] .+", result["failure"], re.DOTALL) is not None,
+                       "Oracle prelaunch failure lacks OS error evidence")
 
 
 def immutable(path, expected):
