@@ -37,10 +37,25 @@ class PrepareTests(unittest.TestCase):
                                       oracle_cwd=None, timeout_seconds=310, max_rss_kib=1000)
 
     def generate(self):
-        with mock.patch.object(whole_game, "measure_resumable") as measure, mock.patch.object(prepare, "probe_reset"):
+        with mock.patch.object(whole_game, "measure_resumable") as measure, mock.patch.object(prepare, "probe_reset"), \
+             mock.patch.object(whole_game, "require_execution_scope"):
             path = prepare.prepare(self.args)
             measure.assert_not_called()
         return path
+
+    def test_game_conditions_stop_prepare_and_resume_before_any_launch(self):
+        with mock.patch.object(prepare, "probe_reset") as probe:
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "scope is suspended"):
+                prepare.prepare(self.args)
+            probe.assert_not_called()
+        self.assertFalse(self.args.output_dir.exists())
+        path = self.generate()  # Historical frozen producer fixture.
+        with mock.patch.object(whole_game, "measure_resumable") as measure:
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "scope is suspended"):
+                prepare.execute(path, False, 1)
+            measure.assert_not_called()
+        self.assertFalse((self.args.output_dir / "measurement.lock").exists())
+        prepare.verify_manifest(path)
 
     def test_prepare_pins_inputs_order_and_safe_runnable_script(self):
         path = self.generate()

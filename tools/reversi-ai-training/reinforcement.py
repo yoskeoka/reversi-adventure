@@ -20,6 +20,8 @@ from pathlib import Path
 import training
 
 VERSION = "reversi-ai-pattern-reinforcement-v3"
+MANIFEST_VERSION = 4
+EXACT_CACHE_POLICY = "exact-cache-cross-decision-suspended-v1"
 RESET_PROTOCOL = "new_game-v1"
 PAIRING = "color_swap_d4_v1"
 OUTPUTS = ("candidate-artifact.json", "selected-artifact.json", "games.jsonl", "checkpoint.json", "report.json")
@@ -157,11 +159,15 @@ def openings(seed: int, count: int, plies: int) -> list[tuple[str, str, list[str
     return result
 
 
-def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
+def validate_manifest(path: Path, *, for_execution: bool = False) -> tuple[dict, Path, Path, Path]:
     manifest = training.read_json(path)
-    require_keys(manifest, {"schema_version", "producer_version", "baseline_artifact", "candidate", "self_play_search", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match", "reset_contract"}, "manifest")
-    if manifest["schema_version"] != 3 or manifest["producer_version"] != VERSION:
+    manifest_keys = {"schema_version", "producer_version", "baseline_artifact", "candidate", "self_play_search", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match", "reset_contract"}
+    if not isinstance(manifest, dict) or manifest.get("schema_version") not in (3, MANIFEST_VERSION) or manifest.get("producer_version") != VERSION:
         fail("unsupported reinforcement manifest")
+    current = manifest["schema_version"] == MANIFEST_VERSION
+    require_keys(manifest, manifest_keys | ({"exact_cache_policy"} if current else set()), "manifest")
+    if for_execution and not current:
+        fail("historical reinforcement manifest cannot run or be adopted under the suspended exact-cache policy")
     root = path.parent
     baseline_entry = require_keys(manifest["baseline_artifact"], {"path", "sha256", "artifact_digest"}, "baseline_artifact")
     baseline = checked_file(root, {key: baseline_entry[key] for key in ("path", "sha256")}, "baseline artifact")
@@ -171,6 +177,8 @@ def validate_manifest(path: Path) -> tuple[dict, Path, Path, Path]:
         fail("baseline artifact identity mismatch")
     candidate = require_keys(manifest["candidate"], {"path", "sha256", "evaluator", "profile", "opening_depth", "midgame_depth", "endgame_depth", "exact_solver_empty_squares", "time_limit_ms", "node_limit", "book"}, "candidate")
     executable = checked_file(root, {key: candidate[key] for key in ("path", "sha256")}, "candidate executable")
+    if current and manifest["exact_cache_policy"] != {"policy": EXACT_CACHE_POLICY, "effective_scope": "turn", "binary_sha256": candidate["sha256"]}:
+        fail("candidate exact-cache safety policy or binary identity mismatch")
     if manifest["reset_contract"] != {"protocol": RESET_PROTOCOL, "cache_lifetime": "one-game", "binary_sha256": candidate["sha256"]}:
         fail("candidate game reset contract or binary identity mismatch")
     if candidate["evaluator"] != "trained" or candidate["profile"] != "strong-engine-hcap-v1" or candidate["book"] != "off":
@@ -223,7 +231,7 @@ class Candidate:
                 "--endgame-depth", str(config["endgame_depth"]),
                 "--exact-solver-empty-squares", str(config["exact_solver_empty_squares"]),
                 "--time-limit-ms", str(config["time_limit_ms"]),
-                "--node-limit", str(config["node_limit"])]
+                "--node-limit", str(config["node_limit"]), "--exact-cache-scope", "turn"]
         try:
             self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
         except OSError as error:
@@ -467,7 +475,7 @@ def atomic_write(directory: Path, name: str, data: bytes) -> None:
 
 
 def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_callback=None) -> dict[str, bytes]:
-    manifest, baseline_path, executable, validation_path = validate_manifest(manifest_path)
+    manifest, baseline_path, executable, validation_path = validate_manifest(manifest_path, for_execution=True)
     progress = progress or Progress(1)
     baseline = training.read_json(baseline_path)
     generated = openings(manifest["seed"], manifest["game_count"], manifest["opening_plies"])
@@ -639,7 +647,9 @@ def prepare(args: argparse.Namespace) -> None:
         fail("manifest already exists; choose a fresh immutable path")
     baseline = training.read_json(args.baseline_artifact)
     training.validate_artifact(baseline)
-    manifest = {"schema_version": 3, "producer_version": VERSION,
+    manifest = {"schema_version": MANIFEST_VERSION, "producer_version": VERSION,
+                "exact_cache_policy": {"policy": EXACT_CACHE_POLICY, "effective_scope": "turn",
+                                       "binary_sha256": sha(args.candidate_executable)},
                 "baseline_artifact": {"path": str(args.baseline_artifact.resolve()), "sha256": sha(args.baseline_artifact),
                                       "artifact_digest": baseline["artifact_digest"]},
                 "candidate": {"path": str(args.candidate_executable.resolve()), "sha256": sha(args.candidate_executable),
@@ -661,7 +671,7 @@ def prepare(args: argparse.Namespace) -> None:
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_bytes(training.canonical_json(manifest) + b"\n")
     try:
-        validated, baseline_path, executable, _ = validate_manifest(args.manifest)
+        validated, baseline_path, executable, _ = validate_manifest(args.manifest, for_execution=True)
         candidate = Candidate(executable, baseline_path, validated["candidate"], validated["decision_timeout_seconds"])
         try:
             candidate.new_game("prepare-reset-probe")
@@ -673,6 +683,7 @@ def prepare(args: argparse.Namespace) -> None:
 
 
 def regret_command(manifest_path: Path, directory: Path) -> str:
+    validate_manifest(manifest_path, for_execution=True)
     verify(manifest_path, directory)
     manifest = training.read_json(manifest_path)
     config = manifest["candidate"]
@@ -682,11 +693,12 @@ def regret_command(manifest_path: Path, directory: Path) -> str:
             "--opening-depth", str(config["opening_depth"]), "--midgame-depth", str(config["midgame_depth"]),
             "--endgame-depth", str(config["endgame_depth"]),
             "--exact-solver-empty-squares", str(config["exact_solver_empty_squares"]),
-            "--time-limit-ms", str(config["time_limit_ms"]), "--node-limit", str(config["node_limit"])]
+            "--time-limit-ms", str(config["time_limit_ms"]), "--node-limit", str(config["node_limit"]), "--exact-cache-scope", "turn"]
     return shlex.join(argv)
 
 
 def regret_timeout(manifest_path: Path, directory: Path) -> int:
+    validate_manifest(manifest_path, for_execution=True)
     verify(manifest_path, directory)
     manifest = training.read_json(manifest_path)
     return manifest["decision_timeout_seconds"]

@@ -11,6 +11,9 @@
 
 ## 参照と再現入力
 
+- [0043の停止措置と短い検証](../../references/reversi-ai-exact-cache-correctness.md) —
+  共有decision境界のturn固定、CLI game拒否、manifest v4と旧reportの検証境界。
+
 - [PR #251の評価記録](../../references/reversi-ai-exact-threshold-reuse-assessment.md) — 完全な棋譜と4記録の照合。
 - `rust/reversi-ai/src/search/endgame.rs:361-405` — `EndgameSolver::solve` のroot結果/PV。
 - 同 `:567-580,789-830` — cached LowerBoundによる窓更新と`original_alpha`。

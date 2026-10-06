@@ -216,6 +216,11 @@ impl ExactTable {
     pub(crate) fn clear(&mut self) {
         self.entries.fill(None);
     }
+
+    #[cfg(test)]
+    pub(super) fn occupied(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.is_some()).count()
+    }
 }
 
 /// Per-search exact table activity; counts include probes within one solve.

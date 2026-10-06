@@ -74,6 +74,31 @@ mod tests {
     }
 
     #[test]
+    fn repeated_exact_think_matches_fresh_player() {
+        let board = Board::from_string(
+            "..WWWWWW\n.WWWWWWW\n.WWBWWBW\n.WBWBWBW\n.BBBWBWW\nBBBBWWWB\n.BBWBWWB\nBBBBBBWB",
+        )
+        .unwrap();
+        let config = AiConfig::new(1, 1, 1);
+        let mut player = AiPlayer::new(Box::new(StrategicEvaluator::new()), config);
+        let first = player.think(&board, Color::White, &budget());
+        let repeated = player.think(&board, Color::White, &budget());
+        let fresh = AiPlayer::new(Box::new(StrategicEvaluator::new()), config).think(
+            &board,
+            Color::White,
+            &budget(),
+        );
+        for result in [&repeated, &fresh] {
+            assert_eq!(result.outcome, first.outcome);
+            assert_eq!(result.score, first.score);
+            assert_eq!(result.pv, first.pv);
+            assert_eq!(result.nodes_searched, first.nodes_searched);
+            assert_eq!(result.exact_cache, first.exact_cache);
+            assert!(result.exact);
+        }
+    }
+
+    #[test]
     fn test_ai_player_explain() {
         let evaluator = Box::new(StrategicEvaluator::new());
         let config = AiConfig::new(3, 3, 3);

@@ -46,7 +46,6 @@ struct CliArgs {
     config: AiConfig,
     time_limit: Duration,
     node_limit: Option<u64>,
-    exact_cache_scope: String,
     advisor_config: Option<DecisionMoveConfig>,
     decision_move_config: Option<DecisionMoveConfig>,
     print_advisor_config_id: bool,
@@ -64,7 +63,7 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
     let mut exact_solver_empty_squares = AiConfig::DEFAULT_EXACT_SOLVER_EMPTY_SQUARES;
     let mut time_limit = Duration::from_secs(30);
     let mut node_limit = None;
-    let mut exact_cache_scope = String::from("game");
+    let mut exact_cache_scope = String::from("turn");
     let mut profile = None;
     let mut has_explicit_config = false;
     let mut has_endgame_depth = false;
@@ -127,6 +126,11 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
     if !matches!(exact_cache_scope.as_str(), "game" | "turn") {
         return Err("--exact-cache-scope must be game or turn".to_string());
     }
+    if exact_cache_scope == "game" {
+        return Err(
+            "--exact-cache-scope game is suspended for exact-cache correctness; use turn".into(),
+        );
+    }
     if advisor_analysis && (profile.is_some() || has_endgame_depth) {
         return Err("advisor mode does not accept --profile or --endgame-depth".into());
     }
@@ -160,7 +164,6 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
         config,
         time_limit,
         node_limit,
-        exact_cache_scope,
         advisor_config,
         decision_move_config,
         print_advisor_config_id,
@@ -283,9 +286,6 @@ fn main() -> Result<(), String> {
         }
         let board = board_from_flat_string(fields[1])?;
         let color = parse_color(fields[2])?;
-        if args.exact_cache_scope == "turn" {
-            engine.clear_exact_cache();
-        }
         if let Some(config) = &args.advisor_config {
             let mut budget = SearchBudget::with_time_limit(args.time_limit);
             if let Some(limit) = args.node_limit {

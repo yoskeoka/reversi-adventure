@@ -47,6 +47,48 @@ class ReinforcementTests(unittest.TestCase):
         self.assertEqual(reinforcement.main(argv), 0)
         return manifest
 
+    def test_manifest_freezes_turn_policy_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.prepare_fixture(root)
+            manifest = training.read_json(path)
+            self.assertEqual(manifest["schema_version"], 4)
+            self.assertEqual(manifest["exact_cache_policy"], {
+                "policy": reinforcement.EXACT_CACHE_POLICY, "effective_scope": "turn",
+                "binary_sha256": reinforcement.sha(root / "candidate")})
+            with mock.patch.object(reinforcement.subprocess, "Popen") as popen:
+                reinforcement.Candidate(root / "candidate", root / "baseline.json",
+                                        manifest["self_play_search"], 5)
+            argv = popen.call_args.args[0]
+            self.assertEqual(argv[argv.index("--exact-cache-scope") + 1], "turn")
+            manifest["exact_cache_policy"]["effective_scope"] = "game"
+            path.write_bytes(training.canonical_json(manifest) + b"\n")
+            with self.assertRaisesRegex(training.TrainingError, "safety policy"):
+                reinforcement.validate_manifest(path, for_execution=True)
+
+    def test_historical_manifest_only_allows_offline_completed_verification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.prepare_fixture(root)
+            manifest = training.read_json(path)
+            manifest["schema_version"] = 3
+            manifest.pop("exact_cache_policy")
+            path.write_bytes(training.canonical_json(manifest) + b"\n")
+            with mock.patch.object(reinforcement, "Candidate") as candidate:
+                for operation in (lambda: reinforcement.run(path, root / "rejected"),
+                                  lambda: reinforcement.regret_command(path, root / "historical"),
+                                  lambda: reinforcement.regret_timeout(path, root / "historical")):
+                    with self.assertRaisesRegex(training.TrainingError, "historical reinforcement manifest"):
+                        operation()
+                candidate.assert_not_called()
+            # Recreate completed output with the historical producer contract.
+            validate = reinforcement.validate_manifest
+            with mock.patch.object(reinforcement, "validate_manifest",
+                                   side_effect=lambda path, **kwargs: validate(path)):
+                reinforcement.run(path, root / "historical")
+            with mock.patch.object(reinforcement, "Candidate", side_effect=AssertionError("offline started CLI")):
+                reinforcement.verify(path, root / "historical")
+
     def test_fixture_is_reproducible_and_replays(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -73,6 +115,7 @@ class ReinforcementTests(unittest.TestCase):
             command = reinforcement.regret_command(manifest, root / "first")
             self.assertIn("--trained-artifact", command)
             self.assertIn("--exact-solver-empty-squares 16", command)
+            self.assertIn("--exact-cache-scope turn", command)
             self.assertEqual(reinforcement.regret_timeout(manifest, root / "first"), 5)
 
     def test_progress_interval_stages_and_output_bytes(self):
