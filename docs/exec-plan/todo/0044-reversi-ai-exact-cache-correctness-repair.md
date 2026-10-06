@@ -11,7 +11,7 @@
 
 ## 参照と再現入力
 
-- [PR #251の評価記録](https://github.com/yoskeoka/reversi-adventure/blob/feat/reversi-ai-exact-threshold-reuse-assessment/docs/references/reversi-ai-exact-threshold-reuse-assessment.md) — 完全な棋譜と4記録の照合。
+- [PR #251の評価記録](../../references/reversi-ai-exact-threshold-reuse-assessment.md) — 完全な棋譜と4記録の照合。
 - `rust/reversi-ai/src/search/endgame.rs:361-405` — `EndgameSolver::solve` のroot結果/PV。
 - 同 `:567-580,789-830` — cached LowerBoundによる窓更新と`original_alpha`。
 - 同 `:1336-1390,1587-1640` — null-window bound再利用とrepeated-rootの既存tests。
