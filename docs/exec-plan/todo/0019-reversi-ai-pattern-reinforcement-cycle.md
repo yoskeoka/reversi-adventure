@@ -18,6 +18,12 @@
 > プロセスが常駐しても、各局の開始前に通常TT/完全読み表を消去する。局内の読みだけを
 > 再利用し、局間cacheを残した旧persistent測定は本番性能の採用証拠にしない。
 
+> **2026-10-06 correctness prerequisite**: PR #251の終盤選択手反例を受け、
+> 0043の停止、0044の正確性修正、0045の縮小検証、0040の人間による採否判断を先に行う。
+> 既定は手番ごとにexact tableを消去し、再利用の不一致が未解決のまま新本番runを凍結しない。
+> 0045の12/8/12・exact20・各3局は実験用検証であり、本番exact16や学習batch局数を変更しない。
+> 再利用や閾値20の本番採用は明示承認とproduction spec/manifest互換更新後にだけ行う。
+
 ## Objective and completion boundary
 
 Produce exactly one reproducible, project-owned candidate pattern artifact by

@@ -2,6 +2,24 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+## 2026-10-06 の正確性修正と計測縮小
+
+PR [#251](https://github.com/yoskeoka/reversi-adventure/pull/251) の0041結果には、
+同じ棋譜の終盤空き7で、再利用ありだけが最善値+4を報告しながら値+2の手を返す反例がある。
+閾値16を含む再利用全般の採用を保留し、深度8の固定棋譜の成功でこの反例を打ち消さない。
+
+後続は [0043: 手番間再利用停止](0043-reversi-ai-exact-cache-correctness.md) →
+[0044: 小さい正確性修正](0044-reversi-ai-exact-cache-correctness-repair.md) →
+[0045: 縮小検証](0045-reversi-ai-exact-cache-correctness-verification.md) →
+[0040: 採否/設定/時間予算の判断](0040-reversi-ai-self-play-performance-closeout.md) とする。
+新しい全局比較は12/8/12・exact20のturn/game各3局、計6局・反復1回に限る。
+Oracle同士と現行CLIの既知時間を取り直さず、独立Oracleは既存queryを優先し少数終盤位置だけを照合する。
+元の8局/v1/v2契約と14reportは不変証拠として残す。
+
+以下の到達点と元の手順は歴史的契約。今回の新規作業は0043/0044/0045と改訂0040に従い、
+全深度・常駐方式・旧CLIの総当たりや序盤8rootの追加計測を既定の完了条件にしない。
+完全読みの不一致、採否未承認、必要な本番互換更新が残る間は本計画を完了扱いにしない。
+
 ## 2026-10-02 の到達点と再計画
 
 本計画は未完了。PR [#236](https://github.com/yoskeoka/reversi-adventure/pull/236) と
