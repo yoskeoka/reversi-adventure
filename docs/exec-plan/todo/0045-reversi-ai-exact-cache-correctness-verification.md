@@ -2,6 +2,15 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+## 実装・測定の境界（2026-10-07）
+
+専用prepare/run/verify、固定sample、短い回帰とoffline証拠検証を実装した。
+保存済み752 receiptを元の42f6d57 producer契約で検証し、既知root/a4/a7値を確認した。
+各3局×2条件と抽出Oracleのhuman-runは未実施であり、計画の測定完了条件は残る。
+この計画は測定結果の受領とoffline verify後に削除する。
+入力済みscript、固定digest、未達と採否条件は
+[検証記録](../../references/reversi-ai-exact-cache-correctness.md) に記録する。
+
 ## 目的と完了条件
 
 0044の修正を既知反例と少数の独立Oracle局面で確認し、実際の自己対局用設定だけを各3局で比較する。

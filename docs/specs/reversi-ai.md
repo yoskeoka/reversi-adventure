@@ -815,6 +815,68 @@ games, and the manifest fixes the condition total. Stages without games use
 ordinary progress only; failures, interruptions and completion always flush.
 Long-running production measurements remain human-operated.
 
+### Reduced exact-cache correctness verification
+
+The dedicated `exact-cache-verification-v1` manifest and report use exactly
+three ordered games: opening-1/assignment-0, opening-2/assignment-0 and
+opening-4/assignment-0. They never masquerade as eight-game v1/v2 reports.
+Two serial conditions use the same repaired binary, evaluator, host and
+12/8/12 depths with experimental exact20; turn remains the production default
+and game uses diagnostic opt-in. Each seat has one process per game, acknowledges
+`new_game-v1`, and records effective scope and policy. Source, harness, binaries,
+artifact, corpus, sample, saved evidence and all output identities are pinned.
+Decision timeout is 310 seconds and seat peak RSS is at most 1,572,864 KiB;
+there is no node cap. Preparation verifies a clean locked release build against the supplied CLI digest,
+records its build receipt, and writes an input-filled human-operated script.
+Agents do not launch, wait for or monitor the long measurement.
+
+The saved counterexample and its root/a4/a7 Oracle queries are checked offline
+under their original producer identities. A short repaired warm-bound regression
+requires root +4 and selected-child +4 without issuing new Oracle queries.
+Immutable failed receipts retain their original failure status.
+
+Each completed game preserves legal replay, resets, per-decision diagnostics,
+legal counts/phases, raw CPU/RSS observations, wall/startup/shutdown time and
+exact nodes/cache/time. Only three completed games produce a condition average.
+Turn/game histories, boards, selected moves, scores, depths, exactness and
+outcomes must agree. Failures remain evidence and prohibit adoption.
+
+For each completed diagnostic-game sample, select, in order, the first exact
+nonterminal root with at most 12 empties, the first with at most 8, and the last
+with at most 12. Missing selectors are omitted without substitutes or additional
+games. Deduplicate positions in that order: at most three roots per game and
+nine roots total. Independently solve each root and its nonterminal selected
+child; terminal children use the defined terminal value. Reuse completed queries
+only when board, effective side, Oracle binary digest, profile digest and score
+contract match. Freeze the ordered actual positions and the number of remaining
+queries (including zero) before the Oracle stage. There are at most 18 new
+queries, each with a 30-second timeout and 1,572,864-KiB RSS cap, no node cap
+and no automatic timeout extension. Unresolved score-contract differences,
+incomplete queries, value/selected-child disagreement and resource overruns
+are preserved failures. No uniform score offset hides a mismatch.
+
+One game or one query is atomically checkpointed with file and directory fsync
+under an exclusive lock. Resume verifies and skips saved success and failure;
+only interrupted units restart. Changed identities, unknown/duplicate outputs,
+missing raw resources and corrupt derived summaries fail closed before search.
+Existing eight-game and 0041 evidence stays immutable; new output uses
+`.local/reversi-ai-exact-cache-correctness/`.
+
+Progress flushes on stderr as
+`progress exact-cache-verification stage=<inputs|regression|games|oracle|verify> condition=<turn|game|none> unit=<fixture|game|position> done=<n> total=<n> status=<running|saved|skipped|interrupted|verified|failed> elapsed_s=<value>`.
+Games total three per condition; Oracle total is the frozen remaining-query
+count; regression total is the fixed fixture count. `--progress-every N`
+defaults to one and thins ordinary progress only; failures, interruption and
+completion always flush. No retries add conditions, games or query positions.
+
+The report separates exact work from whole-game time and identifies the
+single-run sample bias. Equal heuristic node counts with different timing do
+not prove a cache effect. Unselected exact roots are not independently Oracle
+verified. Historical timing retains its original digest/settings and is not a
+control for the new binary. Even successful evidence leaves production adoption,
+the unresolved score-contract issue and time-budget decisions to 0040 and the
+human; experimental exact20 does not authorize changing production exact16.
+
 ### Experimental exact-threshold assessment
 
 Thresholds 16, 20 and 24 are separate experimental workloads. Production

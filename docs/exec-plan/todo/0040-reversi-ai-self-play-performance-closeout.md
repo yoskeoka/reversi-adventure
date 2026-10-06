@@ -79,3 +79,13 @@
 ## Addresses
 
 - N/A
+
+## 0045の準備状況（2026-10-07）
+
+0044はPR #254で修正済み。0045の専用6局harnessと短い回帰、
+保存752 receiptのoffline検証を用意した。新しい実測結果は未受領であり、
+3局平均、抽出Oracleの独立一致、採用成功や時間予算合意は未達である。
+入力済みhuman-runとdigestは
+[正確性記録](../../references/reversi-ai-exact-cache-correctness.md) を参照する。
+既定turn、本番exact16、±39/±40の未解決score契約を維持し、
+修正/準備完了を再利用の採用・0035の完了と扱わない。

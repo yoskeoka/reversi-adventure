@@ -30,6 +30,10 @@ DIAGNOSTIC = re.compile(
     r"\texact=(true|false)\tscore=(-?\d+|none)\tcompleted_depth=(\d+)"
     r"\toutcome=(move|pass|game_over)\tcache_probes=(\d+)\tcache_hits=(\d+)\tcache_stores=(\d+)"
 )
+CACHE_POLICY = re.compile(
+    r"exact_cache_policy_v1\tposition_id=([^\t]+)\texact_cache_scope=([^\t]+)"
+    r"\texact_cache_policy=([^\t]+)"
+)
 
 
 class BenchmarkError(RuntimeError):
@@ -105,11 +109,13 @@ class Seat:
     def __init__(self, kind: str, binary: Path, artifact: Path | None, depth: int,
                  timeout: float, label: str, cwd: Path | None = None,
                  cache_scope: str = "game", exact_empty: int = 16,
-                 node_limit: int | None = None, max_rss_kib: int | None = None):
+                 node_limit: int | None = None, max_rss_kib: int | None = None,
+                 capture_cache_policy: bool = False):
         require(exact_empty in (16, 20, 24), "unsupported exact threshold")
         require(node_limit is None or type(node_limit) is int and node_limit > 0, "invalid node limit")
         require(max_rss_kib is None or type(max_rss_kib) is int and max_rss_kib > 0, "invalid RSS limit")
         self.exact_empty, self.node_limit, self.max_rss_kib = exact_empty, node_limit, max_rss_kib
+        self.capture_cache_policy = capture_cache_policy
         self.last_observation: dict | None = None
         self.peak_observation: dict | None = None
         self.kind, self.timeout, self.label, self.depth = kind, timeout, label, depth
@@ -136,6 +142,7 @@ class Seat:
             self.buffer = bytearray()
         self.startup_ns = time.monotonic_ns() - started
         self.diagnostics: dict[str, dict] = {}
+        self.cache_policies: dict[str, dict] = {}
         self.diagnostic_offset = 0
 
     def gtp_command(self, command: str) -> list[str]:
@@ -205,6 +212,12 @@ class Seat:
         lines = self.stderr.readlines()
         self.diagnostic_offset = self.stderr.tell()
         for line in lines:
+            policy = CACHE_POLICY.fullmatch(line.rstrip("\n"))
+            if policy and self.capture_cache_policy:
+                identifier, scope, value = policy.groups()
+                require(identifier not in self.cache_policies, "duplicate CLI cache policy id")
+                self.cache_policies[identifier] = {"scope": scope, "policy": value,
+                                                   "raw": line.rstrip("\n")}
             match = DIAGNOSTIC.fullmatch(line.rstrip("\n"))
             if match:
                 identifier, elapsed, nodes, exact, score, completed_depth, outcome, probes, hits, stores = match.groups()
@@ -215,6 +228,9 @@ class Seat:
                     "completed_depth": int(completed_depth), "outcome": outcome,
                     "cache_probes": int(probes), "cache_hits": int(hits), "cache_stores": int(stores),
                 }
+        for identifier, policy in self.cache_policies.items():
+            if identifier in self.diagnostics:
+                self.diagnostics[identifier]["exact_cache_policy"] = policy
 
     def new_game(self, identifier: str) -> dict:
         started = time.monotonic_ns()

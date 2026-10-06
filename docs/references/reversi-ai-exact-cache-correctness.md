@@ -138,3 +138,36 @@ whole-game/prepareとreinforcement manifestのproduction停止措置は維持す
 単独回帰の再実行は
 `rtk cargo test -p reversi-ai retained_lower_bound_proves_selected_counterexample_child -- --nocapture`。
 fixtureのbudgetはsuffix全体で100,000 nodes、表容量は262,144 entriesである。
+
+## 縮小検証の実装とhuman-run準備（0045）
+
+2026-10-07。修正済みmain 1f2eb5aから専用
+exact-cache-verification-v1 prepare/run/verifyを実装した。
+ordered sampleはopening-1/2/4、assignment 0のみ。turn/game各3局、
+12/8/12・exact20・seatごと1game/1processでserialに測る。
+CLI decision上限310秒、Oracle新規query上限30秒、RSS上限1,572,864 KiB。
+新規Oracle queryは最大18、抽出は最初の<=12、最初の<=8、最後の<=12
+という最大9rootであり、存在しないselectorを追加局面で置換しない。
+
+独立Oracle完全読みprofileは旧保存queryと同じdepth12/exact20を使用する。
+測定CLIのmidgame depth8とは別のidentityであり、board/effective side、
+binary/profile digest、score契約の完全一致時だけ旧queryを再利用する。
+旧producer 42f6d575b7115b4ccd6aa2ab6d9d805adadc1b89のコードをGitから
+読み出し、manifest、24 pilot/32 full/112 pilot-Oracle/584 full-Oracle、
+計752 receiptと派生stage/assessmentをoffline再計算した。
+元manifest digestは
+7d3104d720fdbe605839af893a0ff4c47207e423d9b3eec633a6add1728de960。
+8件の保存counterexample receiptはfixtureの実ファイルSHA-256とsealに一致し、
+root +4、a4 +4、a7 +2を確認した。元failed receiptは失敗のまま保存する。
+
+clean checkoutのlocked release buildと入力CLI SHA-256を照合し、
+source/harnessファイル、artifact、Oracle評価資源、sample、host、outputを固定する。
+保存game/queryの成功と失敗は再開時に検証してskipし、中断単位だけ再実行する。
+未知/破損outputや変更identityは探索前に拒否する。
+完成3局だけ条件平均を生成し、意味不一致やOracle不成立の場合は平均を採用証拠にしない。
+
+6局のhuman-runと抽出Oracleの結果は未受領。エージェントはこれらを起動・待機・
+監視していない。反復なし・assignment0の選択sampleであり、3局成功も一般的な
+正確性や有意な速度差を保証しない。抽出外rootを独立照合済みとは扱わない。
+本番turn/exact16、空き16の±39/±40未解決score契約、0040の人間判断を残す。
+0045計画は測定受領/検証待ちのため残し、準備実装と測定完了を分ける。
