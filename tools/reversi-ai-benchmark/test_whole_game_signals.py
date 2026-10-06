@@ -32,6 +32,10 @@ def game(row, assignment, seats, kind, timeout, max_decisions):
     calls.append([row["id"], assignment])
     record = fixture.synthetic_game(row, assignment, 8)
     for step in record["steps"]:
+        raw = {"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 100}
+        step.update(legal_move_count=len(w.oracle.legal_moves(step["board"], step["side"])),
+                    phase=w.decision_phase(step["board"]), resources=dict(raw),
+                    resource_observations={"before": dict(raw), "after": dict(raw)})
         seats[step["seat"]].diagnostics[step["id"]] = step["search"]
     return record
 with patch.object(w, "Seat", fixture.FakeSeat), patch.object(w, "game", game), patch.object(w, "proc_usage", return_value={"user_cpu_ns":0,"system_cpu_ns":0,"peak_rss_kib":100}):

@@ -35,9 +35,10 @@
    — 固定パラメータscript、局単位checkpoint、検証済み条件skip、局開始時の通常TT/完全読み表reset。
 2. [0040: 証拠の補完と設定選択](0040-reversi-ai-self-play-performance-closeout.md)
    — 変更前後の意味一致、局reset常駐条件の測定、序盤コスト分析、目標と採用判断を記録。
-3. [0041: 空き20/24の完全読み再利用実験](0041-reversi-ai-exact-threshold-reuse-assessment.md)
-   — 閾値16/20/24で局内turn/gameを比較し、上限付きpilot後に全局時間への効果を測る。
-   0039の後に実行し、結果を0040の設定選択へ渡す。
+3. [0041の評価結果](../../references/reversi-ai-exact-threshold-reuse-assessment.md)
+   — 閾値16/20/24の実験は完了。空き20・中盤深度8の固定8局は照合成功したが、
+   深度12設定の終盤完全読みに再利用ありだけの選択手不一致がある。
+   結果と採用前の正確性修正を0040へ渡す。計画は[実装PR #251](https://github.com/yoskeoka/reversi-adventure/pull/251)で取得する。
 
 プロセスが常駐しても、前の局の探索結果は利用しない。同じ局内の数手前の読みだけを
 再利用する。旧persistent値は本来の性能採用証拠から外し、0039/0040で局reset条件を測る。

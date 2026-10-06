@@ -131,6 +131,15 @@ WHOLE_GAME_PREPARE_TOOL := tools/reversi-ai-benchmark/prepare-whole-game-measure
 WHOLE_GAME_PREPARE_ARGS ?=
 WHOLE_GAME_MANIFEST ?=
 WHOLE_GAME_PROGRESS_EVERY ?= 1
+EXACT_THRESHOLD_PREPARE_ARGS ?=
+EXACT_THRESHOLD_MANIFEST ?=
+
+.PHONY: benchmark-exact-threshold-prepare benchmark-exact-threshold-verify
+benchmark-exact-threshold-prepare:
+	$(PYTHON) $(WHOLE_GAME_PREPARE_TOOL) exact-threshold prepare $(EXACT_THRESHOLD_PREPARE_ARGS)
+
+benchmark-exact-threshold-verify:
+	$(PYTHON) $(WHOLE_GAME_PREPARE_TOOL) exact-threshold verify --manifest "$(EXACT_THRESHOLD_MANIFEST)"
 
 .PHONY: benchmark-whole-game-prepare benchmark-whole-game-run benchmark-whole-game-manifest-verify benchmark-whole-game-inputs-verify
 

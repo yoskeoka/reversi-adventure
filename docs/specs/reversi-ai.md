@@ -762,8 +762,13 @@ RSS is the absolute cumulative process/segment peak, never a per-game difference
 or an independent per-game peak. Segment closure records wait4 CPU and peak RSS
 for reconciliation, including enforcement of the RSS cap against the final
 segment peak. Persistent reports label completed-game checkpoint aggregates
-separately from segment aggregates; segment totals include process overhead
-and measured work in an interrupted game. After process loss, remaining games start from empty caches,
+separately from segment aggregates. Raw wait4 RSS remains separate from sampled
+VmHWM. Either peak may be larger, and sampled peaks need not be monotonic.
+Both are capped; game RSS
+aggregates use the largest available raw observation, including the largest
+polling sample retained during a decision. CPU differences remain
+monotonic and reconcile against segment CPU totals. Segment totals include process
+overhead and measured work in an interrupted game. After process loss, remaining games start from empty caches,
 without replaying completed games. The interrupted game is measured again in full.
 Session/segment startup and shutdown distinguish resumed segments from one
 uninterrupted eight-game process lifetime.
@@ -775,6 +780,114 @@ games, and the manifest fixes the condition total. Stages without games use
 `games=0/8`. The default emits every saved game. `--progress-every N` limits
 ordinary progress only; failures, interruptions and completion always flush.
 Long-running production measurements remain human-operated.
+
+### Experimental exact-threshold assessment
+
+Thresholds 16, 20 and 24 are separate experimental workloads. Production
+reinforcement keeps its 16-empty contract.
+
+Both seats acknowledge empty heuristic and exact tables at each window or game
+start. Later roots within that unit may reuse proofs. Turn scope clears the
+exact table at each decision; other settings stay equal.
+
+Preparation freezes four distinct legal 24-empty roots from a verified game-8
+report. It selects the first two black and first two white roots in
+opening/assignment/turn order.
+
+If only one distinct white root exists, preparation adds its first distinct
+transform in the fixed order rotate-180, main-diagonal reflection,
+anti-diagonal reflection. Each transform preserves the standard initial board
+and colors.
+
+The runner stores and legally replays the transformed opening and every history
+board and move. It keeps the source root identity and transform name. The two
+white windows form a correlated symmetry pair, which the report identifies.
+
+Preparation pins legal source histories, source and harness revisions, binaries,
+artifact, openings, host, cache capacity, timeout, RSS and output identities.
+It writes a human-operated script and leaves measurement to the human.
+
+Pilot depth is 12/8/12, with no node cap, a 310-second decision timeout
+and a 1,572,864-KiB seat peak RSS cap. All six threshold/scope conditions use the
+same four roots, for 24 windows total.
+
+Windows end at 12 or fewer empties or legal game-over. Passes stay in the
+history and leave the empty count intact. Each window starts with empty caches.
+Pilot timing is reported separately from full-depth speed.
+
+Each decision keeps its legal-move count, phase, move, root score, depth,
+exactness, outcome, nodes, cache counters, wall/CPU and RSS observations.
+Schema-v2 verification requires this decision evidence on every saved step;
+legacy optional fields are accepted only for genuine schema-v1 reports.
+An unfinished exact attempt is recorded as a failed unit.
+
+Failed units keep partial history and observed resources. The runner verifies
+and skips saved failures on resume. It retries interrupted units and verifies
+saved completed units before skipping them.
+
+Unknown, corrupt or mismatched evidence stops the run. Unit publication uses
+file and directory fsync plus atomic rename under an exclusive lock.
+
+Turn/game comparisons within one threshold require equal positions, seat
+histories, moves, scores, depths, exactness and outcomes. Fixed bookless,
+single-thread Oracle profiles completely solve each exact root and its selected
+continuation. Incomplete or timed-out solves remain failed evidence.
+
+Oracle positions are saved individually, with their total fixed by source
+reports. A threshold reaches full measurement only after all four windows in
+both scopes match and have complete Oracle evidence.
+Failed Oracle receipts also verify every retained query and process observation
+against the stage reached, including raw output, command, exit and resource
+evidence. A score mismatch preserves independently valid root/continuation
+values rather than requiring them to match the project score.
+
+The gate freezes a full-stage manifest with 32 games per admitted threshold,
+at most 96. It covers depths 8/12, scopes turn/game and eight games each.
+Full search also has no node cap and keeps the pilot timeout/RSS limits.
+
+Threshold-16 controls use the new binary and its pinned identity. Legacy
+reports keep their original identities. Averages and improvement ratios require
+all eight verified games; failures remain visible in the condition report.
+
+Reports distinguish each seat's first exact root from its later roots. They show
+exact node/time changes, whole-game fractions, phase depths and legal-move counts.
+
+Per-decision CPU samples use process-counter differences and process peak RSS.
+The raw sampled VmHWM and final wait4 RSS are separate observations; either may
+be larger. Sampled VmHWM need not be monotonic. Each raw peak is checked against
+the cap, and the unit RSS aggregate is their maximum, including the largest
+polling sample retained during a decision. CPU counters retain their
+monotonic and wait4 reconciliation checks.
+
+If Oracle exits between a nonblocking wait and a live RSS sample, the runner
+rechecks wait4. If the kernel reports an exiting process before wait4 can reap
+it, the runner retains that raw exit observation and polls until the existing
+deadline. It accepts only status zero and final resources within the cap.
+Missing RSS from a process without an observed exit remains a failure.
+Receipts retain the exit status;
+stdout and resource data alone do not recover a failed historical receipt
+whose exit status was not recorded.
+
+A harness correction may import saved pilot units through an explicitly pinned
+source manifest and unit files. Binary, source, artifact, host, roots, caps and
+search conditions must match. Each source unit is independently verified;
+the new receipt retains its source digest and changes only manifest binding
+and recalculated resource aggregate. Source files remain immutable.
+
+Reports limit their claims to the measured run and state the lack of repeats.
+
+Plan 0040 leaves adoption to the human. Raising production thresholds needs a
+separate specification/manifest update.
+
+Progress is flushed on stderr as
+`progress exact-threshold stage=<pilot|full|oracle|verify> threshold=<16|20|24> scope=<turn|game> unit=<window|game|position> done=<n> total=<n> status=<running|saved|skipped|interrupted|verified|failed> elapsed_s=<value>`.
+
+Stage manifests fix the totals. The default emits every completed unit.
+`--progress-every N` limits ordinary updates; failure, interruption and stage
+completion always flush.
+
+Long measurements are started by a human. Agents leave startup, waiting and
+monitoring to the human.
 
 ### SearchEngine
 
