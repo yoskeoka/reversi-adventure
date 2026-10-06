@@ -40,13 +40,13 @@ report/artifactの既存v3 encodingは維持し、reportのmanifest digestがv4 
 | Path | SHA-256 |
 | --- | --- |
 | `rust/reversi-ai/src/search/mod.rs` | `5430b9156fce950f67f233a039ce6dc5fa18fa7c726f8604fa0a09bdd4b796c4` |
-| `rust/reversi-ai/src/bin/reversi-ai-cli.rs` | `a6f8674f8b562dddf92e62d55b1dcfd3f00a1b45078f60b077e6563f03a7f64c` |
+| `rust/reversi-ai/src/bin/reversi-ai-cli.rs` | `a952ca17b8dc0f548a389e1952b83cb9497794afe47a770ab99020535989bd3d` |
 | `tools/reversi-ai-training/reinforcement.py` | `eca5244038b16d7936e9d65a7297eceb81e09bf5688b1349789b7470f4321952` |
 | `tools/reversi-ai-benchmark/whole_game.py` | `e2bb8044f5e2d1e24d1e5ac2d84f88c8a319bfa984bc2d3c29928b15f7ff3444` |
 | `tools/reversi-ai-benchmark/prepare-whole-game-measurement.py` | `92769cb56b4237eedc106ec9ff78a91726f8ca1dd49c441419d1e18dcda7b4d5` |
 
 確認したdebug CLIのSHA-256は
-`e8699029dc397569f891c4c9e3bedb9273d303b3233ae8fff45f4dc996bb44bc`。
+`0a606618d67142fa469a0b99dee35520efa7ab689a7eb5d449f782283d41dad2`。
 ローカルbinaryの識別であり本番freezeではない。新しいbinaryは毎回manifestに固定する。
 `cargo test -p reversi-engine`（28 tests）、Clippy、fmt checkも成功した。
 reinforcementの20 tests、whole-game/prepareの40 testsが成功した。
@@ -57,3 +57,6 @@ reinforcementの20 tests、whole-game/prepareの40 testsが成功した。
 原因修正は0044、縮小検証は0045、採用/設定/時間予算は0040の責任である。
 この停止措置をroot/PV修正、全設定の正確性、性能改善や本番採用の完了と扱わない。
 全局対局、Oracle同士対局、性能再測定は起動していない。
+
+Copilotの指摘に従いCLI helpも既定turnとgame停止の案内へ更新した。
+CLI integration 10 testsと実際の `--help` 出力を再確認した。
