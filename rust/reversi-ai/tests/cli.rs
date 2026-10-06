@@ -120,13 +120,67 @@ fn cli_rejects_zero_search_depth() {
 }
 
 #[test]
-fn cli_rejects_game_scope_before_reading_input() {
-    let output = run_cli_with_args("", ["--exact-cache-scope", "game"]);
+fn cli_advisor_rejects_diagnostic_game_before_reading_input() {
+    let output = run_cli_with_args("", ["--advisor-analysis", "--exact-cache-scope", "game"]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("suspended for exact-cache correctness")
+        String::from_utf8_lossy(&output.stderr).contains("advisor mode does not accept diagnostic")
     );
+}
+
+#[test]
+fn cli_diagnostic_game_records_policy_reuses_proof_and_resets() {
+    let board = "..WWWWWW.WWWWWWW.WWBWWBW.WBWBWBW.BBBWBWWBBBBWWWB.BBWBWWBBBBBBBWB";
+    let input =
+        format!("first\t{board}\tW\nrepeat\t{board}\tW\nnew_game\tsecond\nreset\t{board}\tW\n");
+    let output = run_cli_with_args(&input, ["--exact-cache-scope", "game"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "first\ta4",
+            "repeat\ta4",
+            "new_game\tsecond\tready",
+            "reset\ta4"
+        ]
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let diagnostics: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.starts_with("search_diagnostic_v1\t"))
+        .collect();
+    assert_eq!(diagnostics.len(), 3);
+    let nodes: Vec<u64> = diagnostics
+        .iter()
+        .map(|line| {
+            // Preserve the existing full-match parser's eleven tab-separated fields.
+            assert_eq!(line.split('\t').count(), 11);
+            assert!(line.contains("\texact=true\tscore=4\tcompleted_depth=7\toutcome=move\t"));
+            line.split('\t')
+                .find_map(|field| field.strip_prefix("nodes="))
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
+        .collect();
+    assert!(nodes[1] < nodes[0]);
+    assert_eq!(nodes[2], nodes[0]);
+    let policies: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.starts_with("exact_cache_policy_v1\t"))
+        .collect();
+    assert_eq!(policies.len(), 3);
+    for (line, id) in policies.iter().zip(["first", "repeat", "reset"]) {
+        assert_eq!(*line, format!("exact_cache_policy_v1\tposition_id={id}\texact_cache_scope=game\texact_cache_policy=diagnostic-game-v1"));
+    }
 }
 
 #[test]
@@ -164,6 +218,13 @@ fn default_and_explicit_turn_repeated_exact_requests_match() {
             .collect();
         assert_eq!(diagnostics.len(), 2);
         assert_eq!(diagnostics[0], diagnostics[1]);
+        assert_eq!(diagnostics[0].len(), 10);
+        let policies: Vec<_> = stderr
+            .lines()
+            .filter(|line| line.starts_with("exact_cache_policy_v1\t"))
+            .collect();
+        assert_eq!(policies.len(), 2);
+        assert!(policies.iter().all(|line| *line == "exact_cache_policy_v1\tposition_id=position\texact_cache_scope=turn\texact_cache_policy=exact-cache-cross-decision-suspended-v1"));
     }
 }
 

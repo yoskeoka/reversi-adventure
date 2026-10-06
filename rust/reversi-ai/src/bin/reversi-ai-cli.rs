@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice|trained] [--trained-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
-[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope turn] (default: turn; game is suspended for correctness)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v1)"
+[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v1)"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -49,6 +49,7 @@ struct CliArgs {
     advisor_config: Option<DecisionMoveConfig>,
     decision_move_config: Option<DecisionMoveConfig>,
     print_advisor_config_id: bool,
+    exact_cache_scope: String,
 }
 
 fn parse_args() -> Result<CliArgs, String> {
@@ -126,9 +127,9 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
     if !matches!(exact_cache_scope.as_str(), "game" | "turn") {
         return Err("--exact-cache-scope must be game or turn".to_string());
     }
-    if exact_cache_scope == "game" {
+    if exact_cache_scope == "game" && advisor_analysis {
         return Err(
-            "--exact-cache-scope game is suspended for exact-cache correctness; use turn".into(),
+            "advisor mode does not accept diagnostic --exact-cache-scope game; use turn".into(),
         );
     }
     if advisor_analysis && (profile.is_some() || has_endgame_depth) {
@@ -167,6 +168,7 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
         advisor_config,
         decision_move_config,
         print_advisor_config_id,
+        exact_cache_scope,
     })
 }
 
@@ -251,7 +253,11 @@ fn main() -> Result<(), String> {
         );
         return Ok(());
     }
-    let mut engine = SearchEngine::new();
+    let mut engine = if args.exact_cache_scope == "game" {
+        SearchEngine::with_diagnostic_game_exact_cache()
+    } else {
+        SearchEngine::new()
+    };
     let stdin = io::stdin();
     let mut stdout = io::BufWriter::new(io::stdout().lock());
 
@@ -347,6 +353,16 @@ fn main() -> Result<(), String> {
             search_result.exact_cache.hits,
             search_result.exact_cache.stores,
         );
+        eprintln!(
+            "exact_cache_policy_v1\tposition_id={}\texact_cache_scope={}\texact_cache_policy={}",
+            fields[0],
+            args.exact_cache_scope,
+            if args.exact_cache_scope == "game" {
+                "diagnostic-game-v1"
+            } else {
+                "exact-cache-cross-decision-suspended-v1"
+            },
+        );
         io::stderr()
             .flush()
             .map_err(|error| format!("stderr: {error}"))?;
@@ -368,6 +384,26 @@ mod tests {
     fn board_with_stones(stones: usize) -> Board {
         let flat = format!("{}{}", "B".repeat(stones), ".".repeat(64 - stones));
         board_from_flat_string(&flat).unwrap()
+    }
+
+    #[test]
+    fn exact_cache_game_is_explicit_diagnostic_opt_in() {
+        assert_eq!(args(&[]).unwrap().exact_cache_scope, "turn");
+        assert_eq!(
+            args(&["--exact-cache-scope", "turn"])
+                .unwrap()
+                .exact_cache_scope,
+            "turn"
+        );
+        assert_eq!(
+            args(&["--exact-cache-scope", "game"])
+                .unwrap()
+                .exact_cache_scope,
+            "game"
+        );
+        assert!(args(&["--exact-cache-scope", "persistent"]).is_err());
+        assert!(args(&["--advisor-analysis", "--exact-cache-scope", "game"]).is_err());
+        assert!(args(&["--advisor-analysis", "--exact-cache-scope", "turn"]).is_ok());
     }
 
     #[test]

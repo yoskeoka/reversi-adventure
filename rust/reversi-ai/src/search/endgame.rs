@@ -569,7 +569,9 @@ impl<'a> EndgameSolver<'a> {
                 Bound::UpperBound if entry.score <= alpha => {
                     return Ok(SmallResult::empty(entry.score));
                 }
-                Bound::LowerBound if entry.score > alpha => alpha = entry.score,
+                // A lower bound constrains the node value, not a played move.
+                // Raising alpha here could let a fail-low child tie that value
+                // and become the PV without proving it achieves the score.
                 _ => {}
             }
         }
@@ -791,7 +793,8 @@ impl<'a> EndgameSolver<'a> {
                         pv: Vec::new(),
                     });
                 }
-                Bound::LowerBound if entry.score > alpha => alpha = entry.score,
+                // Keep the caller's window when a selected continuation must
+                // still be proved; a retained lower bound has no played PV.
                 _ => {}
             }
         }
@@ -1168,6 +1171,171 @@ mod tests {
         best
     }
 
+    fn counterexample_fixture() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../../../tools/reversi-ai-benchmark/fixtures/exact-cache-counterexample-v1.json"
+        ))
+        .unwrap()
+    }
+
+    // Prove every played PV continuation independently, including forced-pass
+    // sign changes, rather than merely accepting a legal first move or PV length.
+    fn assert_proven_pv(board: &Board, color: Color, score: i32, pv: &[Position]) {
+        let mut board = *board;
+        let mut side = color;
+        let mut value = score;
+        for &position in pv {
+            if !moves::has_legal_move(&board, side) {
+                assert!(moves::has_legal_move(&board, side.opponent()));
+                side = side.opponent();
+                value = -value;
+            }
+            assert_ne!(moves::legal_moves(&board, side) & position.bit_mask(), 0);
+            board = moves::make_move(&board, side, position);
+            side = side.opponent();
+            value = -value;
+            assert_eq!(full_window_reference(&board, side).score, value);
+        }
+        assert!(!moves::has_legal_move(&board, side));
+        assert!(!moves::has_legal_move(&board, side.opponent()));
+        assert_eq!(terminal_score(&board, side), value);
+    }
+
+    #[test]
+    fn retained_lower_bound_proves_selected_counterexample_child() {
+        let fixture = counterexample_fixture();
+        assert_eq!(fixture["schema_version"], 1);
+        let board = Board::from_string(&format_board(fixture["board"].as_str().unwrap())).unwrap();
+        let transcript = fixture["moves"].as_str().unwrap();
+        let recipe = &fixture["reproduction"];
+        let target = recipe["target_prefix_plies"].as_u64().unwrap() as usize;
+        assert_eq!(transcript.len(), target * 2);
+        let keys = ZobristKeys::new();
+        let mut table = ExactTable::new(recipe["table_capacity"].as_u64().unwrap() as usize);
+        let mut nodes = 0;
+        let budget = SearchBudget::with_node_limit_only(recipe["budget_nodes"].as_u64().unwrap());
+        let mut solver = EndgameSolver::new(&keys, &mut table, &mut nodes);
+        let mut current = Board::new();
+        let mut side = Color::Black;
+        for (ply, mv) in transcript.as_bytes().chunks_exact(2).enumerate() {
+            if recipe["warm_prefix_plies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p.as_u64() == Some(ply as u64))
+            {
+                assert_eq!(side, Color::White);
+                assert!(current.empty_cells().count_ones() <= 13);
+                let warm = solver.solve(&current, side, &budget);
+                assert!(warm.exact);
+            }
+            let position = Position::new(mv[1] - b'1', mv[0] - b'a');
+            assert_ne!(moves::legal_moves(&current, side) & position.bit_mask(), 0);
+            current = moves::make_move(&current, side, position);
+            side = side.opponent();
+        }
+        assert_eq!(current, board);
+        assert_eq!(fixture["side"], "W");
+        assert_eq!(side, Color::White);
+        assert_eq!(
+            board.empty_cells().count_ones(),
+            fixture["empty_squares"].as_u64().unwrap() as u32
+        );
+        let reference = full_window_reference(&board, side);
+        assert_eq!(
+            reference.score,
+            fixture["expected"]["root_score"].as_i64().unwrap() as i32
+        );
+        for name in ["a4", "a7"] {
+            let position = Position::new(name.as_bytes()[1] - b'1', 0);
+            let child = moves::make_move(&board, side, position);
+            assert_eq!(
+                child,
+                Board::from_string(&format_board(
+                    fixture["expected"]["children"][name]["board"]
+                        .as_str()
+                        .unwrap()
+                ))
+                .unwrap()
+            );
+            assert_eq!(
+                -full_window_reference(&child, side.opponent()).score,
+                fixture["expected"]["child_scores_root_view"][name]
+                    .as_i64()
+                    .unwrap() as i32
+            );
+        }
+        let result = solver.solve(&board, side, &budget);
+        assert!(result.exact);
+        assert_eq!(result.completed_depth, 7);
+        assert_eq!(result.score, Some(reference.score));
+        let SearchOutcome::Move(selected) = result.outcome else {
+            panic!("expected move")
+        };
+        assert_eq!(result.pv.first(), Some(&selected));
+        let child = moves::make_move(&board, side, selected);
+        assert_eq!(
+            -full_window_reference(&child, side.opponent()).score,
+            reference.score
+        );
+        assert_eq!(result.pv, reference.pv);
+        assert_proven_pv(&board, side, reference.score, &result.pv);
+        assert!(solver.cache_diagnostics().hits > 0);
+        eprintln!(
+            "bounded suffix: {} nodes, selected {selected:?}, score {:?}, cache hits {}",
+            *solver.nodes_searched,
+            result.score,
+            solver.cache_diagnostics().hits
+        );
+        let entry = solver
+            .table
+            .get(keys.hash(&board, side), &board, side)
+            .unwrap();
+        assert_eq!(entry.bound, Bound::Exact);
+        assert_eq!(entry.pv, result.pv);
+    }
+
+    #[test]
+    fn counterexample_bounds_collisions_and_interrupted_reuse_preserve_proof() {
+        let fixture = counterexample_fixture();
+        let board = Board::from_string(&format_board(fixture["board"].as_str().unwrap())).unwrap();
+        let reference = full_window_reference(&board, Color::White);
+        for capacity in [1, 1 << 18] {
+            for (alpha, beta, bound) in [(3, 4, Bound::LowerBound), (4, 5, Bound::UpperBound)] {
+                let keys = ZobristKeys::new();
+                let mut table = ExactTable::new(capacity);
+                let mut nodes = 0;
+                let budget = SearchBudget::with_node_limit_only(100_000);
+                let mut solver = EndgameSolver::new(&keys, &mut table, &mut nodes);
+                let probe = solver
+                    .negamax(&board, Color::White, alpha, beta, &budget)
+                    .unwrap();
+                assert_eq!(probe.score, reference.score);
+                let entry = solver
+                    .table
+                    .get(keys.hash(&board, Color::White), &board, Color::White)
+                    .unwrap();
+                assert_eq!(entry.bound, bound);
+                assert!(entry.pv.is_empty());
+                // A retained bound cannot make an interrupted root complete.
+                let interrupted = solver.solve(
+                    &board,
+                    Color::White,
+                    &SearchBudget::with_node_limit_only(*solver.nodes_searched + 1),
+                );
+                assert!(!interrupted.exact);
+                assert_eq!(interrupted.score, None);
+                assert_eq!(interrupted.completed_depth, 0);
+                assert!(interrupted.pv.is_empty());
+                let result = solver.solve(&board, Color::White, &budget);
+                assert!(result.exact);
+                assert_eq!(result.score, Some(reference.score));
+                assert_eq!(result.pv, reference.pv);
+                assert_proven_pv(&board, Color::White, reference.score, &result.pv);
+            }
+        }
+    }
+
     #[test]
     fn pvs_matches_full_window_reference_on_reachable_endgames() {
         let root = sixteen_empty_board();
@@ -1241,6 +1409,36 @@ mod tests {
                 SearchOutcome::GameOver
             };
             assert_eq!(result.outcome, expected_outcome);
+            for (alpha, beta, expected_bound) in [
+                (reference.score - 1, reference.score, Bound::LowerBound),
+                (reference.score, reference.score + 1, Bound::UpperBound),
+            ] {
+                let keys = ZobristKeys::new();
+                let mut table = ExactTable::new(1 << 8);
+                let mut nodes = 0;
+                let budget = SearchBudget::with_node_limit_only(10_000);
+                let mut solver = EndgameSolver::new(&keys, &mut table, &mut nodes);
+                let probe = solver.negamax(&board, color, alpha, beta, &budget).unwrap();
+                if expected_bound == Bound::LowerBound {
+                    assert!(probe.score >= beta && probe.score <= reference.score);
+                } else {
+                    assert!(probe.score <= alpha && probe.score >= reference.score);
+                }
+                if legal != 0 {
+                    let entry = solver
+                        .table
+                        .get(keys.hash(&board, color), &board, color)
+                        .unwrap();
+                    assert_eq!(entry.bound, expected_bound);
+                    assert!(entry.pv.is_empty());
+                }
+                let reused = solver.solve(&board, color, &budget);
+                assert!(reused.exact);
+                assert_eq!(reused.score, Some(reference.score));
+                assert_eq!(reused.outcome, expected_outcome);
+                assert_eq!(reused.pv, reference.pv);
+                assert_proven_pv(&board, color, reference.score, &reused.pv);
+            }
             outcomes[match expected_outcome {
                 SearchOutcome::Move(_) => 0,
                 SearchOutcome::Pass => 1,
