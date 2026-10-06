@@ -21,7 +21,7 @@ import test_whole_game as fixture
 w = fixture.whole_game
 root = Path(sys.argv[1])
 args = SimpleNamespace(kind="cli", binary=root/"binary", artifact=root/"artifact",
-    midgame_depth=8, cache_scope="game", timeout_seconds=2, max_rss_kib=1000,
+    midgame_depth=8, cache_scope="turn", timeout_seconds=2, max_rss_kib=1000,
     max_decisions=120, oracle_cwd=None, output=root/"report.json", progress_every=1,
     source_revision="fixture")
 calls = []

@@ -120,6 +120,54 @@ fn cli_rejects_zero_search_depth() {
 }
 
 #[test]
+fn cli_rejects_game_scope_before_reading_input() {
+    let output = run_cli_with_args("", ["--exact-cache-scope", "game"]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("suspended for exact-cache correctness")
+    );
+}
+
+#[test]
+fn default_and_explicit_turn_repeated_exact_requests_match() {
+    let board = "..WWWWWW.WWWWWWW.WWBWWBW.WBWBWBW.BBBWBWWBBBBWWWB.BBWBWWBBBBBBBWB";
+    let input = format!("position\t{board}\tW\nposition\t{board}\tW\n");
+    for args in [vec![], vec!["--exact-cache-scope", "turn"]] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_reversi-ai-cli"))
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines: Vec<_> = stdout.lines().collect();
+        assert_eq!(lines, ["position\ta4", "position\ta4"]);
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let diagnostics: Vec<Vec<_>> = stderr
+            .lines()
+            .filter(|line| line.starts_with("search_diagnostic_v1\t"))
+            .map(|line| {
+                line.split('\t')
+                    .filter(|field| !field.starts_with("elapsed_us="))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0], diagnostics[1]);
+    }
+}
+
+#[test]
 fn cli_rejects_invalid_trained_mode_configuration() {
     let missing_artifact = run_cli_with_args("", ["--evaluator", "trained"]);
     assert!(!missing_artifact.status.success());

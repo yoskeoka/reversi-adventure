@@ -983,6 +983,11 @@ def verify_segment_receipt(segment: dict, max_rss_kib: int) -> None:
                     "unobserved shutdown claimed")
 
 
+def require_execution_scope(kind: str, scope: str) -> None:
+    require(kind == "oracle" or scope == "turn",
+            "CLI game exact-cache scope is suspended until correctness repair (0044); use turn")
+
+
 def measurement_identity(args) -> dict:
     require(args.kind in ("oracle", "cli", "cli-persistent"), "legacy CLI cannot measure reset conditions")
     require(getattr(args, "exact_empty", 16) in (16, 20, 24), "unsupported exact threshold")
@@ -1002,6 +1007,7 @@ def measurement_identity(args) -> dict:
 
 def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_dir: Path,
                       conditions_done: int = 0, conditions_total: int = 1) -> dict:
+    require_execution_scope(args.kind, args.cache_scope)
     started = time.monotonic()
     every = getattr(args, "progress_every", 1)
     require(type(every) is int and every > 0, "progress interval invalid")
@@ -1189,7 +1195,8 @@ def main(argv: list[str] | None = None) -> int:
     measure.add_argument("--oracle-cwd", type=Path)
     measure.add_argument("--midgame-depth", type=int, choices=(8, 12), required=True)
     measure.add_argument("--exact-empty", type=int, choices=(16, 20, 24), default=16)
-    measure.add_argument("--cache-scope", choices=("game", "turn"), default="game")
+    measure.add_argument("--cache-scope", choices=("game", "turn"),
+                         help="CLI defaults to turn; Oracle uses game")
     measure.add_argument("--timeout-seconds", type=float, default=310)
     measure.add_argument("--max-rss-kib", type=int, required=True)
     measure.add_argument("--max-decisions", type=int, default=120)
@@ -1216,6 +1223,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "measure":
+            if args.cache_scope is None:
+                args.cache_scope = "game" if args.kind == "oracle" else "turn"
             identity = measurement_identity(args)
             measure_resumable(args, hashlib.sha256(canonical(identity)).hexdigest(),
                               args.output.stem, args.checkpoint_dir or Path(str(args.output)+".checkpoints"))

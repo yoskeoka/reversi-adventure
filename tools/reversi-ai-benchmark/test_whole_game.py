@@ -380,7 +380,7 @@ class ResumableTests(unittest.TestCase):
         self.binary.write_bytes(b"cli")
         self.artifact.write_bytes(b"artifact")
         self.args = SimpleNamespace(kind="cli", binary=self.binary, artifact=self.artifact,
-            midgame_depth=8, cache_scope="game", timeout_seconds=2, max_rss_kib=1000,
+            midgame_depth=8, cache_scope="turn", timeout_seconds=2, max_rss_kib=1000,
             max_decisions=120, oracle_cwd=None, output=self.root / "report.json", progress_every=1,
             source_revision="abc")
         self.checkpoints = self.root / "checkpoints"
@@ -410,10 +410,31 @@ class ResumableTests(unittest.TestCase):
              patch.object(whole_game, "proc_usage", return_value={"user_cpu_ns": 0, "system_cpu_ns": 0, "peak_rss_kib": 100}):
             return whole_game.measure_resumable(self.args, "a" * 64, "fixture", self.checkpoints)
 
+    def test_measure_cli_defaults_turn_and_oracle_retains_game(self):
+        for kind, expected in (("cli", "turn"), ("oracle", "game")):
+            with patch.object(whole_game, "measure_resumable") as measure:
+                self.assertEqual(whole_game.main([
+                    "measure", "--kind", kind, "--binary", str(self.binary),
+                    "--midgame-depth", "8", "--max-rss-kib", "1000",
+                    "--output", str(self.args.output)]), 0)
+            self.assertEqual(measure.call_args.args[0].cache_scope, expected)
+
+    def test_game_scope_rejected_before_output_or_process_creation(self):
+        self.args.cache_scope = "game"
+        with patch.object(whole_game, "Seat") as seat:
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "scope is suspended"):
+                whole_game.measure_resumable(self.args, "a" * 64, "fixture", self.checkpoints)
+            seat.assert_not_called()
+        self.assertFalse(self.checkpoints.exists())
+        self.assertFalse(self.args.output.exists())
+        # Offline identity/verification retain historical game semantics.
+        self.assertEqual(whole_game.measurement_identity(self.args)["settings"]["exact_cache_scope"], "game")
+
     def test_v2_report_requires_every_decision_resource_field(self):
         fields = ("legal_move_count", "phase", "resources", "resource_observations")
         for kind in ("cli", "cli-persistent", "oracle"):
             self.args.kind = kind
+            self.args.cache_scope = "game" if kind == "oracle" else "turn"
             self.args.artifact = None if kind == "oracle" else self.artifact
             self.args.output = self.root / f"{kind}.json"
             self.checkpoints = self.root / f"{kind}-checkpoints"
@@ -650,6 +671,7 @@ class ResumableTests(unittest.TestCase):
 
     def test_oracle_identity_records_actual_protocol(self):
         self.args.kind = "oracle"
+        self.args.cache_scope = "game"
         self.args.artifact = None
         report = self.measure()
         self.assertEqual(report["identity"]["reset_protocol"], "gtp-clear-board")

@@ -177,6 +177,10 @@ def conditions(directory: str) -> list[dict]:
 
 
 def prepare(args: argparse.Namespace) -> Path:
+    # The frozen six-condition producer includes suspended game conditions.
+    # Keep its historical identity intact and refuse a new launch before creating files.
+    for condition in conditions(str(args.output_dir)):
+        wg.require_execution_scope(condition["kind"], condition["cache_scope"])
     progress("prepare", status="measuring", total=6)
     wg.require(sys.platform == "linux", "CPU/RSS measurement requires Linux")
     wg.require(args.output_dir.is_absolute() and not args.output_dir.exists(), "output directory must be new and absolute")
@@ -248,6 +252,9 @@ def verify_condition(manifest: dict, condition: dict, report: dict, progress_eve
 
 def execute(path: Path, verify_only: bool, progress_every: int) -> None:
     manifest = verify_manifest(path)
+    if not verify_only:
+        for condition in manifest["conditions"]:
+            wg.require_execution_scope(condition["kind"], condition["cache_scope"])
     directory = Path(manifest["output_directory"])
     with (directory / "measurement.lock").open("a+") as lock:
         try:

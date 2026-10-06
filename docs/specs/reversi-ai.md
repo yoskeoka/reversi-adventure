@@ -694,18 +694,32 @@ an exact answer or principal variation. Capacity and replacement are fixed and
 observable, including when collisions occur; ordinary heuristic TT depth
 semantics are unchanged.
 
-The diagnostic CLI can select a `turn` cache scope, which clears only the
-exact table before each request, or the default `game` scope, which retains
-proofs across requests. Both scopes use the same solver and heuristic TT.
-This switch is recorded in whole-game benchmark reports and does not alter
-the move-only stdout protocol.
+Cross-decision exact-cache reuse is suspended pending the root/PV correctness
+repair (0044). Every public `search_with_budget` and `analyze_with_budget` call
+clears the exact table once at entry, including pass, terminal and interrupted
+requests. Heuristic TT entries survive when the search context is unchanged.
+Recursive solving and all candidate comparisons within one Advisor call may
+reuse exact entries. This shared boundary also protects AiPlayer, Godot,
+Playground and self-play callers.
+
+The CLI defaults to `--exact-cache-scope turn`; explicit `game` is rejected
+before search with a correctness-suspension reason, never silently relabeled.
+New reinforcement preparation and execution pin effective `turn`, the
+`exact-cache-cross-decision-suspended-v1` policy and executable SHA-256 in a
+new manifest version. Older manifests cannot resume or supply adoption evidence
+with the current executable. Completed historical reports remain verifiable
+offline under their original version and identities. New whole-game preparation
+and measurement reject current-CLI `game` conditions during preflight.
+The move-only stdout protocol is unchanged.
 
 Self-play may select depth `12/8/12` with the 16-empty exact threshold while
 candidate matches and 0018 acceptance retain their separately frozen search
-settings. A version-3 production manifest and report identify the selected
+settings. A version-4 production manifest and version-3 report identify the selected
 self-play depths, exact threshold, and executable SHA-256. `prepare`, `run`,
 and `verify` reject a mismatched binary or manifest, including an older
-manifest lacking these identities. Heuristic positions at depth 8 and 12 are
+manifest lacking these identities. The report's manifest digest includes the
+version-4 safety policy; artifact/update and report encoding retain version 3.
+Heuristic positions at depth 8 and 12 are
 different workloads.
 
 Within one configuration, baseline and candidate must
@@ -736,8 +750,9 @@ acknowledge before a game's first decision. Reinforcement self-play and candidat
 matches use the same boundary; prepare/run/verify pin `one-game` cache lifetime,
 reset protocol and executable identity, and reject manifests lacking them.
 Interrupted or failed preparation leaves no published reinforcement manifest.
-Within a game search state survives between decisions, except that diagnostic
-`turn` scope clears the exact table on every decision. Across games no search
+Within a game heuristic search state survives between decisions; the suspended
+cross-decision policy clears exact entries at each public decision boundary.
+Across games no search
 state survives, even when seat processes remain alive. Reports record reset
 identity, duration and acknowledgement; unsupported or missing acknowledgement
 rejects new measurement conditions. Resumable external Oracle measurements

@@ -172,10 +172,11 @@ impl SearchEngine {
         config: &DecisionMoveConfig,
         budget: &SearchBudget,
     ) -> Result<AnalysisResult, String> {
+        // Suspend reuse across decisions while retaining reuse within this call.
+        self.exact_table.clear();
         let (fingerprint, config_id) = advisor_identity(evaluator, config);
         if self.context_fingerprint != Some(fingerprint) {
             self.tt.clear();
-            self.exact_table.clear();
             self.context_fingerprint = Some(fingerprint);
         }
         let legal = moves::legal_moves(board, color);
@@ -237,10 +238,10 @@ impl SearchEngine {
         budget: &SearchBudget,
     ) -> SearchResult {
         let started = Instant::now();
+        self.exact_table.clear();
         let context_fingerprint = search_context_fingerprint(evaluator, config);
         if self.context_fingerprint != Some(context_fingerprint) {
             self.tt.clear();
-            self.exact_table.clear();
             self.context_fingerprint = Some(context_fingerprint);
         }
 
@@ -329,8 +330,80 @@ impl Default for SearchEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn small_exact_board() -> Board {
+        Board::from_string(
+            "..WWWWWW\n.WWWWWWW\n.WWBWWBW\n.WBWBWBW\n.BBBWBWW\nBBBBWWWB\n.BBWBWWB\nBBBBBBWB",
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn new_game_matches_fresh_search_and_preserves_intragame_reuse() {
+    fn advisor_clears_previous_decision_even_on_interruption_and_pass() {
+        let evaluator = crate::eval::strategic::StrategicEvaluator::new();
+        let config = DecisionMoveConfig::new(1, 1, 16).unwrap();
+        let board = small_exact_board();
+        let mut engine = SearchEngine::new();
+        let budget = SearchBudget::with_node_limit_only(1_000_000);
+        let first = engine
+            .analyze_with_budget(&board, Color::White, &evaluator, &config, &budget)
+            .unwrap();
+        assert!(engine.exact_table.occupied() > 0);
+        assert!(engine
+            .analyze_with_budget(
+                &board,
+                Color::White,
+                &evaluator,
+                &config,
+                &SearchBudget::with_node_limit_only(0)
+            )
+            .is_err());
+        assert_eq!(engine.exact_table.occupied(), 0);
+        let repeated = engine
+            .analyze_with_budget(&board, Color::White, &evaluator, &config, &budget)
+            .unwrap();
+        let fresh = SearchEngine::new()
+            .analyze_with_budget(&board, Color::White, &evaluator, &config, &budget)
+            .unwrap();
+        assert_eq!(first.scores, repeated.scores);
+        assert_eq!(repeated.scores, fresh.scores);
+        assert_eq!(repeated.outcome, fresh.outcome);
+        let mut pass = Board::empty();
+        pass.set(Position::new(0, 0), Color::Black);
+        pass.set(Position::new(0, 1), Color::White);
+        assert_eq!(
+            engine
+                .analyze_with_budget(&pass, Color::White, &evaluator, &config, &budget)
+                .unwrap()
+                .outcome,
+            SearchOutcome::Pass
+        );
+        assert_eq!(engine.exact_table.occupied(), 0);
+    }
+
+    #[test]
+    fn consecutive_child_decisions_match_fresh_tables() {
+        let evaluator = crate::eval::strategic::StrategicEvaluator::new();
+        let config = AiConfig::new(1, 1, 1);
+        let mut engine = SearchEngine::new();
+        let mut board = small_exact_board();
+        let mut side = Color::White;
+        for _ in 0..3 {
+            let result = engine.search(&board, side, &evaluator, &config);
+            let fresh = SearchEngine::new().search(&board, side, &evaluator, &config);
+            assert_eq!(result.outcome, fresh.outcome);
+            assert_eq!(result.score, fresh.score);
+            assert_eq!(result.pv, fresh.pv);
+            assert_eq!(result.nodes_searched, fresh.nodes_searched);
+            assert_eq!(result.exact_cache, fresh.exact_cache);
+            if let SearchOutcome::Move(position) = result.outcome {
+                board = moves::make_move(&board, side, position);
+            }
+            side = side.opponent();
+        }
+    }
+    #[test]
+    fn decisions_clear_exact_proofs_and_new_game_resets_heuristic_state() {
         let evaluator = crate::eval::strategic::StrategicEvaluator::new();
         let mut board = Board::new();
         let mut side = Color::Black;
@@ -364,10 +437,16 @@ mod tests {
             engine.new_game();
             let first = engine.search(&position, color, &evaluator, &config);
             let repeated = engine.search(&position, color, &evaluator, &config);
-            assert!(repeated.nodes_searched < first.nodes_searched);
             if first.exact {
-                assert!(repeated.exact_cache.hits > 0);
+                assert_eq!(repeated.nodes_searched, first.nodes_searched);
+                assert_eq!(repeated.exact_cache, first.exact_cache);
+                assert_eq!(repeated.pv, first.pv);
+                assert!(first.exact_cache.hits > 0, "within-solve reuse survives");
+            } else {
+                assert!(repeated.nodes_searched < first.nodes_searched);
             }
+            assert_eq!(repeated.outcome, first.outcome);
+            assert_eq!(repeated.score, first.score);
             engine.new_game();
             assert!(engine.context_fingerprint.is_none());
             let reset = engine.search(&position, color, &evaluator, &config);
