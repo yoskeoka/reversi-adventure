@@ -128,6 +128,7 @@ pub struct SearchEngine {
     exact_table: ExactTable,
     zobrist: ZobristKeys,
     context_fingerprint: Option<u64>,
+    diagnostic_game_exact_cache: bool,
 }
 
 const SEARCH_SEMANTICS_VERSION: u64 = 1;
@@ -225,6 +226,18 @@ impl SearchEngine {
             exact_table: ExactTable::new(1 << 18),
             zobrist: ZobristKeys::new(),
             context_fingerprint: None,
+            diagnostic_game_exact_cache: false,
+        }
+    }
+
+    /// Retain exact proofs between decisions for explicit diagnostic experiments.
+    ///
+    /// Production and training callers should use `new`; Advisor always clears
+    /// its proofs. Call `new_game` at each game boundary.
+    pub fn with_diagnostic_game_exact_cache() -> Self {
+        Self {
+            diagnostic_game_exact_cache: true,
+            ..Self::new()
         }
     }
 
@@ -238,10 +251,15 @@ impl SearchEngine {
         budget: &SearchBudget,
     ) -> SearchResult {
         let started = Instant::now();
-        self.exact_table.clear();
+        if !self.diagnostic_game_exact_cache {
+            self.exact_table.clear();
+        }
         let context_fingerprint = search_context_fingerprint(evaluator, config);
         if self.context_fingerprint != Some(context_fingerprint) {
             self.tt.clear();
+            if self.diagnostic_game_exact_cache {
+                self.exact_table.clear();
+            }
             self.context_fingerprint = Some(context_fingerprint);
         }
 
@@ -401,6 +419,62 @@ mod tests {
             }
             side = side.opponent();
         }
+    }
+
+    #[test]
+    fn diagnostic_game_reuses_proofs_and_reset_restores_fresh_search() {
+        let board = small_exact_board();
+        let evaluator = StrategicEvaluator::new();
+        let config = AiConfig::new(1, 1, 1);
+        let budget = SearchBudget::with_node_limit_only(100_000);
+        let mut engine = SearchEngine::with_diagnostic_game_exact_cache();
+        let first = engine.search_with_budget(&board, Color::White, &evaluator, &config, &budget);
+        let repeated =
+            engine.search_with_budget(&board, Color::White, &evaluator, &config, &budget);
+        assert!(first.exact && repeated.exact);
+        assert_eq!(first.outcome, repeated.outcome);
+        assert_eq!(first.score, repeated.score);
+        assert_eq!(first.pv, repeated.pv);
+        assert!(repeated.nodes_searched < first.nodes_searched);
+        assert!(repeated.exact_cache.hits > 0);
+        engine.new_game();
+        assert!(engine.diagnostic_game_exact_cache);
+        assert_eq!(engine.exact_table.occupied(), 0);
+        let reset = engine.search_with_budget(&board, Color::White, &evaluator, &config, &budget);
+        assert_eq!(reset.nodes_searched, first.nodes_searched);
+        assert_eq!(reset.exact_cache, first.exact_cache);
+    }
+
+    #[test]
+    fn diagnostic_game_context_changes_and_advisor_clear_proofs() {
+        let board = small_exact_board();
+        let evaluator = StrategicEvaluator::new();
+        let config = AiConfig::new(1, 1, 1);
+        let budget = SearchBudget::with_node_limit_only(100_000);
+        let interrupted = SearchBudget::with_node_limit_only(0);
+        let mut engine = SearchEngine::with_diagnostic_game_exact_cache();
+        engine.search_with_budget(&board, Color::White, &evaluator, &config, &budget);
+        assert!(engine.exact_table.occupied() > 0);
+        engine.search_with_budget(
+            &board,
+            Color::White,
+            &evaluator,
+            &AiConfig::new(2, 1, 1),
+            &interrupted,
+        );
+        assert_eq!(engine.exact_table.occupied(), 0);
+        engine.search_with_budget(&board, Color::White, &evaluator, &config, &budget);
+        assert!(engine.exact_table.occupied() > 0);
+        assert!(engine
+            .analyze_with_budget(
+                &board,
+                Color::White,
+                &evaluator,
+                &DecisionMoveConfig::new(1, 1, 16).unwrap(),
+                &interrupted
+            )
+            .is_err());
+        assert_eq!(engine.exact_table.occupied(), 0);
     }
     #[test]
     fn decisions_clear_exact_proofs_and_new_game_resets_heuristic_state() {

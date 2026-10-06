@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "id": "exact-cache-counterexample-v1",
+  "description": "One saved White-to-move counterexample corroborated by two seat assignments; immutable CLI and independently completed Oracle queries.",
+  "moves": "c4e3f3g3f6c5g2f4e2f5h3h1f2g4h4h2g5h5g6e6f7d7d6c7c8h7h6g7h8d8e8c6g1e7d3f1e1b3b8b7a8b5b6b4c3d1d2c1c2b2f8g8a6",
+  "board": "..WWWWWW.WWWWWWW.WWBWWBW.WBWBWBW.BBBWBWWBBBBWWWB.BBWBWWBBBBBBBWB",
+  "side": "W",
+  "empty_squares": 7,
+  "passes": 0,
+  "expected": {
+    "root_score": 4,
+    "child_scores_root_view": {
+      "a4": 4,
+      "a7": 2
+    },
+    "saved_oracle_root_move": "a5",
+    "children": {
+      "a4": {
+        "board": "..WWWWWW.WWWWWWW.WWBWWBWWWBWBWBW.WBBWBWWBBWBWWWB.BBWBWWBBBBBBBWB",
+        "side": "B",
+        "oracle_score": -4
+      },
+      "a7": {
+        "board": "..WWWWWW.WWWWWWW.WWBWWBW.WBWBWBW.BWBWBWWBWBBWWWBWWWWBWWBBBBBBBWB",
+        "side": "B",
+        "oracle_score": -2
+      }
+    }
+  },
+  "reproduction": {
+    "initial_position": "standard",
+    "initial_side": "B",
+    "warm_prefix_plies": [
+      47,
+      49,
+      51
+    ],
+    "warm_empty_squares": [
+      13,
+      11,
+      9
+    ],
+    "warm_search": "full_window",
+    "target_prefix_plies": 53,
+    "target_search": "full_window",
+    "same_solver_and_table": true,
+    "budget_nodes": 100000,
+    "table_capacity": 262144,
+    "cold_seven_empty_null_window_reproduces": false,
+    "cold_seven_empty_null_window_checked": [
+      3,
+      4
+    ]
+  },
+  "saved_failure": {
+    "move": "a7",
+    "root_score": 4,
+    "selected_child_score_root_view": 2,
+    "nodes": 30,
+    "exact": true
+  },
+  "saved_turn_result": {
+    "move": "a4",
+    "root_score": 4,
+    "selected_child_score_root_view": 4,
+    "nodes": 399,
+    "exact": true
+  },
+  "evidence": {
+    "root": ".local/reversi-ai-whole-game-0035/exact-threshold-0041-42f6d57",
+    "manifest_digest": "7d3104d720fdbe605839af893a0ff4c47207e423d9b3eec633a6add1728de960",
+    "receipt_digest_definition": "whole_game.sealed: SHA-256 of canonical JSON without report_digest, including the terminating newline",
+    "oracle_version": "7.8.1",
+    "oracle_binary_sha256": "b97a36a29eb4dad32a18b9edafb9eb6776cef3a96b9c198c01102c22c7c0a148",
+    "step_index": 47,
+    "source_threshold": 20,
+    "source_depth": 12,
+    "receipts": [
+      {
+        "kind": "cli",
+        "policy": "turn",
+        "assignment": 0,
+        "path": "full/full-20-12-turn-opening-2-seat0.json",
+        "report_digest": "ca4adf126aee99a7252961df56de4f571fe72ed5026ff4088c05ee17b2221e1c",
+        "file_sha256": "4406c2edd79d7dd1528ff3483ac3a1fb80418b580556cdc5ab6c7a151a9ecfc6",
+        "status": "completed"
+      },
+      {
+        "kind": "oracle",
+        "policy": "turn",
+        "assignment": 0,
+        "path": "full-oracle/full-20-12-turn-opening-2-seat0-position-47.json",
+        "report_digest": "bea202d55dda48e4fe95d2a9aee0e1da0a0a54edd7373e41e6bfe5197f2bab87",
+        "file_sha256": "fea9359fea596c0da3c4c2e482db27f8227f67073977ee6cf0a84a094732d8dd",
+        "source_digest": "ca4adf126aee99a7252961df56de4f571fe72ed5026ff4088c05ee17b2221e1c",
+        "status": "completed",
+        "root_query_completed": true,
+        "child_query_completed": true
+      },
+      {
+        "kind": "cli",
+        "policy": "turn",
+        "assignment": 1,
+        "path": "full/full-20-12-turn-opening-2-seat1.json",
+        "report_digest": "6d8bea327665d6e937355f84fc4d5a056ff932365f0e276b0f82b17ccd8584fa",
+        "file_sha256": "8e116edb157b2e78ff1bbb2d3a4cc37e887423aa27fa0a4b9667fcfbd14e47c4",
+        "status": "completed"
+      },
+      {
+        "kind": "oracle",
+        "policy": "turn",
+        "assignment": 1,
+        "path": "full-oracle/full-20-12-turn-opening-2-seat1-position-47.json",
+        "report_digest": "b698c5048a39c069e7aa3afbdbb64b954923dbe2c8022b8ec381225ca0a7fbc4",
+        "file_sha256": "86649e481d79fe602e547f7248f518b1c3da1169fdc46108991f61f4196a340a",
+        "source_digest": "6d8bea327665d6e937355f84fc4d5a056ff932365f0e276b0f82b17ccd8584fa",
+        "status": "completed",
+        "root_query_completed": true,
+        "child_query_completed": true
+      },
+      {
+        "kind": "cli",
+        "policy": "game",
+        "assignment": 0,
+        "path": "full/full-20-12-game-opening-2-seat0.json",
+        "report_digest": "2c53d719b6f5f028a3670c3e632e64dc98c6d1375bd923d7821c179f97bfbc73",
+        "file_sha256": "1c1a675c10e99edcaa0e8ca01dd2c8870a55a37815b95974fc19b4e4043d2c37",
+        "status": "completed"
+      },
+      {
+        "kind": "oracle",
+        "policy": "game",
+        "assignment": 0,
+        "path": "full-oracle/full-20-12-game-opening-2-seat0-position-47.json",
+        "report_digest": "7f2029ad0acf099cc1babeaeeb32e61dec4d09012e1f69d7a51ca19688c4b213",
+        "file_sha256": "66093a1a85bbfc113726a9b1a336bcc3c5e02e0790a5ddb60021f7d895bf1e52",
+        "source_digest": "2c53d719b6f5f028a3670c3e632e64dc98c6d1375bd923d7821c179f97bfbc73",
+        "status": "failed",
+        "root_query_completed": true,
+        "child_query_completed": true
+      },
+      {
+        "kind": "cli",
+        "policy": "game",
+        "assignment": 1,
+        "path": "full/full-20-12-game-opening-2-seat1.json",
+        "report_digest": "b65255f9172947318f750fa9aba80c4f55dd89769cde39ec074ae3470a92b3b7",
+        "file_sha256": "104caf64da5ec99788ec924f46e73ccf2f665f4fe3627690a0f17060b9a57323",
+        "status": "completed"
+      },
+      {
+        "kind": "oracle",
+        "policy": "game",
+        "assignment": 1,
+        "path": "full-oracle/full-20-12-game-opening-2-seat1-position-47.json",
+        "report_digest": "4da449e8c7f98f5bb3dddf17ab8bb5ff86a05d4d2581edad4547e1ae8e6c0299",
+        "file_sha256": "54cf6b13142bd25c4df62ab06e47df0f17a361db23b93d667b2e4c794bea52a2",
+        "source_digest": "b65255f9172947318f750fa9aba80c4f55dd89769cde39ec074ae3470a92b3b7",
+        "status": "failed",
+        "root_query_completed": true,
+        "child_query_completed": true
+      }
+    ]
+  },
+  "scope": "Short deterministic correctness regression only. Does not establish all-setting correctness, production game-cache adoption, or resolve the separate sixteen-empty score discrepancy."
+}

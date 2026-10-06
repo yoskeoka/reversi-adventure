@@ -636,6 +636,16 @@ window. It probes later moves with a one-point window and repeats a probe with
 the full window when the result can raise alpha without proving a cutoff.
 Only proven bounds may be reused from these probes; a bounded result never
 becomes a completed exact root score or a fabricated principal variation.
+An EXACT entry proves both the node value and its selected continuation. A
+LOWER/UPPER entry proves only an inequality and carries no played PV. A cached
+lower bound may prove a cutoff, but must not raise the search window's alpha
+when the remaining search is responsible for proving the best move: a fail-low
+continuation equal to that bound does not prove that move achieves the value.
+A completed full-window root must return a legal selected child whose value,
+converted back to the root side (including passes), equals the reported best
+score. The legal PV must carry that proof through to termination; score alone
+or PV length alone does not justify `exact=true`. An interrupted attempt exposes
+no exact score or PV, including when a retained bound was available.
 Move ordering and strict greater-than tie breaking preserve the chosen move
 and complete principal variation; exact move ordering is independent of
 transposition hits so extra probes cannot change equal-score choices.
@@ -694,16 +704,25 @@ an exact answer or principal variation. Capacity and replacement are fixed and
 observable, including when collisions occur; ordinary heuristic TT depth
 semantics are unchanged.
 
-Cross-decision exact-cache reuse is suspended pending the root/PV correctness
-repair (0044). Every public `search_with_budget` and `analyze_with_budget` call
+Production cross-decision exact-cache reuse remains suspended. Every default
+`search_with_budget` and every `analyze_with_budget` call
 clears the exact table once at entry, including pass, terminal and interrupted
 requests. Heuristic TT entries survive when the search context is unchanged.
 Recursive solving and all candidate comparisons within one Advisor call may
 reuse exact entries. This shared boundary also protects AiPlayer, Godot,
 Playground and self-play callers.
 
-The CLI defaults to `--exact-cache-scope turn`; explicit `game` is rejected
-before search with a correctness-suspension reason, never silently relabeled.
+The CLI defaults to `--exact-cache-scope turn`. Explicit `game` is an experimental
+diagnostic opt-in to a separately constructed engine that retains exact entries
+between search decisions; a companion `exact_cache_policy_v1` stderr record
+identifies the position id, effective scope and `diagnostic-game-v1` policy for
+every search decision. Existing `search_diagnostic_v1` fields and encoding remain
+unchanged for current production parsers. Default and explicit turn records
+identify `turn` and `exact-cache-cross-decision-suspended-v1`. Advisor rejects
+game and always uses the default per-call clearing boundary. `new_game` and
+search-context changes clear both tables under either scope. This opt-in is
+for the separate correctness verification (0045), and does not re-enable
+production adoption or change the default shared AI/training policy.
 New reinforcement preparation and execution pin effective `turn`, the
 `exact-cache-cross-decision-suspended-v1` policy and executable SHA-256 in a
 new manifest version. Older manifests cannot resume or supply adoption evidence
