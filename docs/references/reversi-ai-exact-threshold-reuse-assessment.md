@@ -235,6 +235,39 @@ heuristic phaseの時間差であり、全局1.61%差の全てをcache再利用�
 中盤のheuristic評価に正解を要求したわけではない。対象は空き7マス・白手番のexact root。
 opening-2のassignment 0/1で、それぞれturn47まで同じ盤面・同じ意味履歴の両scopeを比較した。
 
+以下が標準初期盤面・黒先手から反例の選択直前までの棋譜文字列。
+固定openingの6着手も含む全53着手で、passはない。
+`turn47` はopening後のdecision番号（0始まり）であり、次が白の54着手目となる。
+両assignment・両scopeの保存記録から取り出し、合法手を順に再生して
+空き7マス・白手番の同一盤面に到達することを確認した。
+
+```text
+c4e3f3g3f6c5g2f4e2f5h3h1f2g4h4h2g5h5g6e6f7d7d6c7c8h7h6g7h8d8e8c6g1e7d3f1e1b3b8b7a8b5b6b4c3d1d2c1c2b2f8g8a6
+```
+
+到達盤面（a1からh8の行優先、`B`=黒、`W`=白、`.`=空き）は次のとおり。
+
+```text
+..WWWWWW.WWWWWWW.WWBWWBW.WBWBWBW.BBBWBWWBBBBWWWB.BBWBWWBBBBBBBWB
+```
+
+選択手も含めた54着手の棋譜文字列は、turn scopeが次の文字列。
+
+```text
+c4e3f3g3f6c5g2f4e2f5h3h1f2g4h4h2g5h5g6e6f7d7d6c7c8h7h6g7h8d8e8c6g1e7d3f1e1b3b8b7a8b5b6b4c3d1d2c1c2b2f8g8a6a4
+```
+
+game scopeは次の文字列。
+
+```text
+c4e3f3g3f6c5g2f4e2f5h3h1f2g4h4h2g5h5g6e6f7d7d6c7c8h7h6g7h8d8e8c6g1e7d3f1e1b3b8b7a8b5b6b4c3d1d2c1c2b2f8g8a6a7
+```
+
+探索条件はopening/midgame/endgame深度12/12/12、exact閾値20、node上限なし。
+再利用の反例を調べる際は、固定opening後からこの棋譜に沿って各decisionを探索し、
+局内のcacheを保持する。到達盤面だけを空のcacheで探索する条件とは区別する。
+出所は固定測定directoryの `full/full-20-12-{turn,game}-opening-2-seat{0,1}.json`。
+
 | scope | CLIの選択手 / 報告score / nodes | Oracle root | Oracle選択後（黒視点） | 選択手の白視点の値 |
 | --- | --- | --- | --- | --- |
 | turn | a4 / +4 / 399 | +4、depth7 complete | -4、depth6 complete | +4 |
