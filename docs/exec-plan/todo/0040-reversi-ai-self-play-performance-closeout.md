@@ -85,8 +85,16 @@
 ## 依存関係と順序
 
 - spec→offline分析/診断driver→0039形式のscript準備→局reset条件を含む人間の測定→検証→選択判断→親cleanup。
-- [0041](0041-reversi-ai-exact-threshold-reuse-assessment.md) の閾値16/20/24の測定も設定選択前に確認する。
-  高い閾値で未完了ならその失敗証拠を残し、現行16を超えた採用と記録しない。
+- 0041の測定は完了し、[評価記録](../../references/reversi-ai-exact-threshold-reuse-assessment.md)と
+  [実装PR #251](https://github.com/yoskeoka/reversi-adventure/pull/251)を設定選択前に確認する。
+  空き20・中盤深度8は両scope各8局と256Oracle位置が照合成功。平均wallはturn 495.633秒、
+  game 487.652秒だった。反復はなく、全局時間差1.61%の大半はnodesが同じheuristic phaseの
+  時間差なので、全てを再利用効果と解釈しない。後続exact rootのnodesは7.22%減った。
+  空き16はpilot点数不一致、24はpilot時間切れで除外した。空き20・中盤深度12は、
+  終盤空き7の同一prefixでgameが最善値+4を報告しながら値+2の手を選ぶ反例が2件ある。
+  これは中盤評価の比較ではなく完全読みの選択手不一致であり、その条件は採用しない。
+  cache再利用のスコア/手の対応と再利用条件の正確性を別計画で修正・再検証し、
+  production spec/manifest互換更新も済むまで高い閾値を本番へ採用しない。
 - 0036のTT正規化、0037の教師値/学習方法、0018の勝率受け入れは独立した計画のまま維持する。
 - 0032のsource digest mismatchはbenchmark検証を無効化しないが本番freeze前に解決する。
 

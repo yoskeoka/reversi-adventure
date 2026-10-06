@@ -75,9 +75,11 @@ exact=trueを先に分類し、それ以外をdecision盤面のoccupied<=20がop
 局単位保存/再開/scriptの[0039計画](https://github.com/yoskeoka/reversi-adventure/blob/8bc7f009f645da0b5277cb83794c17b3e56afe1d/docs/exec-plan/todo/0039-reversi-ai-whole-game-resumable-measurement.md)は実装し、起動手順は[計測handoff](reversi-ai-whole-game-0035.md)へ記録した。残る[0040](../exec-plan/todo/0040-reversi-ai-self-play-performance-closeout.md)は意味証拠/序盤コスト/設定判断を扱う。0035はその判断までactive。新本番manifestは0037 pilot成功と0032の完全game/provenance検証後に0019で凍結する。
 
 試遊で中盤深度8/12が遅く空き16の完全読みは速かったという人間の観察に基づき、
-[0041](../exec-plan/todo/0041-reversi-ai-exact-threshold-reuse-assessment.md) で空き20/24も測る。
-候補手数の多さは原因仮説として合法手数/時間を記録して確認する。高い閾値で再利用が効くかは
-未測定であり、16/20/24それぞれのturn/game比較と独立Oracle照合で判断する。
+[0041の評価記録](reversi-ai-exact-threshold-reuse-assessment.md)で空き20/24も測定した。
+空き20・中盤深度8は固定8局の意味/Oracle照合が通った。後続exact rootのnodesは7.22%減ったが、
+全局時間差は反復なしの参考値であり、全てをcache効果とは解釈しない。
+深度12設定の終盤完全読みには再利用ありで選択手の値が最善値に届かない反例がある。
+0040の本番選択には正確性の修正・再検証も必要であり、今回の実験だけで高い閾値を採用しない。
 
 benchmark artifactのdigest検証と学習元データ全体のprovenance検証は別。0032のgenerator source digest mismatchは本番freeze前の未解決項目であり、完成したbenchmarkの検証を学習元データ検証の完了と扱わない。
 

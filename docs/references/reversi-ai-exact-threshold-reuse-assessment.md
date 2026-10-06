@@ -1,9 +1,10 @@
 # 空き16/20/24・局内完全読み再利用の評価記録
 
-2026-10-05、人間がnode制限ありのpilot/Oracleを完走した。Oracleの終了時RSS観測に不具合があり、
-fullへ進めた閾値はなかった。人間指示でnode制限を撤廃し、新条件を別directoryで測定する。
-速度改善や採用候補を示す証拠はまだない。0041はactiveのまま残し、
-production exact=16と0018の候補対戦設定は維持する。
+2026-10-06、人間のnode上限なしの測定と全証拠のoffline verifyが完了した。
+空き20・中盤深度8は両scope各8局と全256Oracle位置の照合を通った。
+空き16は点数不一致、空き24はpilot時間切れ、空き20・中盤深度12は終盤の選択手不一致で除外する。
+実験の成否を報告する0041は完了し、計画は[実装PR #251](https://github.com/yoskeoka/reversi-adventure/pull/251)から取得する。
+production採用は0040で人間が判断する。exact=16と0018の候補対戦設定は維持する。
 
 ## 入力監査と承認された補完
 
@@ -170,3 +171,73 @@ Oracleは全112位置がRSS取得エラーの失敗として保存された。�
 
 新しいmanifestは同じ探索条件の24pilotを出所付きで引き継ぎ、Oracleから再開する。
 元112失敗は書き換えず保持する。点数不一致のgateも維持する。
+
+## 最終結果（2026-10-06）
+
+測定harnessは `42f6d575b7115b4ccd6aa2ab6d9d805adadc1b89`。
+workspace `.local/reversi-ai-whole-game-0035/exact-threshold-0041-42f6d57/` の全証拠を
+このharness checkoutで `exact_threshold.py verify --manifest <directory>/manifest.json` により再検証した。
+新しい測定は起動していない。以下は反復なしの単一serial runであり、有意性や本番採用を主張しない。
+本書のcloseout commitとは測定producer SHAを区別し、再検証は上の固定harnessで行う。
+
+| 証拠 | report digest |
+| --- | --- |
+| manifest | `7d3104d720fdbe605839af893a0ff4c47207e423d9b3eec633a6add1728de960` |
+| pilot Oracle manifest | `2e708d572dbb1256e33776bcfad756c699f247c80ad6fe155d3fe5fecc8fd5cc` |
+| full gate | `4db4ae75d5fba34324ae35a498729d37a6be4e9662684251b92d7e198eec8b1b` |
+| full Oracle manifest | `a07866790f5fe7d0c433804d752e3f6e8fa22f42250291a0324bb2e187c757df` |
+| assessment | `8d7f01cd5b67c510c3377f5cc1b2700952c566d5c42707505639baa5d00455a8` |
+
+| 閾値 | pilot完成 / 失敗 | pilot Oracle成功 / 不一致 | gate |
+| --- | --- | --- | --- |
+| 16 | 8 / 0 | 8 / 8 | 不一致で除外 |
+| 20 | 8 / 0 | 48 / 0 | full 32局へ進む |
+| 24 | 4 / 4 | 48 / 0（完成windowのみ） | 時間切れで除外 |
+
+RSS取得エラーは0件。終了途中の観測を保持して待機したprocessはpilot Oracleで204件、
+full Oracleで1,128件あり、実際の終了待機も検証した。fullは両深度・両scopeの全32局が完成した。
+中盤深度8のOracleは256/256成功、中盤深度12は326成功・2不一致で、後者の平均/改善率は生成しない。
+
+### 空き20・中盤深度8の有効な比較
+
+| 8局の測定 | turn | game |
+| --- | --- | --- |
+| 平均全局wall（秒） | 495.633415 | 487.652113 |
+| 平均全局CPU（秒） | 495.446297 | 487.480398 |
+| 最大RSS（KiB） | 71,616 | 71,616 |
+| exact nodes合計 | 646,005,240 | 640,356,092 |
+| exact wall合計（秒） | 603.940128 | 592.095600 |
+| exact CPU合計（秒） | 603.760 | 591.950 |
+
+観測された全局wall差は1.6103%、CPU差は1.6078%。exact nodesは0.8745%減った。
+各seatの最初のexact rootは16件で、nodesは両scopeとも567,713,578だった。
+後続112rootのnodesは78,291,662→72,642,514（7.2155%減）、
+wallは73.347847→66.968821秒、CPUは73.250→66.900秒だった。
+
+| phase（8局合計） | decision数 / 合法手数合計 | nodes（両scope、exactはturn→game） | wall秒（turn→game） |
+| --- | --- | --- | --- |
+| opening（depth12） | 88 / 702 | 368,192,278 | 3251.141521→3200.477038 |
+| midgame（depth8） | 190 / 1704 | 12,503,474 | 104.644804→103.313230 |
+| exact（空き20以下） | 128 / 724 | 646,005,240→640,356,092 | 603.940128→592.095600 |
+
+exact wallは全局wallの約15.2%で、序盤が支配的だった。全局時間差の大半はnodesが同じ
+heuristic phaseの時間差であり、全局1.61%差の全てをcache再利用の効果とは解釈しない。
+既存exact16は別workloadで、今回full gateを通っていないため、この測定から20が16より速いとは言わない。
+
+### 中盤深度12設定での終盤完全読みの選択手不一致
+
+中盤のheuristic評価に正解を要求したわけではない。対象は空き7マス・白手番のexact root。
+opening-2のassignment 0/1で、それぞれturn47まで同じ盤面・同じ意味履歴の両scopeを比較した。
+
+| scope | CLIの選択手 / 報告score / nodes | Oracle root | Oracle選択後（黒視点） | 選択手の白視点の値 |
+| --- | --- | --- | --- | --- |
+| turn | a4 / +4 / 399 | +4、depth7 complete | -4、depth6 complete | +4 |
+| game | a7 / +4 / 30 | +4、depth7 complete | -2、depth6 complete | +2 |
+
+gameは最善値+4を報告しながら値+2の手を選んでいる。両queryは非終局でcomplete solve済み。
+同じprefixを持つturnでは照合が通り、保持したexact cache条件の選択手に問題がある証拠となる。
+cache実装内の原因は未特定。これは空き16の±39/±40という点数差とは別に扱う。
+失敗jobは `full-20-12-game-opening-2-seat0-position-47` と `seat1-position-47`。
+
+0040へは「空き20・中盤深度8の固定8局では照合成功、深度12には完全読みの選択手不一致あり」と渡す。
+高い閾値の本番採用にはcache正確性の修正・再検証とproduction spec/manifest互換更新の別計画が必要。
