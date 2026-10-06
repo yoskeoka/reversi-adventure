@@ -171,3 +171,42 @@ source/harnessファイル、artifact、Oracle評価資源、sample、host、out
 正確性や有意な速度差を保証しない。抽出外rootを独立照合済みとは扱わない。
 本番turn/exact16、空き16の±39/±40未解決score契約、0040の人間判断を残す。
 0045計画は測定受領/検証待ちのため残し、準備実装と測定完了を分ける。
+
+### 固定済み入力と実行
+
+source/harness revisionは `2516a63db511d8cada44624bbd97dec910768f22`。
+出力はworkspaceの
+`.local/reversi-ai-exact-cache-correctness/run-0045-2516a63/`。
+manifestは全input/source/harness/Oracle評価資源/hostとoutput registryを保持する。
+ファイル一覧を持つmanifestを受領時の正本とし、個別receiptと派生reportを再計算する。
+
+| Evidence | SHA-256 / canonical seal |
+| --- | --- |
+| Manifest seal | `44d8a52750e4c4606b5d9ede2ff9b4bc031e4f5670cbf5637f9a8792afcbd75d` |
+| Manifest file | `3c7ccaf8e6c2dbbbb28b0088d464360c8e16fc99a83f94cf41d52f656f7e0614` |
+| Regression seal | `50daaa40d1f0fb134ca3581e2b1d93b5c940cab244b1d7cd384db60376d216f1` |
+| Launch script | `09c2758f7cffd72966952e44a5ba2adfd68f81535fe2307f1230bb2a8b0b9352` |
+| Repaired release CLI | `323cb7460bcf3f621221c65b506d748402cc05594f4d2f8589682b404c5b5dc7` |
+| Evaluator artifact | `d206b9bf5a86c7670c1e7c9e2cdbbeb442a94d18ba3d8efeb3423b11cbb3eb8f` |
+| Three-game sample | `4fadb5144ad54e74320bd4cecf574136d0c6e969f9aab2dfbf58f37e404516d0` |
+
+prepareが実行した短いfixtureは、warm suffixの選択child/PV証明、
+bound/collision/中断再開、空き4以下の全到達局面・pass/終局の3件。
+全件成功。新しいOracle solveは0、全局測定は0。
+入力済みscriptは人間がworkspaceから一行で実行する。
+
+```bash
+rtk bash .local/reversi-ai-exact-cache-correctness/run-0045-2516a63/run-exact-cache-verification.sh
+```
+
+同じscriptを再実行すると検証済み成功/失敗単位をskipする。
+結果を受領したら、このworktree内で
+`rtk make benchmark-exact-cache-verification-verify EXACT_CACHE_VERIFICATION_MANIFEST=<絶対manifest.jsonパス>`
+を実行する。ソースを変更した場合は旧freezeを更新せず、再prepareで新directoryを作る。
+source/harnessファイルを変えない後続docs commitはfreezeを無効化しない。
+
+quality gates: engine 28、AI 114、Oracle harness 40、pattern training 31、
+新しい専用offline tests 38、Clippy、Godot build、fmt、diff/workflow lint成功。
+benchmark全体の最終件数はPR Verificationへ記録する。
+実測結果・局別時間・条件平均・Oracle抽出位置はまだ存在せず、
+0040へ渡す採用結果は未達である。
