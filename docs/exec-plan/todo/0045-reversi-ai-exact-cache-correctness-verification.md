@@ -56,7 +56,7 @@ Oracle同士の全局、旧CLIの全局、深度12の全局、閾値16/20/24の�
    cache lifetime/reset、depth/exact、timeout/RSS、全output identityを固定する。
    v1/v2の8局reportを3局と読み替えたり、過去の集計に追加して8局の完成を装ったりしない。
 3. 両条件の3局は同じbinary/artifact/設定/hostでserialに測る。node上限は設けない。
-   decision timeout310秒、seat peak RSS1,572,864KiBを継承する。
+   CLI decision timeout310秒、seat peak RSS1,572,864KiBを継承する。
    全3局の完成後だけ条件平均を生成する。失敗/未完了は保存してその条件を不採用にし、
    件数や条件を増やした自動retryをしない。同一条件の棋譜・盤面・score・depth・exactness・outcomeを照合する。
 4. 全局Oracle照合の代わりに、game側の各完成局から、最初の空き12以下のexact root、
@@ -66,6 +66,8 @@ Oracle同士の全局、旧CLIの全局、深度12の全局、閾値16/20/24の�
    `(board, effective_side, oracle_binary_digest, profile_digest, score_contract)` が一致する完成queryを
    先に再利用する。抽出・重複排除後の実位置を順序付きで記録し、未照合位置だけの最大18queryの
    manifestと実query数（0も可）をstage前に固定する。終局childは規定の終局値で照合しqueryを増やさない。
+   新規Oracle queryは1位置30秒・peak RSS1,572,864KiBを上限とし、node上限は設けない。
+   timeoutは失敗として残し、上限を自動で延ばさない。最大18queryの探索待ち時間は計9分までとする。
    抽出外のexact rootは独立Oracleで確認したと主張せず、turn/game意味一致とRust回帰を別の証拠として示す。
 5. Oracle score契約の±39/±40不一致を値の一律加減算で隠さない。
    未解決のscore意味差、選択手不一致、不完全query、timeout/RSS超過は失敗証拠として保存し採用を止める。
