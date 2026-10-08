@@ -95,17 +95,19 @@ accepted 12/12/12 match depth and 16-empty exact threshold, disabled book, a
 five-minute per-move search limit, ten-million-node cap, 310-second protocol
 timeout, and 7,680 total decisions.
 
-Schema-5 manifests accept independent self-play settings through
-`REINFORCEMENT_SELF_PLAY_OPENING_DEPTH`, `REINFORCEMENT_SELF_PLAY_MIDGAME_DEPTH`,
-`REINFORCEMENT_SELF_PLAY_ENDGAME_DEPTH` (each 1..64), and
-`REINFORCEMENT_SELF_PLAY_EXACT_EMPTY` (0..30). Defaults remain 12/12/12 and
-exact threshold 16; explicit midgame depth 8 remains supported. These correspond to the
-`--self-play-opening-depth`, `--self-play-midgame-depth`,
-`--self-play-endgame-depth`, and `--self-play-exact-solver-empty-squares`
-prepare arguments. Exact 0 disables solving; 18/20/22/24 select an empty-square
-switch threshold, independently of heuristic depth. Selecting 24 does not
-promise completion within the frozen time/node limits. Failed or interrupted
-self-play never supplies training labels or a completed report.
+Schema 5 gives each search setting its own prepare argument and Make variable.
+
+| Setting | Make variable | Prepare argument | Range | Default |
+| --- | --- | --- | --- | --- |
+| Opening depth | `REINFORCEMENT_SELF_PLAY_OPENING_DEPTH` | `--self-play-opening-depth` | 1–64 | 12 |
+| Midgame depth | `REINFORCEMENT_SELF_PLAY_MIDGAME_DEPTH` | `--self-play-midgame-depth` | 1–64 | 12 |
+| Endgame depth | `REINFORCEMENT_SELF_PLAY_ENDGAME_DEPTH` | `--self-play-endgame-depth` | 1–64 | 12 |
+| Exact threshold | `REINFORCEMENT_SELF_PLAY_EXACT_EMPTY` | `--self-play-exact-solver-empty-squares` | 0–30 | 16 |
+
+Midgame depth 8 remains supported. Exact 0 disables solving. Values such as
+18, 20, 22, and 24 set the empty-square threshold for a switch to exact search.
+Completion still depends on the frozen time and node limits. A failed or
+interrupted game cannot supply training labels or a completed report.
 
 Candidate matches, corpus regret, and later 0018 acceptance retain 12/12/12
 and exact threshold 16. The manifest/report freeze all self-play settings, CLI SHA-256,
@@ -113,14 +115,16 @@ resource limits, and the turn cache policy. Flexible settings do not clear the
 production freeze or its independent correctness gates.
 
 New prepare/run and regret adoption require schema 5. Completed schema 3/4
-reports remain offline-verifiable under their original 12/(8|12)/12 and exact threshold 16
-contract; they are never silently migrated. Interrupted schema 3/4 runs cannot
-resume or run again with this producer: preserve their failed evidence and
-prepare a separate schema 5 identity in a fresh output directory. Changing a
-manifest after a completed run fails its report identity checks. Versions 1/2
-are unsupported. All accepted manifests pin `new_game-v1` and the reset-capable
-binary digest. Prepare checks its reset acknowledgement; self-play and matches
-reset each player before every game, and verification checks reset evidence.
+reports can be checked offline with their original depths and exact threshold
+16. Their depth contract is 12/(8|12)/12.
+
+An interrupted schema 3/4 run must keep its failed evidence. Start a new
+schema 5 run with a separate manifest and output directory. Changing a manifest
+after completion fails the report identity checks. Versions 1/2 are unsupported.
+
+All accepted manifests pin `new_game-v1` and the binary digest. Prepare checks
+the reset acknowledgement. Each player resets before every game, and the
+verifier checks those reset events.
 
 Set time and node caps explicitly if the host needs different limits. The
 match profile still requires depths 12/12/12 and the 16-empty threshold. The
