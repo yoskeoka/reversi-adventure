@@ -9,7 +9,7 @@ use reversi_engine::game::Game;
 use reversi_engine::types::{Color, GameStatus, Position};
 use std::time::Duration;
 
-fn explicit_ai_config(opening: i32, midgame: i32, endgame: i32, exact: i32) -> Option<AiConfig> {
+fn explicit_ai_config(opening: i64, midgame: i64, endgame: i64, exact: i64) -> Option<AiConfig> {
     if ![opening, midgame, endgame]
         .iter()
         .all(|depth| (1..=64).contains(depth))
@@ -41,12 +41,12 @@ mod config_tests {
             );
             assert_eq!(config.exact_solver_empty_squares, exact as u32);
         }
-        for invalid in [i32::MIN, -1, 0, 65, 256, i32::MAX] {
+        for invalid in [i64::MIN, -1, 0, 65, 256, 1 << 32, i64::MAX] {
             assert!(explicit_ai_config(invalid, 12, 12, 16).is_none());
             assert!(explicit_ai_config(12, invalid, 12, 16).is_none());
             assert!(explicit_ai_config(12, 12, invalid, 16).is_none());
         }
-        for invalid in [i32::MIN, -1, 31, i32::MAX] {
+        for invalid in [i64::MIN, -1, 31, 1 << 32, i64::MAX] {
             assert!(explicit_ai_config(12, 12, 12, invalid).is_none());
         }
         assert_eq!(AiConfig::new(12, 12, 12).exact_solver_empty_squares, 16);
@@ -229,10 +229,10 @@ impl ReversiGame {
     fn set_ai_with_exact_threshold(
         &mut self,
         evaluator_name: GString,
-        opening_depth: i32,
-        midgame_depth: i32,
-        endgame_depth: i32,
-        exact: i32,
+        opening_depth: i64,
+        midgame_depth: i64,
+        endgame_depth: i64,
+        exact: i64,
     ) -> bool {
         let Some(config) = explicit_ai_config(opening_depth, midgame_depth, endgame_depth, exact)
         else {
