@@ -9,6 +9,50 @@ use reversi_engine::game::Game;
 use reversi_engine::types::{Color, GameStatus, Position};
 use std::time::Duration;
 
+fn explicit_ai_config(opening: i64, midgame: i64, endgame: i64, exact: i64) -> Option<AiConfig> {
+    if ![opening, midgame, endgame]
+        .iter()
+        .all(|depth| (1..=64).contains(depth))
+        || !(0..=30).contains(&exact)
+    {
+        return None;
+    }
+    Some(
+        AiConfig::new(opening as u8, midgame as u8, endgame as u8)
+            .with_exact_solver_empty_squares(exact as u32),
+    )
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_settings_preserve_values_and_reject_before_conversion() {
+        for exact in [0, 16, 18, 20, 22, 24, 30] {
+            let config = explicit_ai_config(1, 18, 64, exact).unwrap();
+            assert_eq!(
+                (
+                    config.opening_depth,
+                    config.midgame_depth,
+                    config.endgame_depth
+                ),
+                (1, 18, 64)
+            );
+            assert_eq!(config.exact_solver_empty_squares, exact as u32);
+        }
+        for invalid in [i64::MIN, -1, 0, 65, 256, 1 << 32, i64::MAX] {
+            assert!(explicit_ai_config(invalid, 12, 12, 16).is_none());
+            assert!(explicit_ai_config(12, invalid, 12, 16).is_none());
+            assert!(explicit_ai_config(12, 12, invalid, 16).is_none());
+        }
+        for invalid in [i64::MIN, -1, 31, 1 << 32, i64::MAX] {
+            assert!(explicit_ai_config(12, 12, 12, invalid).is_none());
+        }
+        assert_eq!(AiConfig::new(12, 12, 12).exact_solver_empty_squares, 16);
+    }
+}
+
 /// GDScript-callable wrapper for the Reversi game engine.
 #[derive(GodotClass)]
 #[class(base=RefCounted)]
@@ -172,13 +216,32 @@ impl ReversiGame {
         midgame_depth: i32,
         endgame_depth: i32,
     ) -> bool {
-        let name = evaluator_name.to_string();
         let config = AiConfig::new(
             opening_depth as u8,
             midgame_depth as u8,
             endgame_depth as u8,
         );
-        let evaluator: Box<dyn reversi_ai::eval::BoardEvaluator> = match name.as_str() {
+        self.install_ai(&evaluator_name.to_string(), config)
+    }
+
+    /// Validate explicit search settings before replacing the AI.
+    #[func]
+    fn set_ai_with_exact_threshold(
+        &mut self,
+        evaluator_name: GString,
+        opening_depth: i64,
+        midgame_depth: i64,
+        endgame_depth: i64,
+        exact: i64,
+    ) -> bool {
+        let Some(config) = explicit_ai_config(opening_depth, midgame_depth, endgame_depth, exact)
+        else {
+            return false;
+        };
+        self.install_ai(&evaluator_name.to_string(), config)
+    }
+    fn install_ai(&mut self, name: &str, config: AiConfig) -> bool {
+        let evaluator: Box<dyn reversi_ai::eval::BoardEvaluator> = match name {
             "strategic" => Box::new(StrategicEvaluator::new()),
             "novice" => Box::new(NoviceEvaluator::new()),
             _ => return false,

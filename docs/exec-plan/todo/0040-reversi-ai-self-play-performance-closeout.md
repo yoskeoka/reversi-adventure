@@ -7,7 +7,8 @@
 全体目標は計算資源ハンデ付きOracleへの勝率50%。現在は学習の実行時間を抑えるための
 エンジン性能改善とscoreバグ調査の段階である。強化成功や0018勝率を性能改善の開始条件にしない。
 2026-10-08の[判断材料](../../references/reversi-ai-current-status.md)と
-[0046](0046-reversi-ai-exact-score-contract-and-thresholds.md)でscore調査/柔軟な明示設定を進める。
+[0046のscore契約記録](../../references/reversi-ai-exact-score-contract.md)で調査証拠と残条件を確認する。
+Godotと自己対局schema5の明示設定は深度各1..64・exact0..30を受理する。
 既定20への変更は求められていない。設定可能性と本番runの採否・時間予算を区別する。
 
 0035の採否を、既存の全局時間証拠、0044の正確性修正、0045の最小検証に基づいて記録する。
@@ -102,6 +103,10 @@ heuristic nodesは両条件同じ。反復なしのwall差3.28%はcacheによる
 局別時間・資源・抽出範囲・digestと制約は
 [正確性記録](../../references/reversi-ai-exact-cache-correctness.md) を参照する。
 
-本番turn/exact16、±39/±40の未解決score契約は維持する。
+本番turn/exact16は維持する。0046で±39/±40の原因をscore契約差として
+terminal/root/childまで確認した。ユーザーはEdaxも同じ規則なら統一を希望し、
+固定Edax sourceでも勝者への空き加算を確認した。別の修正計画でOracle/Edax規則への
+移行、教師値・cache・manifest・validatorの互換境界と独立一致を扱う。
+0046の原因確認だけで本番freeze・正確性gateを解除しない。
 設定/時間予算/採否の人間判断、採用時の別計画によるproduction互換更新は未達。
 0045完了を再利用の採用・0035の完了と扱わない。

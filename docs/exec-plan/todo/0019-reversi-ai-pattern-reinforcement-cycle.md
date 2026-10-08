@@ -26,6 +26,12 @@
 
 ## Objective and completion boundary
 
+> **0046設定契約**: 新規prepare/runはschema5で、自己対局専用3phase深度各1..64・
+> exact0..30を独立指定できる。既定12/12/12・exact16、turn policy、候補比較の
+> strong-v1固定は維持する。旧schema3/4は完成reportのoffline検証だけに用いる。
+> 設定APIの完成から本番freezeを許可しない。[score調査](../../references/reversi-ai-exact-score-contract.md)
+> と0040の人間による設定/時間予算/採否、0037、凍結producerでの入力再検証が先決。
+
 Produce exactly one reproducible, project-owned candidate pattern artifact by
 running bounded self-play and updating the existing sparse pattern tables from
 game outcomes. Completion records the frozen self-play configuration, inputs,

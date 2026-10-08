@@ -28,7 +28,7 @@ class ReinforcementTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def prepare_fixture(self, root: Path, seed: int = 7) -> Path:
+    def prepare_fixture(self, root: Path, seed: int = 7, self_play_args: list[str] | None = None) -> Path:
         baseline = root / "baseline.json"
         training.run(ROOT / "fixtures" / "tiny-manifest.json", baseline, root / "baseline-report.json")
         executable = root / "candidate"
@@ -44,7 +44,7 @@ class ReinforcementTests(unittest.TestCase):
                 "--opening-depth", "12", "--midgame-depth", "12", "--endgame-depth", "12",
                 "--exact-solver-empty-squares", "16", "--time-limit-ms", "1000",
                 "--node-limit", "1000", "--decision-timeout-seconds", "5", "--max-decisions", "10000"]
-        self.assertEqual(reinforcement.main(argv), 0)
+        self.assertEqual(reinforcement.main(argv + (self_play_args or [])), 0)
         return manifest
 
     def test_manifest_freezes_turn_policy_and_rejects_tampering(self):
@@ -52,7 +52,7 @@ class ReinforcementTests(unittest.TestCase):
             root = Path(temporary)
             path = self.prepare_fixture(root)
             manifest = training.read_json(path)
-            self.assertEqual(manifest["schema_version"], 4)
+            self.assertEqual(manifest["schema_version"], 5)
             self.assertEqual(manifest["exact_cache_policy"], {
                 "policy": reinforcement.EXACT_CACHE_POLICY, "effective_scope": "turn",
                 "binary_sha256": reinforcement.sha(root / "candidate")})
@@ -67,27 +67,36 @@ class ReinforcementTests(unittest.TestCase):
                 reinforcement.validate_manifest(path, for_execution=True)
 
     def test_historical_manifest_only_allows_offline_completed_verification(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            path = self.prepare_fixture(root)
-            manifest = training.read_json(path)
-            manifest["schema_version"] = 3
-            manifest.pop("exact_cache_policy")
-            path.write_bytes(training.canonical_json(manifest) + b"\n")
-            with mock.patch.object(reinforcement, "Candidate") as candidate:
-                for operation in (lambda: reinforcement.run(path, root / "rejected"),
-                                  lambda: reinforcement.regret_command(path, root / "historical"),
-                                  lambda: reinforcement.regret_timeout(path, root / "historical")):
-                    with self.assertRaisesRegex(training.TrainingError, "historical reinforcement manifest"):
-                        operation()
-                candidate.assert_not_called()
-            # Recreate completed output with the historical producer contract.
-            validate = reinforcement.validate_manifest
-            with mock.patch.object(reinforcement, "validate_manifest",
-                                   side_effect=lambda path, **kwargs: validate(path)):
-                reinforcement.run(path, root / "historical")
-            with mock.patch.object(reinforcement, "Candidate", side_effect=AssertionError("offline started CLI")):
-                reinforcement.verify(path, root / "historical")
+        for version in (3, 4):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                path = self.prepare_fixture(root)
+                manifest = training.read_json(path)
+                manifest["schema_version"] = version
+                if version == 3:
+                    manifest.pop("exact_cache_policy")
+                path.write_bytes(training.canonical_json(manifest) + b"\n")
+                with mock.patch.object(reinforcement, "Candidate") as candidate:
+                    for operation in (lambda: reinforcement.run(path, root / "rejected"),
+                                      lambda: reinforcement.regret_command(path, root / "historical"),
+                                      lambda: reinforcement.regret_timeout(path, root / "historical")):
+                        with self.assertRaisesRegex(training.TrainingError, "historical reinforcement manifest"):
+                            operation()
+                    candidate.assert_not_called()
+                # Recreate completed output with the historical producer contract.
+                validate = reinforcement.validate_manifest
+                with mock.patch.object(reinforcement, "validate_manifest",
+                                       side_effect=lambda path, **kwargs: validate(path)):
+                    reinforcement.run(path, root / "historical")
+                with mock.patch.object(reinforcement, "Candidate", side_effect=AssertionError("offline started CLI")):
+                    reinforcement.verify(path, root / "historical")
+                report = training.read_json(root / "historical" / "report.json")
+                self.assertEqual(report["schema_version"], 3)
+                self.assertNotIn("exact_cache_policy", report)
+                manifest["self_play_search"]["midgame_depth"] = 7
+                path.write_bytes(training.canonical_json(manifest) + b"\n")
+                with self.assertRaisesRegex(training.TrainingError, "12/8/12 or 12/12/12"):
+                    reinforcement.validate_manifest(path)
 
     def test_fixture_is_reproducible_and_replays(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -221,10 +230,79 @@ class ReinforcementTests(unittest.TestCase):
             reinforcement.run(manifest_path, output, progress_every=1000)
             reinforcement.verify(manifest_path, output)
             self.assertEqual(training.read_json(output / "report.json")["self_play_search"]["midgame_depth"], 8)
-            manifest["self_play_search"]["midgame_depth"] = 7
-            manifest_path.write_bytes(training.canonical_json(manifest) + b"\n")
-            with self.assertRaisesRegex(training.TrainingError, "12/8/12 or 12/12/12"):
-                reinforcement.validate_manifest(manifest_path)
+
+    def test_independent_self_play_arguments_and_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.prepare_fixture(root, self_play_args=[
+                "--self-play-opening-depth", "18", "--self-play-midgame-depth", "22",
+                "--self-play-endgame-depth", "24", "--self-play-exact-solver-empty-squares", "24"])
+            manifest = training.read_json(path)
+            config = manifest["self_play_search"]
+            self.assertEqual([config[key] for key in ("opening_depth", "midgame_depth", "endgame_depth", "exact_solver_empty_squares")], [18, 22, 24, 24])
+            self.assertEqual([manifest["candidate"][key] for key in ("opening_depth", "midgame_depth", "endgame_depth", "exact_solver_empty_squares")], [12, 12, 12, 16])
+            with mock.patch.object(reinforcement.subprocess, "Popen") as popen:
+                reinforcement.Candidate(root / "candidate", root / "baseline.json", config, 5)
+            argv = popen.call_args.args[0]
+            for option, value in (("opening-depth", 18), ("midgame-depth", 22), ("endgame-depth", 24), ("exact-solver-empty-squares", 24)):
+                self.assertEqual(argv[argv.index("--" + option) + 1], str(value))
+            output = root / "flexible"
+            reinforcement.run(path, output, progress_every=1000)
+            reinforcement.verify(path, output)
+            report = training.read_json(output / "report.json")
+            self.assertEqual(report["self_play_search"], config)
+            self.assertEqual(report["exact_cache_policy"], manifest["exact_cache_policy"])
+            report_path = output / "report.json"
+            original_report = report_path.read_bytes()
+            report["exact_cache_policy"]["effective_scope"] = "game"
+            report["report_digest"] = training.digest({key: value for key, value in report.items() if key != "report_digest"})
+            report_path.write_bytes(training.canonical_json(report) + b"\n")
+            with self.assertRaisesRegex(training.TrainingError, "report metadata"):
+                reinforcement.verify(path, output)
+            report_path.write_bytes(original_report)
+            command = reinforcement.regret_command(path, output)
+            self.assertIn("--opening-depth 12", command)
+            self.assertIn("--exact-solver-empty-squares 16", command)
+            manifest["self_play_search"]["exact_solver_empty_squares"] = 22
+            path.write_bytes(training.canonical_json(manifest) + b"\n")
+            with self.assertRaises(training.TrainingError):
+                reinforcement.verify(path, output)
+
+    def test_schema_five_self_play_ranges(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.prepare_fixture(root)
+            original = training.read_json(path)
+            for key in ("opening_depth", "midgame_depth", "endgame_depth", "exact_solver_empty_squares"):
+                incomplete = json.loads(json.dumps(original))
+                incomplete["self_play_search"].pop(key)
+                path.write_bytes(training.canonical_json(incomplete) + b"\n")
+                with self.assertRaisesRegex(training.TrainingError, "self_play_search must contain exactly"):
+                    reinforcement.validate_manifest(path)
+                accepted = (0, 16, 18, 20, 22, 24, 30) if key == "exact_solver_empty_squares" else (1, 8, 18, 22, 24, 64)
+                rejected = (-1, 31, 2**32, True) if key == "exact_solver_empty_squares" else (-1, 0, 65, 256, True)
+                for value in accepted + rejected:
+                    with self.subTest(key=key, value=value):
+                        manifest = json.loads(json.dumps(original))
+                        manifest["self_play_search"][key] = value
+                        path.write_bytes(training.canonical_json(manifest) + b"\n")
+                        if value in accepted and type(value) is int:
+                            reinforcement.validate_manifest(path)
+                        else:
+                            with self.assertRaises(training.TrainingError):
+                                reinforcement.validate_manifest(path)
+
+    def test_failed_self_play_decision_does_not_publish_teacher_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.prepare_fixture(root, self_play_args=["--self-play-exact-solver-empty-squares", "24"])
+            output = root / "failed-decision"
+            with mock.patch.object(reinforcement.Candidate, "choose", side_effect=training.TrainingError("candidate timed out at fixture")):
+                with self.assertRaisesRegex(training.TrainingError, "timed out"):
+                    reinforcement.run(path, output)
+            self.assertFalse((output / "games.jsonl").exists())
+            self.assertFalse((output / "candidate-artifact.json").exists())
+            self.assertFalse((output / "report.json").exists())
 
     def test_profile_and_timeout_are_frozen_and_consistent(self):
         with tempfile.TemporaryDirectory() as temporary:
