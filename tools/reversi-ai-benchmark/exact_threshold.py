@@ -276,7 +276,7 @@ def process_resources(usages, steps=(), attempt=None):
             "peak_rss_kib": max(peaks, default=0)}
 
 
-def measure_unit(m, unit) -> dict:
+def measure_unit(m, unit, *, include_cache_policy=False) -> dict:
     seats, steps, resets, usages = {}, [], {}, {}
     started, timestamp = time.monotonic_ns(), time.time_ns()
     board, side = unit["start"]["board"], unit["start"]["side"]
@@ -285,7 +285,8 @@ def measure_unit(m, unit) -> dict:
         for label in ("B", "W"):
             seats[label] = wg.Seat("cli", Path(m["inputs"]["cli"]["path"]), Path(m["inputs"]["artifact"]["path"]),
                 unit["depth"], CAPS["timeout_seconds"], label, cache_scope=unit["scope"], exact_empty=unit["threshold"],
-                node_limit=CAPS["pilot_node_limit"] if unit["stage"] == "pilot" else None, max_rss_kib=CAPS["max_rss_kib"])
+                node_limit=CAPS["pilot_node_limit"] if unit["stage"] == "pilot" else None, max_rss_kib=CAPS["max_rss_kib"],
+                **({"capture_cache_policy": True} if include_cache_policy else {}))
             resets[label] = seats[label].new_game(unit["id"])
         for turn in range(CAPS["max_decisions"]):
             if reached(unit, board, side):

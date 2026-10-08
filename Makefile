@@ -225,3 +225,22 @@ benchmark-whole-game-oracle-check:
 
 benchmark-whole-game-oracle-check-verify:
 	$(PYTHON) $(WHOLE_GAME_TOOL) verify-oracle-check --report "$(WHOLE_GAME_GAME_REPORT)" $(if $(WHOLE_GAME_BINARY),--oracle-binary "$(WHOLE_GAME_BINARY)") --output "$(WHOLE_GAME_ORACLE_EVIDENCE)"
+
+EXACT_CACHE_VERIFICATION_TOOL := tools/reversi-ai-benchmark/exact_cache_verification.py
+EXACT_CACHE_VERIFICATION_PREPARE_ARGS ?=
+EXACT_CACHE_VERIFICATION_MANIFEST ?=
+EXACT_CACHE_VERIFICATION_PROGRESS_EVERY ?= 1
+
+.PHONY: benchmark-exact-cache-verification-prepare benchmark-exact-cache-verification-run benchmark-exact-cache-verification-verify benchmark-exact-cache-verification-inputs-verify
+benchmark-exact-cache-verification-prepare:
+	$(PYTHON) $(EXACT_CACHE_VERIFICATION_TOOL) prepare $(EXACT_CACHE_VERIFICATION_PREPARE_ARGS)
+
+# Human-operated long measurement; never a test prerequisite.
+benchmark-exact-cache-verification-run:
+	$(PYTHON) $(EXACT_CACHE_VERIFICATION_TOOL) run --manifest "$(EXACT_CACHE_VERIFICATION_MANIFEST)" --progress-every $(EXACT_CACHE_VERIFICATION_PROGRESS_EVERY)
+
+benchmark-exact-cache-verification-verify:
+	$(PYTHON) $(EXACT_CACHE_VERIFICATION_TOOL) verify --manifest "$(EXACT_CACHE_VERIFICATION_MANIFEST)"
+
+benchmark-exact-cache-verification-inputs-verify:
+	$(PYTHON) $(EXACT_CACHE_VERIFICATION_TOOL) verify-inputs --manifest "$(EXACT_CACHE_VERIFICATION_MANIFEST)"
