@@ -22,7 +22,7 @@
 - [PR #251](https://github.com/yoskeoka/reversi-adventure/pull/251) — 0041の時間結果、反例棋譜、完全読みのroot/選択child証拠。
 - `0043-reversi-ai-exact-cache-correctness.md` — 全経路の既定turnという安全措置。
 - `0044-reversi-ai-exact-cache-correctness-repair.md` — 原因限定修正と小さい回帰。
-- `0045-reversi-ai-exact-cache-correctness-verification.md` — 各3局/2条件と最大18Oracle queryの固定契約。
+- [PR #255](https://github.com/yoskeoka/reversi-adventure/pull/255) — 完了した0045計画の履歴、各3局/2条件と最大18Oracle queryの固定契約。
 - `docs/specs/reversi-ai.md:651-775` — 全局証拠、exact/選択手、manifest、reset/履歴。
 - `tools/reversi-ai-training/reinforcement.py` — productionの設定とCLI identity。
 - `0035-reversi-ai-self-play-performance.md`, `0037-reversi-ai-training-method-pilot.md`, `0019-reversi-ai-pattern-reinforcement-cycle.md`。
@@ -80,12 +80,20 @@
 
 - N/A
 
-## 0045の準備状況（2026-10-07）
+## 0045の測定受領とoffline検証（2026-10-08）
 
-0044はPR #254で修正済み。0045の専用6局harnessと短い回帰、
-保存752 receiptのoffline検証を用意した。新しい実測結果は未受領であり、
-3局平均、抽出Oracleの独立一致、採用成功や時間予算合意は未達である。
-入力済みhuman-runとdigestは
+0044はPR #254で修正済み。PR #255の固定6局を人間が実行し、
+source/harness 2516a63・固定manifestのoffline verifyが終了code 0で成功した。
+旧752 receipt、短い回帰3件、turn/game各3局、抽出6 root/10 Oracle queryと
+派生reportを再計算した。全3組の意味一致と全抽出root/選択childの独立一致を確認した。
+opening-4は空き16・白0で終局しselectorが存在しないためOracle抽出0件。
+0045の測定/検証条件は完了し、計画を削除した。履歴はPR #255を参照する。
+
+平均wallはturn 519.254秒、game 502.221秒。exact部分は51.907秒/50.835秒で、
+heuristic nodesは両条件同じ。反復なしのwall差3.28%はcacheによる有意な高速化の証拠にしない。
+局別時間・資源・抽出範囲・digestと制約は
 [正確性記録](../../references/reversi-ai-exact-cache-correctness.md) を参照する。
-既定turn、本番exact16、±39/±40の未解決score契約を維持し、
-修正/準備完了を再利用の採用・0035の完了と扱わない。
+
+本番turn/exact16、±39/±40の未解決score契約は維持する。
+設定/時間予算/採否の人間判断、採用時の別計画によるproduction互換更新は未達。
+0045完了を再利用の採用・0035の完了と扱わない。
