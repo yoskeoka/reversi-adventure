@@ -1,0 +1,275 @@
+{
+  "classification": "score_contract_difference_confirmed_terminal_root_child",
+  "independent_solves": [
+    {
+      "board": "..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBBBWWW.BBBBBWW..BWWWWW..WWWWWB",
+      "contract": "project",
+      "elapsed_seconds": 23.740330026004813,
+      "nodes": 78519,
+      "peak_rss_kib": 15476,
+      "pv": [
+        "b7",
+        "b8",
+        "b1",
+        "b2",
+        "a1",
+        "a2",
+        "a3",
+        "b3",
+        "a4",
+        "a5",
+        "a6",
+        "pass",
+        "a7"
+      ],
+      "reference_source_sha256": "a00a7806c952cc5d0b7a1d630088e5fb926a381fe982a203ae964cdf0e5fcb44",
+      "report_digest": "873759f80d45931d9d024f31399b8167d5616064a4bc1a2e5f045d510e1dbef7",
+      "rss_limit_kib": 1572864,
+      "score": 39,
+      "side": "W",
+      "status": "completed",
+      "terminal_board": "WWWWWWWWWWWBBWWWWWBWWWWWWBWWWWWWWWWWWWWWWWWWBWWWWWWWWWWW.BBBBBBB",
+      "terminal_counts": {
+        ".": 1,
+        "B": 12,
+        "W": 51
+      },
+      "terminal_scores_for_root_side": {
+        "oracle": 40,
+        "project": 39
+      },
+      "wall_limit_seconds": 30
+    },
+    {
+      "board": "..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBWBWWW.BWBBBWW.WWWWWWW..WWWWWB",
+      "contract": "project",
+      "elapsed_seconds": 4.955929842995829,
+      "nodes": 23907,
+      "peak_rss_kib": 15432,
+      "pv": [
+        "b8",
+        "b1",
+        "b2",
+        "a1",
+        "a2",
+        "a3",
+        "b3",
+        "a4",
+        "a5",
+        "a6",
+        "pass",
+        "a7"
+      ],
+      "reference_source_sha256": "a00a7806c952cc5d0b7a1d630088e5fb926a381fe982a203ae964cdf0e5fcb44",
+      "report_digest": "e78d2df47e2bbe62409dd60db6726c9b814dcf5397327863a5904bd12bcf4929",
+      "rss_limit_kib": 1572864,
+      "score": -39,
+      "side": "B",
+      "status": "completed",
+      "terminal_board": "WWWWWWWWWWWBBWWWWWBWWWWWWBWWWWWWWWWWWWWWWWWWBWWWWWWWWWWW.BBBBBBB",
+      "terminal_counts": {
+        ".": 1,
+        "B": 12,
+        "W": 51
+      },
+      "terminal_scores_for_root_side": {
+        "oracle": -40,
+        "project": -39
+      },
+      "wall_limit_seconds": 30
+    },
+    {
+      "board": "..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBBBWWW.BBBBBWW..BWWWWW..WWWWWB",
+      "contract": "oracle",
+      "elapsed_seconds": 8.644719321004231,
+      "nodes": 70964,
+      "peak_rss_kib": 15528,
+      "pv": [
+        "b7",
+        "b8",
+        "b1",
+        "b2",
+        "a1",
+        "a2",
+        "a3",
+        "b3",
+        "a4",
+        "a5",
+        "a6",
+        "pass",
+        "a7"
+      ],
+      "reference_source_sha256": "a00a7806c952cc5d0b7a1d630088e5fb926a381fe982a203ae964cdf0e5fcb44",
+      "report_digest": "655f1617ca32133f911779d05fedebaa1891c5b5d42db69e996d7eb71fc3a941",
+      "rss_limit_kib": 1572864,
+      "score": 40,
+      "side": "W",
+      "status": "completed",
+      "terminal_board": "WWWWWWWWWWWBBWWWWWBWWWWWWBWWWWWWWWWWWWWWWWWWBWWWWWWWWWWW.BBBBBBB",
+      "terminal_counts": {
+        ".": 1,
+        "B": 12,
+        "W": 51
+      },
+      "terminal_scores_for_root_side": {
+        "oracle": 40,
+        "project": 39
+      },
+      "wall_limit_seconds": 30
+    },
+    {
+      "board": "..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBWBWWW.BWBBBWW.WWWWWWW..WWWWWB",
+      "contract": "oracle",
+      "elapsed_seconds": 6.105428031994961,
+      "nodes": 21578,
+      "peak_rss_kib": 15428,
+      "pv": [
+        "b8",
+        "b1",
+        "b2",
+        "a1",
+        "a2",
+        "a3",
+        "b3",
+        "a4",
+        "a5",
+        "a6",
+        "pass",
+        "a7"
+      ],
+      "reference_source_sha256": "a00a7806c952cc5d0b7a1d630088e5fb926a381fe982a203ae964cdf0e5fcb44",
+      "report_digest": "7b0d222c60557638497bc9a7d8c2ff2ba305b92aa6680cb9db18720c3a18a9ed",
+      "rss_limit_kib": 1572864,
+      "score": -40,
+      "side": "B",
+      "status": "completed",
+      "terminal_board": "WWWWWWWWWWWBBWWWWWBWWWWWWBWWWWWWWWWWWWWWWWWWBWWWWWWWWWWW.BBBBBBB",
+      "terminal_counts": {
+        ".": 1,
+        "B": 12,
+        "W": 51
+      },
+      "terminal_scores_for_root_side": {
+        "oracle": -40,
+        "project": -39
+      },
+      "wall_limit_seconds": 30
+    }
+  ],
+  "oracle_source": {
+    "archive_sha256": "173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b",
+    "binary": {
+      "path": "/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-whole-game-0035/oracle-cache/bin/Egaroucid_for_Console.out",
+      "sha256": "b97a36a29eb4dad32a18b9edafb9eb6776cef3a96b9c198c01102c22c7c0a148"
+    },
+    "board_hpp_sha256": "a9d43ada0fe6e5349edc51b9836cc1f675b786fa16fc8e99f1f86b618d8a2fb1",
+    "evaluate_common_7_4_hpp_sha256": "61b8a01ba0238ba2f7dddb8f93eb733152b3bb05abae35515e8f63d520690e90",
+    "url": "https://github.com/Nyanyan/Egaroucid/archive/refs/tags/v7.8.1.tar.gz"
+  },
+  "schema_version": 1,
+  "source_receipt": {
+    "cli_identity": {
+      "path": "/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-whole-game-0035/target/exact-0041/release/reversi-ai-cli",
+      "sha256": "0a7535bdf48b640dcc48cda41b1739b927b76b6cfb13b8dab30af312096775d5"
+    },
+    "failure": "independent Oracle score/continuation mismatch",
+    "harness_files": [
+      {
+        "path": "/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.worktrees/reversi-adventure@feat-reversi-ai-exact-threshold-reuse-assessment/tools/reversi-ai-oracle/oracle.py",
+        "sha256": "dd73995c9744e1b7eee2f23fa7eac01296b81793fd1fcba57df17b853c115f60"
+      },
+      {
+        "path": "/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.worktrees/reversi-adventure@feat-reversi-ai-exact-threshold-reuse-assessment/tools/reversi-ai-benchmark/prepare-whole-game-measurement.py",
+        "sha256": "06179e6192df0915492687d047f26de58f66380641666ae9842174b534ec13e1"
+      },
+      {
+        "path": "/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.worktrees/reversi-adventure@feat-reversi-ai-exact-threshold-reuse-assessment/tools/reversi-ai-benchmark/whole_game.py",
+        "sha256": "14462d9b5ad0260bd97e40bca2107879e522887d882b4cf8526821ba52d0cf79"
+      },
+      {
+        "path": "/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.worktrees/reversi-adventure@feat-reversi-ai-exact-threshold-reuse-assessment/tools/reversi-ai-benchmark/exact_threshold.py",
+        "sha256": "5149ae2943e99e22bbb17b8a9eda77708a7960c15cf91adca227f255a71f5b5f"
+      }
+    ],
+    "harness_revision": "42f6d575b7115b4ccd6aa2ab6d9d805adadc1b89",
+    "job_source_digest": "ed8660f29a05e28e0b556b53cd86e9e1dc495ab40c94bda4b6a5c2837751833c",
+    "manifest_digest": "7d3104d720fdbe605839af893a0ff4c47207e423d9b3eec633a6add1728de960",
+    "queries": [
+      {
+        "board": "..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBBBWWW.BBBBBWW..BWWWWW..WWWWWB",
+        "child_query": false,
+        "effective_side": "W",
+        "result": {
+          "completed_depth": 13,
+          "elapsed_ms": 5,
+          "exact": true,
+          "move": "b7",
+          "nodes": 42022,
+          "nps": 8404400,
+          "value": 40
+        },
+        "side": "W",
+        "sign": 1
+      },
+      {
+        "board": "..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBWBWWW.BWBBBWW.WWWWWWW..WWWWWB",
+        "child_query": true,
+        "effective_side": "B",
+        "result": {
+          "completed_depth": 12,
+          "elapsed_ms": 1,
+          "exact": true,
+          "move": "b8",
+          "nodes": 14421,
+          "nps": 14421000,
+          "value": -40
+        },
+        "side": "B",
+        "sign": 1
+      }
+    ],
+    "report_digest": "71e3d66ee22711778bdfd3155b0f52989d56c4ef488712936eecf2460f77675b",
+    "sha256": "2326dd81f616dc025a192b013f689d7e19f71f4d58ba7d72b4db338c837a46f6",
+    "status": "failed",
+    "step": {
+      "board": "..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBBBWWW.BBBBBWW..BWWWWW..WWWWWB",
+      "cpu_after": {
+        "peak_rss_kib": 71384,
+        "system_cpu_ns": 50000000,
+        "user_cpu_ns": 17120000000
+      },
+      "cpu_before": {
+        "peak_rss_kib": 71384,
+        "system_cpu_ns": 50000000,
+        "user_cpu_ns": 17050000000
+      },
+      "decision_cpu_ns": 70000000,
+      "decision_elapsed_ns": 64047920,
+      "id": "pilot-16-8-turn-window-2-seat0-turn11",
+      "legal_move_count": 10,
+      "move": "b7",
+      "peak_observation": {
+        "peak_rss_kib": 71384,
+        "system_cpu_ns": 50000000,
+        "user_cpu_ns": 17050000000
+      },
+      "phase": "exact",
+      "process_peak_rss_kib": 71384,
+      "search": {
+        "cache_hits": 4370,
+        "cache_probes": 69936,
+        "cache_stores": 61802,
+        "completed_depth": 13,
+        "elapsed_us": 61239,
+        "exact": true,
+        "nodes": 69936,
+        "outcome": "move",
+        "score": 39
+      },
+      "seat": "W",
+      "side": "W"
+    },
+    "workspace_path": ".local/reversi-ai-whole-game-0035/exact-threshold-0041-42f6d57/pilot-oracle/pilot-16-8-turn-window-2-seat0-position-11.json"
+  },
+  "source_receipt_raw_utf8": "{\"failure\":\"independent Oracle score/continuation mismatch\",\"job\":{\"id\":\"pilot-16-8-turn-window-2-seat0-position-11\",\"source_digest\":\"ed8660f29a05e28e0b556b53cd86e9e1dc495ab40c94bda4b6a5c2837751833c\",\"step\":{\"board\":\"..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBBBWWW.BBBBBWW..BWWWWW..WWWWWB\",\"cpu_after\":{\"peak_rss_kib\":71384,\"system_cpu_ns\":50000000,\"user_cpu_ns\":17120000000},\"cpu_before\":{\"peak_rss_kib\":71384,\"system_cpu_ns\":50000000,\"user_cpu_ns\":17050000000},\"decision_cpu_ns\":70000000,\"decision_elapsed_ns\":64047920,\"id\":\"pilot-16-8-turn-window-2-seat0-turn11\",\"legal_move_count\":10,\"move\":\"b7\",\"peak_observation\":{\"peak_rss_kib\":71384,\"system_cpu_ns\":50000000,\"user_cpu_ns\":17050000000},\"phase\":\"exact\",\"process_peak_rss_kib\":71384,\"search\":{\"cache_hits\":4370,\"cache_probes\":69936,\"cache_stores\":61802,\"completed_depth\":13,\"elapsed_us\":61239,\"exact\":true,\"nodes\":69936,\"outcome\":\"move\",\"score\":39},\"seat\":\"W\",\"side\":\"W\"},\"unit\":{\"depth\":8,\"id\":\"pilot-16-8-turn-window-2-seat0\",\"scope\":\"turn\",\"stage\":\"pilot\",\"start\":{\"assignment\":0,\"board\":\"..BBBBWW..BBBWWW..BBWBWW.BBBWBWW..BWBWBW.BWWWWWW....W..W........\",\"id\":\"window-2\",\"opening\":\"c4e3f3g3f6c5\",\"opening_id\":\"opening-2\",\"prefix\":[{\"board\":\"....................WWW...BWB.....WBB........B..................\",\"move\":\"g2\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"..............B.....WBW...BWB.....WBB........B..................\",\"move\":\"f4\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"..............B.....WBW...BWWW....WBB........B..................\",\"move\":\"e2\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"............B.B.....BBW...BWBW....WBB........B..................\",\"move\":\"f5\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"............B.B.....BBW...BWBW....WWWW.......B..................\",\"move\":\"h3\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"............B.B.....BBBB..BWBW....WWWW.......B..................\",\"move\":\"h1\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\".......W....B.W.....BWBB..BWWW....WWWW.......B..................\",\"move\":\"f2\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\".......W....BBW.....BBBB..BWWB....WWWB.......B..................\",\"move\":\"g4\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\".......W....BBW.....BBWB..BWWWW...WWWB.......B..................\",\"move\":\"h4\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\".......W....BBW.....BBBB..BBBBBB..WWWB.......B..................\",\"move\":\"h2\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\".......W....BBWW....BBWB..BBBWBB..WWWB.......B..................\",\"move\":\"g5\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\".......W....BBWW....BBWB..BBBBBB..WWWBB......B..................\",\"move\":\"h5\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\".......W....BBWW....BBWW..BBBBBW..WWWWWW.....B..................\",\"move\":\"g6\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\".......W....BBWW....BBWW..BBBBBW..WWWBBW.....BB.................\",\"move\":\"e6\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\".......W....BBWW....BBWW..BBBBWW..WWWWBW....WBB.................\",\"move\":\"b6\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\".......W....BBWW....BBWW..BBBBWW..BWWWBW.B..WBB.................\",\"move\":\"d1\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"...W...W....WBWW....BWWW..BBBBWW..BWWWBW.B..WBB.................\",\"move\":\"e1\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"...WB..W....BBWW....BWWW..BBBBWW..BWWWBW.B..WBB.................\",\"move\":\"e7\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"...WB..W....BBWW....BWWW..BBBBWW..BWWWWW.B..WWB.....W...........\",\"move\":\"h6\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"...WB..W....BBWW....BWWW..BBBBWW..BWWWBW.B..WWBB....W...........\",\"move\":\"d2\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"...WB..W...WWWWW....BWWW..BBBBWW..BWWWBW.B..WWBB....W...........\",\"move\":\"c1\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"..BBB..W...BWWWW....BWWW..BBBBWW..BWWWBW.B..WWBB....W...........\",\"move\":\"d3\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"..BBB..W...BWWWW...WWWWW..BWWBWW..BWWWBW.B..WWBB....W...........\",\"move\":\"c2\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"..BBB..W..BBWWWW...BWWWW..BWBBWW..BWWBBW.B..WWBB....W...........\",\"move\":\"c3\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"..BBB..W..BBWWWW..WWWWWW..BWBBWW..BWWBBW.B..WWBB....W...........\",\"move\":\"b4\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"..BBB..W..BBWWWW..BWWWWW.BBWBBWW..BWWBBW.B..WWBB....W...........\",\"move\":\"h7\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"..BBB..W..BBWWWW..BWWWWW.BBWWBWW..BWWWBW.B..WWWW....W..W........\",\"move\":\"d6\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"..BBB..W..BBWWWW..BBWWWW.BBBWBWW..BBBWBW.B.BWWWW....W..W........\",\"move\":\"c6\",\"seat\":\"W\",\"side\":\"W\"},{\"board\":\"..BBB..W..BBWWWW..BBWWWW.BBBWBWW..BWBWBW.BWWWWWW....W..W........\",\"move\":\"f1\",\"seat\":\"B\",\"side\":\"B\"},{\"board\":\"..BBBB.W..BBBBWW..BBWBWW.BBBWBWW..BWBWBW.BWWWWWW....W..W........\",\"move\":\"g1\",\"seat\":\"W\",\"side\":\"W\"}],\"side\":\"B\",\"source_step_id\":\"opening-2-seat0-turn30\",\"transform\":\"identity\"},\"threshold\":16}},\"manifest_digest\":\"7d3104d720fdbe605839af893a0ff4c47207e423d9b3eec633a6add1728de960\",\"oracle_binary\":{\"path\":\"/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-whole-game-0035/oracle-cache/bin/Egaroucid_for_Console.out\",\"sha256\":\"b97a36a29eb4dad32a18b9edafb9eb6776cef3a96b9c198c01102c22c7c0a148\"},\"process_observations\":[{\"argv\":[\"/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-whole-game-0035/oracle-cache/bin/Egaroucid_for_Console.out\",\"-nobook\",\"-thread\",\"1\",\"-hash\",\"25\",\"-depthprobrange\",\"1\",\"17\",\"12\",\"100\",\"-depthprobrange\",\"18\",\"41\",\"8\",\"100\",\"-depthprobrange\",\"42\",\"44\",\"12\",\"100\",\"-depthprobrange\",\"45\",\"60\",\"16\",\"100\",\"-solve\",\"/tmp/reversi-ai-oracle-c0inmohu.txt\"],\"exit_observation\":{\"exiting\":true,\"flags\":4194316,\"stat\":\"222796 (Egaroucid_for_C) R 222761 222758 15222 34818 222758 4194316 390005 0 0 0 565 136 0 0 20 0 1 0 34763255 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0 0 0 0 0 0 0 0 0\\n\",\"state\":\"R\"},\"exit_status\":0,\"last_observation\":{\"peak_rss_kib\":1394404,\"system_cpu_ns\":1360000000,\"user_cpu_ns\":5630000000},\"resources\":{\"peak_rss_kib\":1394404,\"system_cpu_ns\":1473255000,\"user_cpu_ns\":5652817000},\"returncode\":0,\"sampling_failure\":\"process peak RSS is unavailable\",\"stderr\":\"\",\"stdout\":\"|          Level|          Depth|           Move|          Score|           Time|          Nodes|            NPS|\\n|         custom|        13@100%|             b7|            +40|  000:00:00.005|          42022|        8404400|\\ntotal 42022 nodes in 0.005s NPS 8404400\\n\",\"wall_ns\":7149125088},{\"argv\":[\"/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-whole-game-0035/oracle-cache/bin/Egaroucid_for_Console.out\",\"-nobook\",\"-thread\",\"1\",\"-hash\",\"25\",\"-depthprobrange\",\"2\",\"18\",\"12\",\"100\",\"-depthprobrange\",\"19\",\"42\",\"8\",\"100\",\"-depthprobrange\",\"43\",\"45\",\"12\",\"100\",\"-depthprobrange\",\"46\",\"60\",\"16\",\"100\",\"-solve\",\"/tmp/reversi-ai-oracle-m3v03r97.txt\"],\"exit_observation\":{\"exiting\":true,\"flags\":4194316,\"stat\":\"222797 (Egaroucid_for_C) R 222761 222758 15222 34818 222758 4194316 390006 0 0 0 554 135 0 0 20 0 1 0 34763971 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 2 0 0 0 0 0 0 0 0 0 0 0 0 0\\n\",\"state\":\"R\"},\"exit_status\":0,\"last_observation\":{\"peak_rss_kib\":1394400,\"system_cpu_ns\":1330000000,\"user_cpu_ns\":5530000000},\"resources\":{\"peak_rss_kib\":1394400,\"system_cpu_ns\":1441342000,\"user_cpu_ns\":5545773000},\"returncode\":0,\"sampling_failure\":\"process peak RSS is unavailable\",\"stderr\":\"\",\"stdout\":\"|          Level|          Depth|           Move|          Score|           Time|          Nodes|            NPS|\\n|         custom|        12@100%|             b8|            -40|  000:00:00.001|          14421|       14421000|\\ntotal 14421 nodes in 0.001s NPS 14421000\\n\",\"wall_ns\":7020518836}],\"profile\":{\"candidate\":{\"exact_solver_empty_squares\":16,\"heuristic_depth\":12},\"name\":\"whole-game-depth-8-exact-16\",\"oracle\":{\"book\":false,\"depth_probability_ranges\":[{\"depth\":12,\"move_end\":17,\"move_start\":1,\"probability\":\"100\"},{\"depth\":8,\"move_end\":41,\"move_start\":18,\"probability\":\"100\"},{\"depth\":12,\"move_end\":44,\"move_start\":42,\"probability\":\"100\"},{\"depth\":16,\"move_end\":60,\"move_start\":45,\"probability\":\"100\"}],\"evaluation_override\":false,\"hash_level\":25,\"legacy_level\":null,\"name\":\"Egaroucid for Console\",\"source_sha256\":\"173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b\",\"source_url\":\"https://github.com/Nyanyan/Egaroucid/archive/refs/tags/v7.8.1.tar.gz\",\"threads\":1,\"version\":\"7.8.1\"}},\"queries\":[{\"board\":\"..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBBBWWW.BBBBBWW..BWWWWW..WWWWWB\",\"child_query\":false,\"effective_side\":\"W\",\"result\":{\"completed_depth\":13,\"elapsed_ms\":5,\"exact\":true,\"move\":\"b7\",\"nodes\":42022,\"nps\":8404400,\"value\":40},\"side\":\"W\",\"sign\":1},{\"board\":\"..BBBBWW..BBBWWW..BBWWWW.BBBWWWW.BBWBWWW.BWBBBWW.WWWWWWW..WWWWWB\",\"child_query\":true,\"effective_side\":\"B\",\"result\":{\"completed_depth\":12,\"elapsed_ms\":1,\"exact\":true,\"move\":\"b8\",\"nodes\":14421,\"nps\":14421000,\"value\":-40},\"side\":\"B\",\"sign\":1}],\"report_digest\":\"71e3d66ee22711778bdfd3155b0f52989d56c4ef488712936eecf2460f77675b\",\"status\":\"failed\",\"version\":\"exact-threshold-assessment-v1\"}\n"
+}

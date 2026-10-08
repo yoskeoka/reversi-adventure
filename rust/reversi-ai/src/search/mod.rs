@@ -349,6 +349,72 @@ impl Default for SearchEngine {
 mod tests {
     use super::*;
 
+    #[test]
+    fn explicit_threshold_boundaries_select_exact_and_fail_closed() {
+        struct CountEvaluator(std::sync::atomic::AtomicU32);
+        impl BoardEvaluator for CountEvaluator {
+            fn evaluate(&self, _: &Board, _: Color) -> EvalResult {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                EvalResult {
+                    score: 0,
+                    factors: Default::default(),
+                }
+            }
+            fn name(&self) -> &str {
+                "threshold-test"
+            }
+            fn context_fingerprint(&self) -> u64 {
+                46
+            }
+        }
+        // Replay legal placements; bounded searches below never solve these large roots.
+        let mut board = Board::new();
+        let mut side = Color::Black;
+        let mut roots = Vec::new();
+        while board.empty_cells().count_ones() >= 19 {
+            let legal = moves::legal_moves(&board, side);
+            if legal == 0 {
+                assert_ne!(moves::legal_moves(&board, side.opponent()), 0);
+                side = side.opponent();
+                continue;
+            }
+            let empties = board.empty_cells().count_ones();
+            if [19, 20, 21, 23, 24, 25].contains(&empties) {
+                roots.push((board, side, empties));
+            }
+            let position = Position::from_bit_index(legal.trailing_zeros() as u8);
+            board = moves::make_move(&board, side, position);
+            side = side.opponent();
+        }
+        assert_eq!(roots.len(), 6);
+        for threshold in [20, 24] {
+            for (board, side, empties) in &roots {
+                if empties.abs_diff(threshold) > 1 {
+                    continue;
+                }
+                let evaluator = CountEvaluator(std::sync::atomic::AtomicU32::new(0));
+                let result = SearchEngine::new().search_with_budget(
+                    board,
+                    *side,
+                    &evaluator,
+                    &AiConfig::new(1, 1, 1).with_exact_solver_empty_squares(threshold),
+                    &SearchBudget::with_node_limit_only(2),
+                );
+                assert!(!result.exact);
+                if *empties <= threshold {
+                    assert!(result.score.is_none());
+                    assert!(result.pv.is_empty());
+                    assert_eq!(result.completed_depth, 0);
+                }
+                assert_eq!(
+                    evaluator.0.load(Ordering::Relaxed) == 0,
+                    *empties <= threshold
+                );
+                assert!(matches!(result.outcome, SearchOutcome::Move(_)));
+            }
+        }
+    }
+
     fn small_exact_board() -> Board {
         Board::from_string(
             "..WWWWWW\n.WWWWWWW\n.WWBWWBW\n.WBWBWBW\n.BBBWBWW\nBBBBWWWB\n.BBWBWWB\nBBBBBBWB",

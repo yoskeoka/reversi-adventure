@@ -1139,6 +1139,89 @@ mod tests {
         assert_eq!(solve(&Board::empty(), Color::Black).0.score, Some(0));
     }
 
+    // Independent scoring reference: do not call terminal_score here. The
+    // Oracle awards empties to the winner; the project only does so for wipeout.
+    fn score_contract_reference(board: &Board, color: Color, oracle: bool) -> i32 {
+        let own = board.count(color) as i32;
+        let opponent = board.count(color.opponent()) as i32;
+        let difference = own - opponent;
+        if oracle {
+            difference + difference.signum() * (64 - own - opponent)
+        } else if own > 0 && opponent == 0 {
+            64
+        } else if opponent > 0 && own == 0 {
+            -64
+        } else {
+            difference
+        }
+    }
+
+    #[test]
+    fn early_both_alive_terminal_preserves_project_contract() {
+        let mut board = Board::empty();
+        for index in 1..64 {
+            board.set(Position::from_bit_index(index), Color::Black);
+        }
+        board.set(Position::new(1, 7), Color::White);
+        for color in [Color::Black, Color::White] {
+            assert_eq!(moves::legal_moves(&board, color), 0);
+            let sign = if color == Color::Black { 1 } else { -1 };
+            assert_eq!(score_contract_reference(&board, color, false), sign * 61);
+            assert_eq!(score_contract_reference(&board, color, true), sign * 62);
+            let result = solve(&board, color).0;
+            assert_eq!(result.score, Some(sign * 61));
+            assert!(result.exact);
+            assert_eq!(result.outcome, SearchOutcome::GameOver);
+        }
+    }
+
+    #[test]
+    fn forced_pass_and_terminal_child_match_independent_score_contract() {
+        let mut board = Board::empty();
+        for index in 1..63 {
+            board.set(Position::from_bit_index(index), Color::Black);
+        }
+        board.set(Position::new(0, 1), Color::White);
+        assert_eq!(moves::legal_moves(&board, Color::White), 0);
+        let passed = solve(&board, Color::White).0;
+        assert_eq!(passed.outcome, SearchOutcome::Pass);
+        assert_eq!(passed.score, Some(-64));
+        let root = solve(&board, Color::Black).0;
+        assert_eq!(root.outcome, SearchOutcome::Move(Position::new(0, 0)));
+        let child = moves::make_move(&board, Color::Black, Position::new(0, 0));
+        for color in [Color::Black, Color::White] {
+            let expected = score_contract_reference(&child, color, false);
+            assert_eq!(score_contract_reference(&child, color, true), expected);
+            assert_eq!(solve(&child, color).0.score, Some(expected));
+        }
+        assert_eq!(
+            root.score,
+            Some(score_contract_reference(&child, Color::Black, false))
+        );
+    }
+
+    #[test]
+    fn draw_and_empty_terminal_score_contracts_agree() {
+        let mut draw = Board::empty();
+        for index in 0..64 {
+            draw.set(
+                Position::from_bit_index(index),
+                if index < 32 {
+                    Color::Black
+                } else {
+                    Color::White
+                },
+            );
+        }
+        for board in [draw, Board::empty()] {
+            for color in [Color::Black, Color::White] {
+                assert_eq!(score_contract_reference(&board, color, false), 0);
+                assert_eq!(score_contract_reference(&board, color, true), 0);
+                assert_eq!(solve(&board, color).0.score, Some(0));
+            }
+        }
+    }
+
     fn full_window_reference(board: &Board, color: Color) -> NodeResult {
         let legal = moves::legal_moves(board, color);
         if legal == 0 {

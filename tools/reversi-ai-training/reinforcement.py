@@ -20,7 +20,7 @@ from pathlib import Path
 import training
 
 VERSION = "reversi-ai-pattern-reinforcement-v3"
-MANIFEST_VERSION = 4
+MANIFEST_VERSION = 5
 EXACT_CACHE_POLICY = "exact-cache-cross-decision-suspended-v1"
 RESET_PROTOCOL = "new_game-v1"
 PAIRING = "color_swap_d4_v1"
@@ -162,10 +162,11 @@ def openings(seed: int, count: int, plies: int) -> list[tuple[str, str, list[str
 def validate_manifest(path: Path, *, for_execution: bool = False) -> tuple[dict, Path, Path, Path]:
     manifest = training.read_json(path)
     manifest_keys = {"schema_version", "producer_version", "baseline_artifact", "candidate", "self_play_search", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match", "reset_contract"}
-    if not isinstance(manifest, dict) or manifest.get("schema_version") not in (3, MANIFEST_VERSION) or manifest.get("producer_version") != VERSION:
+    if not isinstance(manifest, dict) or manifest.get("schema_version") not in (3, 4, MANIFEST_VERSION) or manifest.get("producer_version") != VERSION:
         fail("unsupported reinforcement manifest")
     current = manifest["schema_version"] == MANIFEST_VERSION
-    require_keys(manifest, manifest_keys | ({"exact_cache_policy"} if current else set()), "manifest")
+    has_policy = manifest["schema_version"] >= 4
+    require_keys(manifest, manifest_keys | ({"exact_cache_policy"} if has_policy else set()), "manifest")
     if for_execution and not current:
         fail("historical reinforcement manifest cannot run or be adopted under the suspended exact-cache policy")
     root = path.parent
@@ -177,7 +178,7 @@ def validate_manifest(path: Path, *, for_execution: bool = False) -> tuple[dict,
         fail("baseline artifact identity mismatch")
     candidate = require_keys(manifest["candidate"], {"path", "sha256", "evaluator", "profile", "opening_depth", "midgame_depth", "endgame_depth", "exact_solver_empty_squares", "time_limit_ms", "node_limit", "book"}, "candidate")
     executable = checked_file(root, {key: candidate[key] for key in ("path", "sha256")}, "candidate executable")
-    if current and manifest["exact_cache_policy"] != {"policy": EXACT_CACHE_POLICY, "effective_scope": "turn", "binary_sha256": candidate["sha256"]}:
+    if has_policy and manifest["exact_cache_policy"] != {"policy": EXACT_CACHE_POLICY, "effective_scope": "turn", "binary_sha256": candidate["sha256"]}:
         fail("candidate exact-cache safety policy or binary identity mismatch")
     if manifest["reset_contract"] != {"protocol": RESET_PROTOCOL, "cache_lifetime": "one-game", "binary_sha256": candidate["sha256"]}:
         fail("candidate game reset contract or binary identity mismatch")
@@ -193,12 +194,12 @@ def validate_manifest(path: Path, *, for_execution: bool = False) -> tuple[dict,
     self_play = require_keys(manifest["self_play_search"], {"opening_depth", "midgame_depth", "endgame_depth", "exact_solver_empty_squares", "time_limit_ms", "node_limit"}, "self_play_search")
     for key in ("opening_depth", "midgame_depth", "endgame_depth"):
         training.require_int(self_play[key], f"self-play {key}", 1, 64)
-    training.require_int(self_play["exact_solver_empty_squares"], "self-play exact threshold", 0, 16)
+    training.require_int(self_play["exact_solver_empty_squares"], "self-play exact threshold", 0, 30 if current else 16)
     training.require_int(self_play["time_limit_ms"], "self-play time limit", 1)
     training.require_int(self_play["node_limit"], "self-play node limit", 1)
-    if self_play["opening_depth"] != 12 or self_play["endgame_depth"] != 12 or self_play["midgame_depth"] not in (8, 12):
+    if not current and (self_play["opening_depth"] != 12 or self_play["endgame_depth"] != 12 or self_play["midgame_depth"] not in (8, 12)):
         fail("self-play search requires 12/8/12 or 12/12/12 depths")
-    if self_play["exact_solver_empty_squares"] != 16:
+    if not current and self_play["exact_solver_empty_squares"] != 16:
         fail("self-play search requires exact threshold 16")
     if self_play["time_limit_ms"] != candidate["time_limit_ms"] or self_play["node_limit"] != candidate["node_limit"]:
         fail("self-play search must use frozen candidate resource limits")
@@ -553,6 +554,8 @@ def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_call
               "self_play_game_count": len(games), "self_play_game_digests": [game["game_digest"] for game in games],
               "match": final_match, "first_match": first, "continued": continued, "match_opening_attempts": attempts, "match_opening_excluded": excluded_openings,
               "game_digests": [game["game_digest"] for game in games + match_games], "decisions": manifest["max_decisions"] - remaining[0], "failures": [], "output_sha256": {}}
+    if manifest["schema_version"] == MANIFEST_VERSION:
+        report["exact_cache_policy"] = manifest["exact_cache_policy"]
     all_games = games + match_games
     partial = output_bytes(artifact, selected, all_games, checkpoint, report)
     report["output_sha256"] = {name: hashlib.sha256(partial[name]).hexdigest() for name in OUTPUTS[:-1]}
@@ -638,6 +641,8 @@ def verify(manifest_path: Path, directory: Path) -> None:
               "validation_sha256": sha(validation_path), "validation": {"baseline": base_metrics, "candidate": candidate_metrics, "excluded_ids": excluded_ids, "remaining_records": len(validation)},
               "self_play_game_count": len(self_games), "self_play_game_digests": [game["game_digest"] for game in self_games], "match": final_match, "first_match": first, "continued": continued}
     checks["validation_position_keys"] = validation_keys(validation)
+    if manifest["schema_version"] == MANIFEST_VERSION:
+        checks["exact_cache_policy"] = manifest["exact_cache_policy"]
     if any(report.get(key) != value for key, value in checks.items()):
         fail("report metadata or selection mismatch")
 
@@ -657,8 +662,8 @@ def prepare(args: argparse.Namespace) -> None:
                               "opening_depth": args.opening_depth, "midgame_depth": args.midgame_depth,
                               "endgame_depth": args.endgame_depth, "exact_solver_empty_squares": args.exact_solver_empty_squares,
                               "time_limit_ms": args.time_limit_ms, "node_limit": args.node_limit},
-                "self_play_search": {"opening_depth": args.opening_depth, "midgame_depth": args.self_play_midgame_depth,
-                                     "endgame_depth": args.endgame_depth, "exact_solver_empty_squares": args.exact_solver_empty_squares,
+                "self_play_search": {"opening_depth": args.self_play_opening_depth, "midgame_depth": args.self_play_midgame_depth,
+                                     "endgame_depth": args.self_play_endgame_depth, "exact_solver_empty_squares": args.self_play_exact_solver_empty_squares,
                                      "time_limit_ms": args.time_limit_ms, "node_limit": args.node_limit},
                 "reset_contract": {"protocol": RESET_PROTOCOL, "cache_lifetime": "one-game", "binary_sha256": sha(args.candidate_executable)},
                 "seed": args.seed, "game_count": args.game_count, "opening_plies": args.opening_plies,
@@ -714,7 +719,9 @@ def main(argv: list[str]) -> int:
     for option in ("seed", "game-count", "opening-plies", "opening-depth", "midgame-depth", "endgame-depth", "exact-solver-empty-squares", "time-limit-ms", "node-limit", "decision-timeout-seconds", "max-decisions"):
         creation.add_argument(f"--{option}", type=int, required=True)
     creation.add_argument("--match-first-pairs", type=int, default=25)
-    creation.add_argument("--self-play-midgame-depth", type=int, choices=(8, 12), default=12)
+    for phase in ("opening", "midgame", "endgame"):
+        creation.add_argument(f"--self-play-{phase}-depth", type=int, default=12)
+    creation.add_argument("--self-play-exact-solver-empty-squares", type=int, default=16)
     creation.add_argument("--match-continuation-pairs", type=int, default=75)
     creation.add_argument("--match-max-opening-attempts", type=int, default=200)
     for name in ("run", "verify", "regret-command", "regret-timeout"):

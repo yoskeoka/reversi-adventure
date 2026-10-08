@@ -189,7 +189,8 @@ zero weights are diagnostics, not a playing-strength claim. The separate 0019
 cycle uses the exact baseline and validation digests; 0018 acceptance openings
 remain unread until their own gate.
 
-The offline reinforcement producer accepts a version-3, immutable manifest.
+The historical version-3 reinforcement contract uses an immutable manifest
+(new prepare/run use schema5 as defined under Explicit search settings below).
 It records the baseline artifact identity and SHA-256, candidate executable
 SHA-256, trainer and update-rule versions, feature contract, trained evaluator,
 all three search depths, exact-solver threshold, disabled book, self-play and
@@ -202,8 +203,8 @@ valid inputs. Version-3 pins `reset_contract` with protocol `new_game-v1`,
 cache lifetime `one-game`, and the same candidate executable SHA-256. Prepare
 checks a control acknowledgement without playing a game. Every self-play and
 candidate-match game resets each participating player before any move; its
-record preserves the game ID and acknowledged reset events. Run and offline
-verify reject a missing contract, an old manifest, mismatched binary identity,
+record preserves the game ID and acknowledged reset events. Offline
+verify rejects a missing contract, an unsupported manifest, mismatched binary identity,
 or missing per-game reset evidence. Version-1 and version-2 trained artifacts
 remain usable baselines, and the artifact loaders also accept version-3
 reinforcement provenance.
@@ -1250,6 +1251,34 @@ separately from match points (where a draw is 0.5), with a sample-size and
 confidence rule. `ci-smoke-v1` remains a distinct small, bounded profile and
 cannot be used to assert calibration or final strength.
 
+### Explicit search settings and score-contract audit
+
+通常 CLI の正の u8 深度・u32 exact 引数、および Advisor/decision/Playground の
+opening 1..12、midgame 1..16、exact 0..30 は維持する。exact 0 は無効化であり、
+20/24 は heuristic depth ではなく空き数による切替閾値である。既定 exact16 は変更しない。
+
+Godot の `set_ai_with_exact_threshold(evaluator, opening, midgame, endgame, exact)` は
+各深度 1..64、exact 0..30 を変換前の整数で検証する。不正値・未知 evaluator は false を
+返し、既存 AI を変更しない。旧 `set_ai` の呼出契約と既定 exact16 は維持する。
+
+Reinforcement の新規 prepare/run は schema5 を使用する。自己対局専用の opening、
+midgame、endgame 深度は各 1..64、exact は 0..30 を独立に指定でき、既定は
+12/12/12・exact16。manifest/report は全設定、CLI SHA-256、資源上限、turn policy を
+固定し、run は記録値を実行する。candidate-match/regret/0018 の
+`strong-engine-hcap-v1` は常に 12/12/12・exact16。schema3/4 の完成 report は元の
+設定範囲・policy の意味で offline 検証する。旧 manifest で新 run を開始できず、
+中断 run の別 identity による再開も認めない。reset ack と timeout/未完了時の
+fail-closed は維持し、部分 exact score を教師値へ使わない。
+
+Project の終局 score は両色生存時の実石数差、wipeout のみ ±64、空盤は 0。
+固定 Oracle Egaroucid v7.8.1 は勝者へ残り空きを加算する。両契約の値を区別して保存し、
+root へ一律 ±1 を足す補正は行わない。合法 continuation、terminal leaf、root と
+選択 child の独立再計算を根拠に、調査結果を「score 契約差を terminal/root/child
+まで確認」「符号/手番/validator の誤りを確認」「solver 誤りの証拠あり」
+「上限内で未確定」に分類する。旧失敗 receipt は変更しない。
+未解決の正確性条件は 0040 の本番 freeze gate に残す。score 意味の変更、本番 game
+cache 再利用、学習成功、閾値24の時間内完了はこの設定 API から導かない。
+
 ## GDScript Bridge Additions
 
 Added to the existing `ReversiGame` GDScript class:
@@ -1257,6 +1286,7 @@ Added to the existing `ReversiGame` GDScript class:
 ```gdscript
 # AI setup
 game.set_ai(evaluator_name: String, opening_depth: int, midgame_depth: int, endgame_depth: int) -> bool
+game.set_ai_with_exact_threshold(evaluator_name: String, opening_depth: int, midgame_depth: int, endgame_depth: int, exact: int) -> bool
 # evaluator_name: "strategic" or "novice"
 # Returns false if evaluator_name is unknown
 game.ai_think_with_budget(time_limit_millis: int, node_limit: int) -> Vector2i
