@@ -111,7 +111,7 @@ game cache本番化、default20、長い24 solve、強化成功/50%勝率は含�
 - (MODIFY) `rust/reversi-ai/src/eval/pattern.rs`、`eval/trained.rs`、関連tests — format/scale/provenance/runtime rejection。
 - (MODIFY) `rust/reversi-ai/src/bin/reversi-ai-cli.rs` と必要なPlayground protocol/tests — score contract出力/解析と新Advisor identity。
 - (MODIFY) `tools/reversi-ai-training/{training.py,random_inputs.py,reinforcement.py}`、tests、README、Makefile — 新schema/labels/legacy入口。
-- (NEW) 小さいschema2 training/random/reinforcement fixturesとwinner-empty golden、migration互換fixture。
+- (NEW) 小さいtraining/random schema2、reinforcement manifest6・game/report/checkpoint4 fixturesとwinner-empty golden、migration互換fixture。
 - (MODIFY) `tools/reversi-ai-oracle/oracle.py` とtests、benchmarkのwhole-game/threshold/cache/reference validator — terminal shortcut、version分岐、identity検査。
 - (NEW) `docs/references/reversi-ai-winner-empty-migration.md` — old/new契約、保存identity、tiny検証と人間batchの残条件。
 - (MODIFY) current-status、0040/0037/0019/0018 — freeze入力と最新契約の引継ぎ。
