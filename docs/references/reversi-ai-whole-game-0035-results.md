@@ -81,7 +81,12 @@ exact=trueを先に分類し、それ以外をdecision盤面のoccupied<=20がop
 深度12設定の終盤完全読みには再利用ありで選択手の値が最善値に届かない反例がある。
 0040の本番選択には正確性の修正・再検証も必要であり、今回の実験だけで高い閾値を採用しない。
 
-benchmark artifactのdigest検証と学習元データ全体のprovenance検証は別。0032のgenerator source digest mismatchは本番freeze前の未解決項目であり、完成したbenchmarkの検証を学習元データ検証の完了と扱わない。
+benchmark artifactのdigest検証と学習元データ全体のprovenance検証は別。
+0032はPR #223で全量検証を完了し計画を削除済み。2026-10-08に保存source digestを
+凍結producer 790209d9のGit blobと照合し、3 sourceとも一致した。
+現行sourceによるgenerator source digest mismatchを入力破損とは扱わない。
+0019の新freeze前に元producer/契約で再検証し、その条件での失敗だけを別途解決する。
+現在の速度・強さ・計画の境界は[判断材料](reversi-ai-current-status.md)を参照する。
 
 ## 固定入力digest
 

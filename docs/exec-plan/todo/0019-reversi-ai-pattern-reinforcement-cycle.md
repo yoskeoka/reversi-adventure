@@ -88,6 +88,10 @@ them, and then decides whether 0018 may freeze the candidate.
 
 ## Dependencies and sequencing
 
+- 0032 is completed in [PR #223](https://github.com/yoskeoka/reversi-adventure/pull/223),
+  and its plan was deleted. Revalidation before this freeze belongs to 0019:
+  use its frozen producer and original source contract, not current-source
+  hashes. Reopen input correctness only if that verification fails.
 - Requires the verified project-owned random-game inputs from 0032. Freeze the
   production manifest only after its baseline artifact and separate validation
   JSONL have passed their digest and complete-game verification. Pin their
