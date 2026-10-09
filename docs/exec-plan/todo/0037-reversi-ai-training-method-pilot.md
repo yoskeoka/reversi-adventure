@@ -2,6 +2,15 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+> **0047 score移行後の境界**: 新規AI/教師値は `winner-empty-v1`、artifact format2、
+> trainer/record schema2、reinforcement manifest6・report4を使用する。旧schema3/4/5完成証拠と
+> raw差baseline/validationは明示legacy offline検証だけに保持し、新runへ読み替えない。
+> 本番入力の再生成・再学習は件数/上限/進捗/再開を固定した別の人間操作計画で行う。
+> [移行記録](../../references/reversi-ai-winner-empty-migration.md)を参照する。
+> 0040の最新producerでの独立root/選択child一致・資源制限応答・人間の設定/性能判断、
+> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは未達として残す。
+> strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
+
 > **2026-10-02 performance evidence**: 0035の深度12/8の全局計測は完了し、
 > `docs/references/reversi-ai-whole-game-0035-results.md` に検証済み結果を記録した。
 > pilotの実行設定は0040の意味検証と人間の設定/時間予算判断後に固定する。
@@ -14,7 +23,7 @@
 
 ## 目的と完了条件
 
-0046実装後の自己対局設定はschema5で3phase各1..64・exact0..30を明示指定できる。
+0047実装後の自己対局設定はschema6で3phase各1..64・exact0..30を明示指定できる。
 既定12/12/12・exact16、turn policyと候補比較strong-v1は維持する。
 [score契約調査](../../references/reversi-ai-exact-score-contract.md)の残条件と0040の設定/時間予算判断を
 pilot前に確認する。設定可能性を本pilotの完了や本番freezeの承認にしない。

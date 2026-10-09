@@ -89,8 +89,8 @@ export function oracleConfigId(advisor) {
   for (let move = firstExact; move <= 60; move++) ranges.push([move, move, 61 - move, '100']);
   const settings = { book: false, depth_ranges: ranges, exact_empty_squares: advisor.exact, hash_level: 25,
     midgame_depth: advisor.midgameDepth, opening_depth: advisor.openingDepth, oracle_version: '7.8.1',
-    schema_version: 1, source_sha256: '173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b', threads: 1 };
-  return `oracle-advisor-v1:${createHash('sha256').update(JSON.stringify(settings)).digest('hex')}`;
+    schema_version: 2, score_contract: 'winner-empty-v1', source_sha256: '173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b', threads: 1 };
+  return `oracle-advisor-v2:${createHash('sha256').update(JSON.stringify(settings)).digest('hex')}`;
 }
 
 export class Session {
@@ -160,7 +160,7 @@ export class Session {
             { cwd: this.config.repoRoot, encoding: 'utf8', timeout: 12000, maxBuffer: 1024, signal: controller.signal });
           if (controller.signal.aborted || this.closed) return;
           const configId = descriptor.stdout.trim();
-          if (!/^project-ai-advisor-v1:[0-9a-f]{16}$/.test(configId)) throw new Error('invalid Advisor configuration identity');
+          if (!/^project-ai-advisor-v2:[0-9a-f]{16}$/.test(configId)) throw new Error('invalid Advisor configuration identity');
           this.advisorConfigIds[side] = configId;
         } finally {
           if (this.advisorStarts[side] === controller) delete this.advisorStarts[side];
@@ -196,7 +196,7 @@ export class Session {
       const line = await process.command(`${positionId}\t${board}\t${side}`);
       if (this.closed || this.revision !== revision || this.board !== board || this.turn !== side || !this.advisor?.pending) return;
       const result = JSON.parse(line);
-      if (result.schema_version !== 1 || result.position_id !== positionId || result.board !== board || result.side !== side ||
+      if (result.schema_version !== 2 || result.score_contract !== 'winner-empty-v1' || result.position_id !== positionId || result.board !== board || result.side !== side ||
           result.outcome !== 'move' || !Number.isInteger(result.completed_depth) || result.completed_depth < 1 ||
           typeof result.exact !== 'boolean' || !Array.isArray(result.scores) || result.scores.length !== moves.length ||
           result.config_id !== (this.seat(side).advisor.id === 'oracle' ? oracleConfigId(this.seat(side).advisor) : this.advisorConfigIds[side])) throw new Error('invalid Advisor response');

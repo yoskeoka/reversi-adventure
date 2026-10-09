@@ -23,12 +23,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "reversi-ai-oracle"))
 import oracle  # noqa: E402  (project-owned adapter; Egaroucid remains external)
 
-VERSION = "reversi-ai-whole-game-v1"
+VERSION = "reversi-ai-whole-game-v3"
+SCORE_CONTRACT = "winner-empty-v1"
 OPENINGS = Path(__file__).with_name("whole-game-openings-v1.json")
 DIAGNOSTIC = re.compile(
     r"search_diagnostic_v1\tposition_id=([^\t]+)\telapsed_us=(\d+)\tnodes=(\d+)"
     r"\texact=(true|false)\tscore=(-?\d+|none)\tcompleted_depth=(\d+)"
     r"\toutcome=(move|pass|game_over)\tcache_probes=(\d+)\tcache_hits=(\d+)\tcache_stores=(\d+)"
+)
+SCORE_IDENTITY = re.compile(
+    r"score_contract_v1\tposition_id=([^\t]+)\tscore_contract=(winner-empty-v1)"
+    r"\tsearch_semantics_version=(2)"
 )
 CACHE_POLICY = re.compile(
     r"exact_cache_policy_v1\tposition_id=([^\t]+)\texact_cache_scope=([^\t]+)"
@@ -116,6 +121,7 @@ class Seat:
         require(max_rss_kib is None or type(max_rss_kib) is int and max_rss_kib > 0, "invalid RSS limit")
         self.exact_empty, self.node_limit, self.max_rss_kib = exact_empty, node_limit, max_rss_kib
         self.capture_cache_policy = capture_cache_policy
+        self.score_identities = {}
         self.last_observation: dict | None = None
         self.peak_observation: dict | None = None
         self.kind, self.timeout, self.label, self.depth = kind, timeout, label, depth
@@ -212,6 +218,12 @@ class Seat:
         lines = self.stderr.readlines()
         self.diagnostic_offset = self.stderr.tell()
         for line in lines:
+            contract = SCORE_IDENTITY.fullmatch(line.rstrip("\n"))
+            if contract:
+                identifier, value, semantics = contract.groups()
+                require(identifier not in self.score_identities, "duplicate CLI score identity id")
+                self.score_identities[identifier] = {"score_contract": value,
+                    "search_semantics_version": int(semantics), "score_identity_raw": line.rstrip("\n")}
             policy = CACHE_POLICY.fullmatch(line.rstrip("\n"))
             if policy and self.capture_cache_policy:
                 identifier, scope, value = policy.groups()
@@ -228,6 +240,9 @@ class Seat:
                     "completed_depth": int(completed_depth), "outcome": outcome,
                     "cache_probes": int(probes), "cache_hits": int(hits), "cache_stores": int(stores),
                 }
+        for identifier, identity in self.score_identities.items():
+            if identifier in self.diagnostics:
+                self.diagnostics[identifier].update(identity)
         for identifier, policy in self.cache_policies.items():
             if identifier in self.diagnostics:
                 self.diagnostics[identifier]["exact_cache_policy"] = policy
@@ -400,6 +415,11 @@ def decision_phase(board: str, exact_empty: int = 16) -> str:
 def validate_cli_diagnostic(step: dict, sample: dict, midgame_depth: int,
                             exact_empty: int = 16) -> None:
     require(exact_empty in (16, 20, 24), "unsupported exact threshold")
+    require(isinstance(sample, dict) and sample.get("score_contract") == SCORE_CONTRACT
+            and sample.get("search_semantics_version") == 2
+            and sample.get("score_identity_raw") == (
+                f"score_contract_v1\tposition_id={step['id']}\tscore_contract={SCORE_CONTRACT}\tsearch_semantics_version=2"),
+            "CLI score identity missing or inconsistent")
     require(isinstance(sample, dict) and type(sample.get("exact")) is bool
             and sample.get("outcome") in ("move", "pass", "game_over")
             and all(type(sample.get(key)) is int and sample[key] >= 0
@@ -508,6 +528,7 @@ def measured_game(row: dict, assignment: int, kind: str, binary: Path, artifact:
 
 
 def run(args: argparse.Namespace) -> dict:
+    require(args.kind in ("oracle", "cli", "cli-persistent"), "legacy CLI measurement is offline-only")
     require(sys.platform == "linux", "CPU/RSS measurement requires Linux")
     require(args.timeout_seconds > 1 and args.max_rss_kib > 0 and args.max_decisions >= 120,
             "invalid resource caps")
@@ -535,7 +556,7 @@ def run(args: argparse.Namespace) -> dict:
                 print(f"progress whole-game {len(games)}/8 opening={row['id']} seat={assignment} "
                       f"game={games[-1]['wall_ns'] / 1e9:.1f}s elapsed={time.monotonic() - started:.1f}s",
                       file=sys.stderr, flush=True)
-    report = {"schema_version": 1, "runner_version": VERSION, "kind": args.kind,
+    report = {"schema_version": 3, "score_contract": SCORE_CONTRACT, "runner_version": VERSION, "kind": args.kind,
               "openings_sha256": digest(OPENINGS), "binary": {"path": str(args.binary.resolve()),
               "sha256": digest(args.binary)},
               "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)}
@@ -716,7 +737,7 @@ def comparison(baseline: dict, candidate: dict) -> dict:
     old_cpu = old["user_cpu_ns"] + old["system_cpu_ns"]
     new_cpu = new["user_cpu_ns"] + new["system_cpu_ns"]
     require(old["wall_ns"] > 0 and old_cpu > 0 and new_cpu > 0, "wall/CPU evidence missing")
-    result = {"schema_version": 1, "runner_version": VERSION,
+    result = {"schema_version": 2, "score_contract": SCORE_CONTRACT, "runner_version": VERSION,
               "baseline_report_digest": baseline["report_digest"],
               "candidate_report_digest": candidate["report_digest"],
               "semantic_positions": positions,
@@ -756,7 +777,7 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float, progr
             else:
                 child = oracle.apply_move(board, side, move)
                 if not oracle.legal_moves(child, oracle.other(side)) and not oracle.legal_moves(child, side):
-                    selected_score = child.count(side) - child.count(oracle.other(side))
+                    selected_score = oracle.terminal_score(child, side)
                 else:
                     child_side, child_sign = oracle.effective_query(child, oracle.other(side))
                     continuation = oracle.run_solve([(child, child_side)], binary, cwd,
@@ -774,7 +795,7 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float, progr
             print(f"progress whole-game-oracle-check {index}/{len(exact_steps)} "
                   f"position={step['id']} elapsed={time.monotonic() - started:.1f}s",
                   file=sys.stderr, flush=True)
-    result = {"schema_version": 1, "runner_version": VERSION,
+    result = {"schema_version": 2, "score_contract": SCORE_CONTRACT, "runner_version": VERSION,
               "cli_report_digest": report["report_digest"],
               "oracle_binary_sha256": digest(binary),
               "oracle_profile": oracle.profile_metadata(selected_profile),
@@ -786,7 +807,8 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float, progr
 def verify_oracle_evidence(report: dict, evidence: dict, binary: Path | None = None) -> None:
     verify(report)
     require(report["kind"] in ("cli", "cli-persistent"), "oracle evidence requires diagnostic CLI report")
-    require(evidence.get("schema_version") == 1 and evidence.get("runner_version") == VERSION
+    require(evidence.get("schema_version") == 2 and evidence.get("score_contract") == SCORE_CONTRACT
+            and evidence.get("runner_version") == VERSION
             and evidence.get("cli_report_digest") == report["report_digest"],
             "oracle evidence identity mismatch")
     require(evidence.get("report_digest") == hashlib.sha256(canonical(
@@ -810,7 +832,7 @@ def verify_oracle_evidence(report: dict, evidence: dict, binary: Path | None = N
                 "oracle evidence score or position mismatch")
 
 
-RESUMABLE_VERSION = "reversi-ai-whole-game-v2"
+RESUMABLE_VERSION = VERSION
 
 
 def sealed(value: dict, key: str = "report_digest") -> dict:
@@ -865,11 +887,21 @@ def progress(stage: str, condition: str, done: int, total: int, games: int,
           file=sys.stderr, flush=True)
 
 
-def verify(report: dict, binary: Path | None = None, artifact: Path | None = None) -> None:
-    if report.get("schema_version") == 1:
-        verify_v1(report, binary, artifact)
+def verify(report: dict, binary: Path | None = None, artifact: Path | None = None, *, legacy_offline: bool = False) -> None:
+    require(isinstance(report, dict), "whole-game report must be an object")
+    if legacy_offline:
+        from legacy_offline import whole_game_report
+        whole_game_report(report, binary, artifact)
         return
-    require(report.get("schema_version") == 2 and report.get("runner_version") == RESUMABLE_VERSION,
+    require(report.get("score_contract") == SCORE_CONTRACT, "whole-game score contract mismatch; old reports require --legacy-offline")
+    require(report.get("kind") in ("oracle", "cli", "cli-persistent"), "new whole-game report cannot claim legacy CLI semantics")
+    require(report.get("schema_version") == 3, "unsupported whole-game report")
+    if "identity" not in report:
+        require(report == sealed(report), "report digest mismatch")
+        compatible = sealed({**report, "schema_version": 1})
+        _verify_complete(compatible, binary, artifact)
+        return
+    require(report.get("schema_version") == 3 and report.get("runner_version") == RESUMABLE_VERSION,
             "unsupported whole-game report")
     require(report.get("report_digest") == sealed(report)["report_digest"], "report digest mismatch")
     require(report.get("resource_scopes") == {
@@ -881,6 +913,7 @@ def verify(report: dict, binary: Path | None = None, artifact: Path | None = Non
     identity = report.get("identity")
     require(isinstance(identity, dict) and report.get("condition_digest") == hashlib.sha256(canonical(identity)).hexdigest(),
             "condition identity mismatch")
+    require(identity.get("score_contract") == SCORE_CONTRACT, "condition score contract mismatch")
     require(identity.get("cache_lifetime") == "one-game" and identity.get("reset_protocol") == (
             "gtp-clear-board" if report["kind"] == "oracle" else "new_game-v1"),
             "game cache/reset identity missing")
@@ -1009,7 +1042,7 @@ def measurement_identity(args) -> dict:
     require(getattr(args, "exact_empty", 16) in (16, 20, 24), "unsupported exact threshold")
     require(getattr(args, "node_limit", None) is None, "whole-game measurement must not use a node cap")
     require(args.kind != "oracle" or args.cache_scope == "game", "Oracle has no CLI turn cache scope")
-    return {"kind": args.kind, "binary": {"path": str(args.binary.resolve()), "sha256": digest(args.binary)},
+    return {"score_contract": SCORE_CONTRACT, "kind": args.kind, "binary": {"path": str(args.binary.resolve()), "sha256": digest(args.binary)},
             "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)} if args.artifact else None),
             "openings_sha256": digest(OPENINGS), "source_revision": getattr(args, "source_revision", None),
             "host": platform.node(), "cache_lifetime": "one-game",
@@ -1184,7 +1217,7 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                 segment.update(sealed(segment))
         progress("aggregate", condition_id, conditions_done, conditions_total, 8, "measuring", started)
         ordered = [games[f"{row['id']}-seat{assignment}"] for row, assignment in rows]
-        report = sealed({"schema_version": 2, "runner_version": RESUMABLE_VERSION,
+        report = sealed({"schema_version": 3, "score_contract": SCORE_CONTRACT, "runner_version": RESUMABLE_VERSION,
             "kind": args.kind, "binary": identity["binary"], "artifact": identity["artifact"],
             "openings_sha256": identity["openings_sha256"], "identity": identity,
             "condition_id": condition_id, "condition_digest": condition_digest, "manifest_digest": manifest_digest,
@@ -1221,6 +1254,7 @@ def main(argv: list[str] | None = None) -> int:
     measure.add_argument("--progress-every", type=int, default=1)
     measure.add_argument("--source-revision")
     check = sub.add_parser("verify")
+    check.add_argument("--legacy-offline", action="store_true")
     check.add_argument("--report", type=Path, required=True)
     check.add_argument("--binary", type=Path)
     check.add_argument("--artifact", type=Path)
@@ -1232,6 +1266,8 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("oracle-check", "verify-oracle-check"):
         operation = sub.add_parser(name)
         operation.add_argument("--report", type=Path, required=True)
+        if name == "verify-oracle-check":
+            operation.add_argument("--legacy-offline", action="store_true")
         operation.add_argument("--oracle-binary", type=Path)
         operation.add_argument("--oracle-cwd", type=Path)
         operation.add_argument("--timeout-seconds", type=float, default=310)
@@ -1248,7 +1284,7 @@ def main(argv: list[str] | None = None) -> int:
             raw = args.report.read_bytes()
             decoded = json.loads(raw)
             require(raw == canonical(decoded), "report must be canonical JSON")
-            verify(decoded, args.binary, args.artifact)
+            verify(decoded, args.binary, args.artifact, legacy_offline=args.legacy_offline)
         elif args.command in ("compare", "verify-comparison"):
             baseline_raw = args.baseline_report.read_bytes()
             candidate_raw = args.candidate_report.read_bytes()
@@ -1277,7 +1313,11 @@ def main(argv: list[str] | None = None) -> int:
                 evidence_raw = args.output.read_bytes()
                 evidence = json.loads(evidence_raw)
                 require(evidence_raw == canonical(evidence), "oracle evidence must be canonical JSON")
-                verify_oracle_evidence(decoded, evidence, args.oracle_binary)
+                if args.legacy_offline:
+                    from legacy_offline import whole_game_report
+                    whole_game_report(decoded, evidence=evidence, oracle_binary=args.oracle_binary)
+                else:
+                    verify_oracle_evidence(decoded, evidence, args.oracle_binary)
     except (BenchmarkError, oracle.OracleError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"whole-game benchmark error: {exc}", file=sys.stderr)
         return 2

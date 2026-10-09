@@ -22,7 +22,7 @@ import whole_game as wg
 spec = importlib.util.spec_from_file_location("measurement_prepare", Path(__file__).with_name("prepare-whole-game-measurement.py"))
 prep = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prep)
-VERSION = "exact-threshold-assessment-v1"
+VERSION = "exact-threshold-assessment-v2"
 STARTED = time.monotonic()
 THRESHOLDS = (16, 20, 24)
 SCOPES = ("turn", "game")
@@ -38,6 +38,7 @@ def sha(value) -> str:
 
 def verify_seal(value: dict) -> None:
     wg.require(value == wg.sealed(value), "assessment digest mismatch")
+    wg.require(value.get("score_contract") == wg.SCORE_CONTRACT, "assessment score contract mismatch; old evidence requires --legacy-offline")
 
 
 def transform_coordinate(move: str, transform: str) -> str:
@@ -210,7 +211,7 @@ def prepare(args) -> Path:
         old = prep.load(resume_path)
         folder = Path(old["output_directory"])/"pilot"
         resume = {"manifest": prep.pin(resume_path), "units": [prep.pin(p) for p in sorted(folder.glob("*.json"))]}
-    manifest = wg.sealed({"version": VERSION, "source_revision": args.source_revision,
+    manifest = wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "source_revision": args.source_revision,
         "harness_revision": args.harness_revision, "harness_files": [prep.pin(p) for p in harness_paths()],
         "host": prep.host(), "inputs": inputs, "caps": CAPS, "roots": roots,
         "source_report_digest": source["report_digest"], "cache_lifetime": "one-game",
@@ -343,7 +344,7 @@ def measure_unit(m, unit, *, include_cache_policy=False) -> dict:
             if usage is not None:
                 usages[label] = usage
     wg.require(not interrupted, "interrupted unit cannot be published")
-    return wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"], "unit": unit,
+    return wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"], "unit": unit,
         "status": "failed" if failure else "completed", "failure": failure, "failed_attempt": attempt,
         "session_id": uuid.uuid4().hex, "started_at_ns": timestamp, "ended_at_ns": time.time_ns(),
         "wall_ns": time.monotonic_ns()-started, "steps": steps, "reset_events": resets,
@@ -517,7 +518,7 @@ def solve_position(m, job):
         raw = wg.oracle.run_solve([(board, effective)], binary, Path(m["oracle_cwd"]), profile,
                                   CAPS["timeout_seconds"], child_query=child_query,
                                   runner=lambda argv, **kw: measured_oracle(argv, observations=observations, **kw))[0]
-        queries.append({"board": board, "side": side, "effective_side": effective,
+        queries.append({"score_contract": wg.SCORE_CONTRACT, "board": board, "side": side, "effective_side": effective,
                         "sign": sign, "child_query": child_query, "result": raw})
         wg.require(raw["exact"] and raw["completed_depth"] >= board.count("."), "independent Oracle incomplete")
         return sign*int(raw["value"])
@@ -528,14 +529,13 @@ def solve_position(m, job):
         else:
             child = wg.oracle.apply_move(step["board"], step["side"], step["move"])
             if terminal(child, wg.oracle.other(step["side"])):
-                own, other = child.count(step["side"]), child.count(wg.oracle.other(step["side"]))
-                selected = 64 if other == 0 else -64 if own == 0 else own-other
+                selected = wg.oracle.terminal_score(child, step["side"])
             else:
                 selected = -solve(child, wg.oracle.other(step["side"]), True)
         wg.require(root == selected == step["search"]["score"], "independent Oracle score/continuation mismatch")
     except (wg.BenchmarkError, wg.oracle.OracleError, OSError, ValueError) as exc:
         failure = str(exc)
-    return wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"], "job": job,
+    return wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"], "job": job,
         "oracle_binary": m["inputs"]["oracle"], "profile": wg.oracle.profile_metadata(profile),
         "status": "failed" if failure else "completed", "failure": failure, "queries": queries,
         "process_observations": observations})
@@ -560,8 +560,7 @@ def verify_position(m, job, result):
         if not terminal(child, wg.oracle.other(step["side"])):
             expected.append((child, wg.oracle.other(step["side"]), True))
         else:
-            own, other = child.count(step["side"]), child.count(wg.oracle.other(step["side"]))
-            terminal_score = 64 if other == 0 else -64 if own == 0 else own-other
+            terminal_score = wg.oracle.terminal_score(child, step["side"])
     queries, observations = result["queries"], result.get("process_observations")
     wg.require(isinstance(observations, list) and len(queries) <= len(expected)
                and len(queries) <= len(observations) <= min(len(expected), len(queries)+1),
@@ -627,7 +626,7 @@ def verify_position(m, job, result):
             wg.require(not cap_exceeded and observation["wall_ns"] < CAPS["timeout_seconds"]*1_000_000_000,
                        "Oracle successful process exceeded resource cap")
             query = queries[index]
-            wg.require(isinstance(query, dict) and query.get("board") == board and query.get("side") == side
+            wg.require(isinstance(query, dict) and query.get("score_contract") == wg.SCORE_CONTRACT and query.get("board") == board and query.get("side") == side
                        and query.get("effective_side") == effective and type(query.get("sign")) is int and query["sign"] == sign
                        and query.get("child_query") is child_query and isinstance(query.get("result"), dict),
                        "Oracle raw query identity mismatch")
@@ -733,7 +732,7 @@ def run_units(m, rows, directory, progress, verify_only=False):
 
 def run_oracle(m, results, directory, progress, verify_only=False):
     jobs = oracle_jobs(results)
-    stage = wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"], "jobs": jobs, "total": len(jobs)})
+    stage = wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"], "jobs": jobs, "total": len(jobs)})
     stage_path = directory.parent / (directory.name+"-manifest.json")
     wg.require(not verify_only or stage_path.exists(), "missing Oracle stage manifest")
     immutable(stage_path, stage)
@@ -857,7 +856,7 @@ def assessment_summary(results, receipts, admitted, reasons):
             except wg.BenchmarkError as exc:
                 record["failure"] = str(exc)
             conditions.append(record)
-    return wg.sealed({"version": VERSION, "admitted_thresholds": admitted, "pilot_exclusions": reasons,
+    return wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "admitted_thresholds": admitted, "pilot_exclusions": reasons,
         "conditions": conditions, "unit_digests": [r["report_digest"] for r in results],
         "oracle_digests": [r["report_digest"] for r in receipts],
         "interpretation": "Single serial run; no significance claim. Pilot window timings excluded from full-game comparisons. Production adoption requires human decision in 0040."})
@@ -907,7 +906,7 @@ def preflight(m, directory):
         stage_manifest = prep.load(stage_path)
         verify_seal(stage_manifest)
         jobs = oracle_jobs(ordered[stage])
-        wg.require(stage_manifest == wg.sealed({"version": VERSION,
+        wg.require(stage_manifest == wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT,
             "manifest_digest": m["report_digest"], "jobs": jobs,
             "total": len(jobs)}), "Oracle stage sources mismatch")
         stage_jobs[stage] = jobs
@@ -928,7 +927,7 @@ def preflight(m, directory):
                    "full gate has missing pilot or Oracle evidence")
         pilot_receipts = [receipts["pilot"][j["id"]] for j in stage_jobs["pilot"]]
         admitted, reasons = admitted_thresholds(ordered["pilot"], pilot_receipts)
-        expected_gate = wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"],
+        expected_gate = wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"],
             "thresholds": admitted, "excluded": reasons,
             "units": units("full", m["roots"], admitted),
             "total": len(units("full", m["roots"], admitted)),
@@ -961,7 +960,7 @@ def execute(path, command, every):
         oracle = run_oracle(m, pilot, directory/"pilot-oracle", progress, verify_only)
         admitted, reasons = admitted_thresholds(pilot, oracle)
         rows = units("full", m["roots"], admitted)
-        gate = wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"], "thresholds": admitted,
+        gate = wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"], "thresholds": admitted,
             "excluded": reasons, "units": rows, "total": len(rows),
             "pilot_digests": [r["report_digest"] for r in pilot], "oracle_digests": [r["report_digest"] for r in oracle]})
         wg.require(not verify_only or (directory/"full-manifest.json").exists(), "missing full gate manifest")
@@ -989,6 +988,8 @@ def main(argv=None):
     p.add_argument("--harness-revision", required=True)
     for name in ("run", "pilot", "verify", "verify-inputs"):
         p = sub.add_parser(name)
+        if name in ("verify", "verify-inputs"):
+            p.add_argument("--legacy-offline", action="store_true")
         p.add_argument("--manifest", type=Path, required=True)
         p.add_argument("--progress-every", type=int, default=1)
     args = parser.parse_args(argv)
@@ -1000,7 +1001,11 @@ def main(argv=None):
         if args.command == "prepare":
             prepare(args)
         else:
-            execute(args.manifest, args.command, args.progress_every)
+            if getattr(args, "legacy_offline", False):
+                from legacy_offline import assessment
+                assessment(args.manifest, args.command, args.progress_every, Path(__file__).stem)
+            else:
+                execute(args.manifest, args.command, args.progress_every)
     except KeyboardInterrupt:
         Progress().emit(LAST_PROGRESS["stage"], LAST_PROGRESS["unit"], LAST_PROGRESS["done"], LAST_PROGRESS["total"], "interrupted")
         return 130

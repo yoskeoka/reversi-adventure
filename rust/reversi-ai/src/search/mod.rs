@@ -131,7 +131,8 @@ pub struct SearchEngine {
     diagnostic_game_exact_cache: bool,
 }
 
-const SEARCH_SEMANTICS_VERSION: u64 = 1;
+pub const SCORE_CONTRACT: &str = "winner-empty-v1";
+pub const SEARCH_SEMANTICS_VERSION: u64 = 2;
 
 fn search_context_fingerprint<E: BoardEvaluator + ?Sized>(evaluator: &E, config: &AiConfig) -> u64 {
     stable_context_fingerprint(&[
@@ -152,7 +153,7 @@ fn advisor_identity<E: BoardEvaluator + ?Sized>(
     ]);
     (
         fingerprint,
-        format!("project-ai-advisor-v1:{fingerprint:016x}"),
+        format!("project-ai-advisor-v2:{fingerprint:016x}"),
     )
 }
 

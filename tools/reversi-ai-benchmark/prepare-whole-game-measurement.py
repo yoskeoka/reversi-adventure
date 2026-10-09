@@ -68,7 +68,7 @@ def check_pin(item: dict) -> Path:
 def load(path: Path) -> dict:
     raw = path.read_bytes()
     result = json.loads(raw)
-    wg.require(raw == wg.canonical(result), f"noncanonical JSON: {path}")
+    wg.require(isinstance(result, dict) and raw == wg.canonical(result), f"noncanonical JSON object: {path}")
     return result
 
 
@@ -101,7 +101,7 @@ def legacy_registry(directory: Path, binaries: dict, artifact: dict, oracle: dic
             path = directory / f"{name}-{depth}.json"
             report = load(path)
             wg.require(report.get("schema_version") == 1, "legacy registry requires version-1 reports")
-            wg.verify(report, check_pin(binary), None if name == "oracle" else check_pin(artifact))
+            wg.verify(report, check_pin(binary), None if name == "oracle" else check_pin(artifact), legacy_offline=True)
             wg.require(report["settings"]["midgame_depth"] == depth, "legacy depth mismatch")
             expected_kind = {"oracle": "oracle", "legacy": "cli-legacy", "persistent": "cli-persistent"}.get(name, "cli")
             wg.require(report["kind"] == expected_kind and report["settings"]["exact_cache_scope"] ==
@@ -112,12 +112,12 @@ def legacy_registry(directory: Path, binaries: dict, artifact: dict, oracle: dic
                             "artifact": None if name == "oracle" else artifact,
                             "cache_lifetime": "legacy-cross-game" if name == "persistent" else "legacy-one-game"})
         comparison = directory / f"comparison-{depth}.json"
-        wg.require(load(comparison) == wg.comparison(reports["turn"], reports["game"]),
+        wg.require(load(comparison) == __import__("legacy_offline").whole_game_comparison(reports["turn"], reports["game"]),
                    "legacy comparison mismatch")
         entries.append({"id": f"legacy-comparison-{depth}", "type": "comparison", "depth": depth,
                         "file": pin(comparison)})
         evidence = directory / f"exact-check-{depth}.json"
-        wg.verify_oracle_evidence(reports["game"], load(evidence), check_pin(oracle))
+        __import__("legacy_offline").whole_game_report(reports["game"], evidence=load(evidence), oracle_binary=check_pin(oracle))
         entries.append({"id": f"legacy-exact-check-{depth}", "type": "oracle", "depth": depth,
                         "file": pin(evidence)})
     return entries
@@ -140,7 +140,7 @@ def verify_manifest(path: Path) -> dict:
     manifest = load(path)
     wg.require(manifest == signed({k: v for k, v in manifest.items() if k != "manifest_digest"}),
                "manifest digest mismatch")
-    wg.require(manifest["schema_version"] == 1 and manifest["host"] == host(), "manifest host mismatch")
+    wg.require(manifest["schema_version"] == 2 and manifest.get("score_contract") == wg.SCORE_CONTRACT and manifest["host"] == host(), "manifest host mismatch")
     wg.require(manifest["harness_revision"] == revision(), "harness revision mismatch")
     wg.require([item["path"] for item in manifest["harness_files"]] ==
                [str(path.resolve()) for path in harness_paths()], "harness file registry mismatch")
@@ -201,7 +201,7 @@ def prepare(args: argparse.Namespace) -> Path:
         legacy = legacy_registry(args.legacy_dir.resolve(), legacy_binaries, inputs["artifact"], inputs["oracle"])
     probe_reset(Path(inputs["cli"]["path"]), Path(inputs["artifact"]["path"]), args.timeout_seconds)
     harness_files = [pin(path) for path in harness_paths()]
-    manifest = signed({"schema_version": 1, "source_revision": args.source_revision,
+    manifest = signed({"schema_version": 2, "score_contract": wg.SCORE_CONTRACT, "source_revision": args.source_revision,
                        "harness_revision": args.harness_revision, "harness_files": harness_files,
                        "host": host(), "inputs": inputs, "legacy": legacy, "legacy_binaries": legacy_binaries,
                        "output_directory": str(args.output_dir), "cache_lifetime": "one-game", "reset_protocol": "new_game-v1",
@@ -332,12 +332,17 @@ def main(argv: list[str] | None = None) -> int:
     prep.add_argument("--max-rss-kib", type=int, required=True)
     for name in ("run", "verify", "verify-inputs"):
         operation = sub.add_parser(name)
+        if name in ("verify", "verify-inputs"):
+            operation.add_argument("--legacy-offline", action="store_true")
         operation.add_argument("--manifest", type=Path, required=True)
         operation.add_argument("--progress-every", type=int, default=1)
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
             prepare(args)
+        elif getattr(args, "legacy_offline", False):
+            from legacy_offline import preparation
+            preparation(args.manifest, args.command, args.progress_every)
         elif args.command == "verify-inputs":
             verify_manifest(args.manifest)
         else:

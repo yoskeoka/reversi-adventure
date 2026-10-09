@@ -30,7 +30,7 @@ class ReinforcementTests(unittest.TestCase):
 
     def prepare_fixture(self, root: Path, seed: int = 7, self_play_args: list[str] | None = None) -> Path:
         baseline = root / "baseline.json"
-        training.run(ROOT / "fixtures" / "tiny-manifest.json", baseline, root / "baseline-report.json")
+        training.run(ROOT / "fixtures" / "tiny-winner-empty-manifest.json", baseline, root / "baseline-report.json")
         executable = root / "candidate"
         fixture = ROOT / "fixtures" / "fake-self-play-v1.py"
         executable.write_text(f"#!/usr/bin/env python3\nimport runpy\nrunpy.run_path({str(fixture)!r}, run_name='__main__')\n")
@@ -38,8 +38,8 @@ class ReinforcementTests(unittest.TestCase):
         manifest = root / "manifest.json"
         argv = ["prepare", "--manifest", str(manifest), "--baseline-artifact", str(baseline),
                 "--candidate-executable", str(executable), "--validation-input",
-                str(ROOT / "fixtures" / "reinforcement-validation-v1.jsonl"),
-                "--validation-source", "project-owned-reinforcement-fixture-v1",
+                str(ROOT / "fixtures" / "reinforcement-validation-v2.jsonl"),
+                "--validation-source", "project-owned-reinforcement-fixture-v2",
                 "--seed", str(seed), "--game-count", "2", "--opening-plies", "2",
                 "--opening-depth", "12", "--midgame-depth", "12", "--endgame-depth", "12",
                 "--exact-solver-empty-squares", "16", "--time-limit-ms", "1000",
@@ -52,7 +52,7 @@ class ReinforcementTests(unittest.TestCase):
             root = Path(temporary)
             path = self.prepare_fixture(root)
             manifest = training.read_json(path)
-            self.assertEqual(manifest["schema_version"], 5)
+            self.assertEqual(manifest["schema_version"], 6)
             self.assertEqual(manifest["exact_cache_policy"], {
                 "policy": reinforcement.EXACT_CACHE_POLICY, "effective_scope": "turn",
                 "binary_sha256": reinforcement.sha(root / "candidate")})
@@ -66,37 +66,22 @@ class ReinforcementTests(unittest.TestCase):
             with self.assertRaisesRegex(training.TrainingError, "safety policy"):
                 reinforcement.validate_manifest(path, for_execution=True)
 
-    def test_historical_manifest_only_allows_offline_completed_verification(self):
-        for version in (3, 4):
+    def test_historical_manifest_is_rejected_before_starting_cli(self):
+        for version in (3, 4, 5):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 path = self.prepare_fixture(root)
                 manifest = training.read_json(path)
                 manifest["schema_version"] = version
-                if version == 3:
-                    manifest.pop("exact_cache_policy")
                 path.write_bytes(training.canonical_json(manifest) + b"\n")
                 with mock.patch.object(reinforcement, "Candidate") as candidate:
                     for operation in (lambda: reinforcement.run(path, root / "rejected"),
                                       lambda: reinforcement.regret_command(path, root / "historical"),
-                                      lambda: reinforcement.regret_timeout(path, root / "historical")):
-                        with self.assertRaisesRegex(training.TrainingError, "historical reinforcement manifest"):
+                                      lambda: reinforcement.regret_timeout(path, root / "historical"),
+                                      lambda: reinforcement.verify(path, root / "historical")):
+                        with self.assertRaisesRegex(training.TrainingError, "unsupported reinforcement manifest"):
                             operation()
                     candidate.assert_not_called()
-                # Recreate completed output with the historical producer contract.
-                validate = reinforcement.validate_manifest
-                with mock.patch.object(reinforcement, "validate_manifest",
-                                       side_effect=lambda path, **kwargs: validate(path)):
-                    reinforcement.run(path, root / "historical")
-                with mock.patch.object(reinforcement, "Candidate", side_effect=AssertionError("offline started CLI")):
-                    reinforcement.verify(path, root / "historical")
-                report = training.read_json(root / "historical" / "report.json")
-                self.assertEqual(report["schema_version"], 3)
-                self.assertNotIn("exact_cache_policy", report)
-                manifest["self_play_search"]["midgame_depth"] = 7
-                path.write_bytes(training.canonical_json(manifest) + b"\n")
-                with self.assertRaisesRegex(training.TrainingError, "12/8/12 or 12/12/12"):
-                    reinforcement.validate_manifest(path)
 
     def test_fixture_is_reproducible_and_replays(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -325,7 +310,7 @@ class ReinforcementTests(unittest.TestCase):
             manifest = training.read_json(manifest_path)
             manifest["validation"]["source"] = "0018-label-is-not-a-proof"
             validation = root / "validation.jsonl"
-            record = training.read_jsonl(ROOT / "fixtures" / "reinforcement-validation-v1.jsonl")[0]
+            record = training.read_jsonl(ROOT / "fixtures" / "reinforcement-validation-v2.jsonl")[0]
             record["source"] = manifest["validation"]["source"]
             validation.write_bytes(training.canonical_json(record) + b"\n")
             manifest["validation"]["path"] = str(validation)
@@ -346,7 +331,7 @@ class ReinforcementTests(unittest.TestCase):
             root = Path(temporary)
             manifest = self.prepare_fixture(root)
             board, side, _, _ = reinforcement.openings(7, 2, 2)[0]
-            record = {"schema_version": 1, "record_id": "leak", "split": "validation", "board": board,
+            record = {"schema_version": 2, "score_contract": training.SCORE_CONTRACT, "record_id": "leak", "split": "validation", "board": board,
                       "source": "test-v1", "license": "CC0-1.0", "source_digest": "test-v1",
                       "side": side, "target": {"semantics": training.TARGET_SEMANTICS, "value": 0}}
             validation = root / "leak.jsonl"
@@ -365,8 +350,7 @@ class ReinforcementTests(unittest.TestCase):
             root = Path(temporary)
             self.prepare_fixture(root)
             original = training.read_json(root / "baseline.json")
-            for version in (training.REINFORCEMENT_V1_VERSION, training.REINFORCEMENT_VERSION,
-                            reinforcement.VERSION):
+            for version in (training.REINFORCEMENT_VERSION, reinforcement.VERSION):
                 artifact = json.loads(json.dumps(original))
                 artifact["provenance"]["trainer_version"] = version
                 artifact["provenance"]["optimizer"]["name"] = "bounded_td_v1"

@@ -2,13 +2,22 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+> **0047 score移行後の境界**: 新規AI/教師値は `winner-empty-v1`、artifact format2、
+> trainer/record schema2、reinforcement manifest6・report4を使用する。旧schema3/4/5完成証拠と
+> raw差baseline/validationは明示legacy offline検証だけに保持し、新runへ読み替えない。
+> 本番入力の再生成・再学習は件数/上限/進捗/再開を固定した別の人間操作計画で行う。
+> [移行記録](../../references/reversi-ai-winner-empty-migration.md)を参照する。
+> 0040の最新producerでの独立root/選択child一致・資源制限応答・人間の設定/性能判断、
+> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは未達として残す。
+> strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
+
 ## 目的と完了条件
 
 全体目標は計算資源ハンデ付きOracleへの勝率50%。現在は学習の実行時間を抑えるための
 エンジン性能改善とscoreバグ調査の段階である。強化成功や0018勝率を性能改善の開始条件にしない。
 2026-10-08の[判断材料](../../references/reversi-ai-current-status.md)と
 [0046のscore契約記録](../../references/reversi-ai-exact-score-contract.md)で調査証拠と残条件を確認する。
-Godotと自己対局schema5の明示設定は深度各1..64・exact0..30を受理する。
+Godotと新規自己対局schema6の明示設定は深度各1..64・exact0..30を受理する。
 既定20への変更は求められていない。設定可能性と本番runの採否・時間予算を区別する。
 
 0035の採否を、既存の全局時間証拠、0044の正確性修正、0045の最小検証に基づいて記録する。
@@ -105,8 +114,8 @@ heuristic nodesは両条件同じ。反復なしのwall差3.28%はcacheによる
 
 本番turn/exact16は維持する。0046で±39/±40の原因をscore契約差として
 terminal/root/childまで確認した。ユーザーはEdaxも同じ規則なら統一を希望し、
-固定Edax sourceでも勝者への空き加算を確認した。別の修正計画でOracle/Edax規則への
-移行、教師値・cache・manifest・validatorの互換境界と独立一致を扱う。
+固定Edax sourceでも勝者への空き加算を確認した。0047で新AI/教師値をOracle/Edax規則へ
+移行する。旧証拠は元契約のまま保持し、最新producerの独立root/選択child一致は別に受け入れる。
 0046の原因確認だけで本番freeze・正確性gateを解除しない。
 設定/時間予算/採否の人間判断、採用時の別計画によるproduction互換更新は未達。
 0045完了を再利用の採用・0035の完了と扱わない。

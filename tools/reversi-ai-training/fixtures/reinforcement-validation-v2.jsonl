@@ -1,0 +1,1 @@
+{"board":"...........................WB......BW...........................","license":"CC0-1.0","record_id":"initial-v2","schema_version":2,"score_contract":"winner-empty-v1","side":"B","source":"project-owned-reinforcement-fixture-v2","source_digest":"fixture-v2","split":"validation","target":{"semantics":"winner_empty_v1_for_side","value":0}}

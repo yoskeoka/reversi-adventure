@@ -17,7 +17,7 @@ class DriverBoundaryTests(unittest.TestCase):
         resource.write_bytes(b"frozen-resource")
         units = v.games.units(v.sample())
         revision = "a"*40
-        m = {"version": v.VERSION, "source_revision": revision, "harness_revision": revision,
+        m = {"version": v.VERSION, "score_contract": "winner-empty-v1", "source_revision": revision, "harness_revision": revision,
              "host": {"host": "fixture"}, "settings": copy.deepcopy(v.SETTINGS),
              "games_total": 3, "conditions_total": 2, "sample": v.sample(), "units": units,
              "policies": {"turn": "exact-cache-cross-decision-suspended-v1", "game": "diagnostic-game-v1"},

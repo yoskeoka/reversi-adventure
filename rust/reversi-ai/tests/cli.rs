@@ -345,3 +345,60 @@ fn new_game_ack_flushes_without_waiting_for_next_input() {
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }
+
+#[test]
+fn cli_loads_python_winner_empty_artifact_and_rejects_frozen_format_one() {
+    let artifact = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tools/reversi-ai-training/fixtures/tiny-winner-empty-artifact.json"
+    );
+    let output = run_cli_with_args(
+        "position\t...........................WB......BW...........................\tB\n",
+        [
+            "--evaluator",
+            "trained",
+            "--trained-artifact",
+            artifact,
+            "--opening-depth",
+            "1",
+            "--node-limit",
+            "100",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("score_contract=winner-empty-v1"));
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    legacy["format_version"] = serde_json::json!(1);
+    legacy["feature_contract"]["format_version"] = serde_json::json!(1);
+    legacy["feature_contract"]["score_scale"] = serde_json::json!("final_disc_difference");
+    legacy["provenance"]["trainer_version"] = serde_json::json!("reversi-ai-pattern-training-v1");
+    legacy.as_object_mut().unwrap().remove("score_contract");
+    legacy.as_object_mut().unwrap().remove("artifact_digest");
+    use sha2::{Digest, Sha256};
+    legacy["artifact_digest"] = serde_json::json!(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&legacy).unwrap())
+    ));
+    let path = std::env::temp_dir().join(format!(
+        "reversi-ai-legacy-artifact-{}.json",
+        std::process::id()
+    ));
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let rejected = run_cli_with_args(
+        "",
+        [
+            "--evaluator",
+            "trained",
+            "--trained-artifact",
+            path.to_str().unwrap(),
+        ],
+    );
+    std::fs::remove_file(&path).unwrap();
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("unsupported format version"));
+}

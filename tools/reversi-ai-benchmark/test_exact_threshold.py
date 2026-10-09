@@ -128,7 +128,9 @@ class FakeSeat:
         exact = empty <= self.settings["exact_empty"]
         occupied = 64 - empty
         depth = empty if exact else 0 if not legal else 12 if occupied <= 20 or occupied >= 45 else self.depth
-        self.diagnostics[identifier] = {"elapsed_us": 1, "nodes": 1 if legal or exact else 0,
+        self.diagnostics[identifier] = {"score_contract": "winner-empty-v1", "search_semantics_version": 2,
+            "score_identity_raw": f"score_contract_v1\tposition_id={identifier}\tscore_contract=winner-empty-v1\tsearch_semantics_version=2",
+            "elapsed_us": 1, "nodes": 1 if legal or exact else 0,
             "exact": exact, "score": 0 if legal or exact else None, "completed_depth": depth,
             "outcome": "move" if legal else "pass", "cache_probes": 0, "cache_hits": 0, "cache_stores": 0}
         return move, 1
@@ -264,7 +266,7 @@ class ExactThresholdTests(unittest.TestCase):
             directory = Path(temp)
             source_path, manifest_path = directory/"source.json", directory/"manifest.json"
             et.wg.atomic_write(source_path, SOURCE)
-            manifest = et.wg.sealed({"version": et.VERSION, "host": "test-host",
+            manifest = et.wg.sealed({"version": et.VERSION, "score_contract": "winner-empty-v1", "host": "test-host",
                 "harness_revision": "test-revision", "caps": dict(et.CAPS),
                 "harness_files": [{"path": str(p.resolve())} for p in et.harness_paths()],
                 "inputs": {"source_report": {"path": str(source_path)},

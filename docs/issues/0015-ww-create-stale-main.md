@@ -18,3 +18,12 @@ worktree/branch作成のraw Git fallbackは使っていない。影響は前提�
 期待はmerged PR #252を含む最新main。`rtk git fetch origin` と作成worktreeでの
 `rtk git rebase origin/main` により `2151791` へ更新して回復した。
 raw Gitによるbranch/worktree作成は行っていない。影響は計画を読む前の追加同期のみ。
+
+2026-10-08の0047開始でも同じversion/path/cwdで再現した。
+`rtk ww create --repo reversi-adventure fix/reversi-ai-winner-empty-score`
+は成功したが、ローカルmainが未更新で0047の計画が存在しなかった。
+期待は0046実装PR #257と計画PR #258のmerged mainを含む開始点。
+`rtk ww cd --repo reversi-adventure fix/reversi-ai-winner-empty-score` は作成pathを返した。
+変更前に `rtk git fetch origin` と作成worktreeで `rtk git rebase origin/main`
+を行い、`d6a858912078e5802d2f90bd6f3d4e54fcbb2dd6`へ更新して回復した。
+作成のraw Git代替は用いていない。影響は実装前の同期と計画再読込のみ。本issueは未解決として残す。

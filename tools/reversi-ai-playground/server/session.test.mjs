@@ -86,7 +86,7 @@ test('Advisor publishes only a complete current-position score set and never blo
   assert.equal(session.snapshot().advisor.scores, null);
   await session.humanMove({ sessionId: session.sessionId, revision: 0, move: 'd3' });
   assert.equal(closed, true);
-  answer(JSON.stringify({ schema_version: 1, position_id: `${session.sessionId}:0:advisor`, board: session.board,
+  answer(JSON.stringify({ schema_version: 2, score_contract: 'winner-empty-v1', position_id: `${session.sessionId}:0:advisor`, board: session.board,
     side: 'B', config_id: 'wrong', outcome: 'move', completed_depth: 1, exact: false, scores: [] }));
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(session.snapshot().advisor, null);
@@ -96,7 +96,7 @@ test('Advisor publishes only a complete current-position score set and never blo
 
 test('Advisor rejects incomplete and non-finite results without stopping play', async () => {
   const { session } = game({ id: 'human', advisor: strategic });
-  session.advisorProcesses.B = { command: async () => JSON.stringify({ schema_version: 1,
+  session.advisorProcesses.B = { command: async () => JSON.stringify({ schema_version: 2, score_contract: 'winner-empty-v1',
     position_id: `${session.sessionId}:0:advisor`, board: session.board, side: 'B',
     config_id: 'wrong', outcome: 'move', completed_depth: 1, exact: false,
     scores: [{ move: 'd3', value: Infinity, completed_depth: 1, exact: false }] }), close() {} };
@@ -110,9 +110,9 @@ test('Advisor rejects incomplete and non-finite results without stopping play', 
 
 test('Advisor atomically accepts the exact legal set and reconnect snapshot retains it', async () => {
   const { session, messages } = game({ id: 'human', advisor: strategic });
-  session.advisorConfigIds.B = 'project-ai-advisor-v1:0123456789abcdef';
+  session.advisorConfigIds.B = 'project-ai-advisor-v2:0123456789abcdef';
   const scores = session.snapshot().legal.map((move, index) => ({ move, value: index - 1.5, completed_depth: 2, exact: false }));
-  session.advisorProcesses.B = { command: async () => JSON.stringify({ schema_version: 1,
+  session.advisorProcesses.B = { command: async () => JSON.stringify({ schema_version: 2, score_contract: 'winner-empty-v1',
     position_id: `${session.sessionId}:0:advisor`, board: session.board, side: 'B',
     config_id: session.advisorConfigIds.B, outcome: 'move', completed_depth: 2, exact: false, scores }), close() {} };
   session.beginAdvisor();
@@ -124,11 +124,27 @@ test('Advisor atomically accepts the exact legal set and reconnect snapshot reta
   assert.deepEqual(messages.at(-1).snapshot.advisor, session.advisor);
 });
 
+test('Advisor rejects old schema and missing or mixed score contracts', async () => {
+  for (const [schema_version, score_contract] of [[1, 'winner-empty-v1'], [2, undefined], [2, 'raw-disc-difference-v1']]) {
+    const { session } = game({ id: 'human', advisor: strategic });
+    session.advisorConfigIds.B = 'project-ai-advisor-v2:0123456789abcdef';
+    const scores = session.snapshot().legal.map(move => ({ move, value: 0, completed_depth: 2, exact: false }));
+    session.advisorProcesses.B = { command: async () => JSON.stringify({ schema_version, score_contract,
+      position_id: `${session.sessionId}:0:advisor`, board: session.board, side: 'B',
+      config_id: session.advisorConfigIds.B, outcome: 'move', completed_depth: 2, exact: false, scores }), close() {} };
+    session.beginAdvisor();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(session.advisor.error, /invalid Advisor response/);
+    assert.equal(session.error, null);
+    assert.equal(session.revision, 0);
+  }
+});
+
 test('Advisor rejects a repeated move even with the right number of scores', async () => {
   const { session } = game({ id: 'human', advisor: strategic });
-  session.advisorConfigIds.B = 'project-ai-advisor-v1:0123456789abcdef';
+  session.advisorConfigIds.B = 'project-ai-advisor-v2:0123456789abcdef';
   const scores = session.snapshot().legal.map(() => ({ move: 'd3', value: 0, completed_depth: 2, exact: false }));
-  session.advisorProcesses.B = { command: async () => JSON.stringify({ schema_version: 1,
+  session.advisorProcesses.B = { command: async () => JSON.stringify({ schema_version: 2, score_contract: 'winner-empty-v1',
     position_id: `${session.sessionId}:0:advisor`, board: session.board, side: 'B',
     config_id: session.advisorConfigIds.B, outcome: 'move', completed_depth: 2, exact: false, scores }), close() {} };
   session.beginAdvisor();
@@ -210,7 +226,7 @@ test('maximum settings reach match CLI and Advisor CLI and Oracle process argume
   const sessions = [];
   try {
     const cli = join(directory, 'cli');
-    writeFileSync(cli, `#!${process.execPath}\nif (process.argv.includes('--print-advisor-config-id')) console.log('project-ai-advisor-v1:0123456789abcdef'); else process.stdin.resume();\n`);
+    writeFileSync(cli, `#!${process.execPath}\nif (process.argv.includes('--print-advisor-config-id')) console.log('project-ai-advisor-v2:0123456789abcdef'); else process.stdin.resume();\n`);
     chmodSync(cli, 0o755);
     const local = verifyConfig({ repoRoot: directory, cli, trained: null, oracle: null });
     const settings = { id: 'strategic', openingDepth: 12, midgameDepth: 16, exact: 30 };
@@ -289,10 +305,10 @@ test('forced pass never requests or times the passed color', async () => {
 test('Human waiting and completed Advisor analysis are excluded from thinking totals', async () => {
   let clock = 0;
   const { session } = game({ id: 'human', advisor: strategic }, { id: 'human' }, () => clock);
-  session.advisorConfigIds.B = 'project-ai-advisor-v1:0123456789abcdef';
+  session.advisorConfigIds.B = 'project-ai-advisor-v2:0123456789abcdef';
   session.advisorProcesses.B = { command: async () => {
     clock += 100;
-    return JSON.stringify({ schema_version: 1, position_id: `${session.sessionId}:0:advisor`, board: session.board,
+    return JSON.stringify({ schema_version: 2, score_contract: 'winner-empty-v1', position_id: `${session.sessionId}:0:advisor`, board: session.board,
       side: 'B', config_id: session.advisorConfigIds.B, outcome: 'move', completed_depth: 2, exact: false,
       scores: legalMoves(session.board, 'B').map(move => ({ move, value: 0, completed_depth: 2, exact: false })) });
   }, close() {} };

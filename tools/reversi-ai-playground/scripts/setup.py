@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = ROOT / "tools" / "reversi-ai-playground"
 ORACLE = ROOT / "tools" / "reversi-ai-oracle" / "oracle.py"
 TRAINER = ROOT / "tools" / "reversi-ai-training" / "training.py"
-FIXTURE = ROOT / "tools" / "reversi-ai-training" / "fixtures" / "tiny-manifest.json"
+FIXTURE = ROOT / "tools" / "reversi-ai-training" / "fixtures" / "tiny-winner-empty-manifest.json"
 
 
 def setup_directory() -> Path:

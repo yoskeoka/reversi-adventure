@@ -19,8 +19,8 @@ from pathlib import Path
 
 import training
 
-VERSION = "reversi-ai-pattern-reinforcement-v4"
-MANIFEST_VERSION = 6
+VERSION = "reversi-ai-pattern-reinforcement-v3"
+MANIFEST_VERSION = 5
 EXACT_CACHE_POLICY = "exact-cache-cross-decision-suspended-v1"
 RESET_PROTOCOL = "new_game-v1"
 PAIRING = "color_swap_d4_v1"
@@ -161,8 +161,8 @@ def openings(seed: int, count: int, plies: int) -> list[tuple[str, str, list[str
 
 def validate_manifest(path: Path, *, for_execution: bool = False) -> tuple[dict, Path, Path, Path]:
     manifest = training.read_json(path)
-    manifest_keys = {"schema_version", "producer_version", "baseline_artifact", "candidate", "self_play_search", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match", "reset_contract", "score_contract"}
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != MANIFEST_VERSION or manifest.get("producer_version") != VERSION or manifest.get("score_contract") != training.SCORE_CONTRACT:
+    manifest_keys = {"schema_version", "producer_version", "baseline_artifact", "candidate", "self_play_search", "seed", "game_count", "opening_plies", "pairing", "decision_timeout_seconds", "max_decisions", "update_rule", "validation", "match", "reset_contract"}
+    if not isinstance(manifest, dict) or manifest.get("schema_version") not in (3, 4, MANIFEST_VERSION) or manifest.get("producer_version") != VERSION:
         fail("unsupported reinforcement manifest")
     current = manifest["schema_version"] == MANIFEST_VERSION
     has_policy = manifest["schema_version"] >= 4
@@ -318,17 +318,15 @@ def play(kind: str, pair: int, member: int, board: str, side: str, opening: list
     else:
         fail("game exceeded 120 turns")
     counts = {"B": board.count("B"), "W": board.count("W")}
-    game = {"schema_version": 4, "score_contract": training.SCORE_CONTRACT, "kind": kind, "pair": pair, "member": member, "players": sides, "opening": opening, "rotation": rotation,
+    game = {"kind": kind, "pair": pair, "member": member, "players": sides, "opening": opening, "rotation": rotation,
             "cache_lifetime": "one-game", "reset_protocol": RESET_PROTOCOL, "reset_events": reset_events,
             "start_board": start_board, "start_side": start_side, "decisions": decisions,
-            "terminal_board": board, "disc_counts": counts, "final_score_black": training.terminal_score(board, "B"), "failure": None}
+            "terminal_board": board, "disc_counts": counts, "final_score_black": counts["B"] - counts["W"], "failure": None}
     game["game_digest"] = training.digest(game)
     return game
 
 
 def replay(game: dict) -> list[dict]:
-    if game.get("schema_version") != 4 or game.get("score_contract") != training.SCORE_CONTRACT:
-        fail("unsupported game score identity")
     expected = dict(game)
     actual = expected.pop("game_digest", None)
     if actual != training.digest(expected):
@@ -354,7 +352,7 @@ def replay(game: dict) -> list[dict]:
         side = other(side)
     if legal_moves(board, side) or legal_moves(board, other(side)) or board != game["terminal_board"]:
         fail("game terminal state mismatch")
-    if game["disc_counts"] != {"B": board.count("B"), "W": board.count("W")} or game["final_score_black"] != training.terminal_score(board, "B"):
+    if game["disc_counts"] != {"B": board.count("B"), "W": board.count("W")} or game["final_score_black"] != board.count("B") - board.count("W"):
         fail("terminal score mismatch")
     return tuning
 
@@ -366,7 +364,7 @@ def validate_positions(path: Path, tuning: list[dict], source: str) -> tuple[lis
     seen = {training.canonical_position_key(row["board"], row["side"]) for row in tuning}
     validated, excluded = [], []
     for row in records:
-        if row.get("schema_version") != 2 or row.get("score_contract") != training.SCORE_CONTRACT or row.get("split") != "validation" or not isinstance(row.get("record_id"), str):
+        if row.get("schema_version") != 1 or row.get("split") != "validation" or not isinstance(row.get("record_id"), str):
             fail("validation record schema or split mismatch")
         if row.get("source") != source or not isinstance(row.get("license"), str) or not row["license"] or not isinstance(row.get("source_digest"), str) or not row["source_digest"]:
             fail("validation record provenance mismatch")
@@ -405,7 +403,7 @@ def updated_artifact(baseline: dict, tuning: list[dict], manifest: dict) -> dict
     weights = {phase: tables for phase, tables in weights.items() if any(tables)}
     bounds = [max((abs(value) for tables in weights.values() for value in tables[feature].values()), default=0)
               for feature in range(training.FEATURE_COUNT)]
-    artifact = {"format_version": 2, "score_contract": training.SCORE_CONTRACT, "feature_contract": baseline["feature_contract"],
+    artifact = {"format_version": 1, "feature_contract": baseline["feature_contract"],
                 "provenance": {"trainer_version": VERSION, "input_manifest_digest": training.digest(manifest),
                                "seed": manifest["seed"], "optimizer": manifest["update_rule"],
                                "licenses": baseline["provenance"]["licenses"]},
@@ -528,7 +526,7 @@ def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_call
             if pair + 1 == 25:
                 first = match_summary(match_games)
                 continued = first["match_points"] > 25
-                checkpoint = {"schema_version": 4, "score_contract": training.SCORE_CONTRACT, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games], "match": first, "continued": continued}
+                checkpoint = {"schema_version": 3, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games], "match": first, "continued": continued}
                 checkpoint["checkpoint_digest"] = training.digest(checkpoint)
                 if checkpoint_callback:
                     checkpoint_callback(training.canonical_json(checkpoint) + b"\n")
@@ -541,13 +539,13 @@ def cycle(manifest_path: Path, progress: Progress | None = None, checkpoint_call
     progress.stage_done("candidate-match", stage)
     first = match_summary(match_games[:50])
     continued = first["match_points"] > 25
-    checkpoint = {"schema_version": 4, "score_contract": training.SCORE_CONTRACT, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
+    checkpoint = {"schema_version": 3, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
     checkpoint["checkpoint_digest"] = training.digest(checkpoint)
     final_match = match_summary(match_games)
     selected_name = selected_from_match(final_match, continued)
     selected = artifact if selected_name == "candidate" else baseline
     stage = progress.stage_start("report-serialization")
-    report = {"schema_version": 4, "score_contract": training.SCORE_CONTRACT, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
+    report = {"schema_version": 3, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
               "candidate_executable_sha256": sha(executable), "self_play_search": manifest["self_play_search"], "reset_contract": manifest["reset_contract"],
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": artifact["artifact_digest"],
               "selected_artifact_digest": selected["artifact_digest"], "selected": selected_name,
@@ -586,25 +584,7 @@ def run(manifest: Path, directory: Path, progress_every: int = 1) -> None:
     progress.stage_done("atomic-output-publication", stage)
 
 
-def verify(manifest_path: Path, directory: Path, *, legacy_offline: bool = False) -> None:
-    if legacy_offline:
-        manifest = training.read_json(manifest_path)
-        if not isinstance(manifest, dict) or manifest.get("schema_version") not in (3, 4, 5):
-            fail("legacy manifest must retain its original score identity")
-        training.reject_legacy_score_identity(manifest, "manifest")
-        for name in ("report.json", "checkpoint.json", "candidate-artifact.json", "selected-artifact.json"):
-            training.reject_legacy_score_identity(training.read_json(directory / name), "output")
-        games = training.read_jsonl(directory / "games.jsonl")
-        training.reject_legacy_score_identity(games, "game")
-        if any("schema_version" in game for game in games):
-            fail("legacy game must retain its original score identity")
-        from legacy import producer
-        with producer("reinforcement", error_type=training.TrainingError) as frozen:
-            _, baseline_path, _, validation_path = frozen.validate_manifest(manifest_path)
-            training.reject_legacy_score_identity(training.read_json(baseline_path), "baseline artifact")
-            training.reject_legacy_score_identity(training.read_jsonl(validation_path), "validation record")
-            frozen.verify(manifest_path, directory)
-        return
+def verify(manifest_path: Path, directory: Path) -> None:
     manifest, baseline_path, _, validation_path = validate_manifest(manifest_path)
     try:
         raw = {name: (directory / name).read_bytes() for name in OUTPUTS}
@@ -649,11 +629,11 @@ def verify(manifest_path: Path, directory: Path, *, legacy_offline: bool = False
     if training.read_json(directory / "selected-artifact.json") != selected:
         fail("selected artifact mismatch")
     checkpoint = training.read_json(directory / "checkpoint.json")
-    expected_checkpoint = {"schema_version": 4, "score_contract": training.SCORE_CONTRACT, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
+    expected_checkpoint = {"schema_version": 3, "producer_version": VERSION, "manifest_digest": training.digest(manifest), "game_digests": [game["game_digest"] for game in match_games[:50]], "match": first, "continued": continued}
     expected_checkpoint["checkpoint_digest"] = training.digest(expected_checkpoint)
     if checkpoint != expected_checkpoint:
         fail("checkpoint metadata or decision mismatch")
-    checks = {"schema_version": 4, "score_contract": training.SCORE_CONTRACT, "producer_version": VERSION,
+    checks = {"schema_version": 3, "producer_version": VERSION,
               "manifest_digest": training.digest(manifest), "baseline_sha256": sha(baseline_path),
               "candidate_executable_sha256": manifest["candidate"]["sha256"], "self_play_search": manifest["self_play_search"], "reset_contract": manifest["reset_contract"],
               "baseline_artifact_digest": baseline["artifact_digest"], "candidate_artifact_digest": candidate["artifact_digest"],
@@ -672,7 +652,7 @@ def prepare(args: argparse.Namespace) -> None:
         fail("manifest already exists; choose a fresh immutable path")
     baseline = training.read_json(args.baseline_artifact)
     training.validate_artifact(baseline)
-    manifest = {"schema_version": MANIFEST_VERSION, "score_contract": training.SCORE_CONTRACT, "producer_version": VERSION,
+    manifest = {"schema_version": MANIFEST_VERSION, "producer_version": VERSION,
                 "exact_cache_policy": {"policy": EXACT_CACHE_POLICY, "effective_scope": "turn",
                                        "binary_sha256": sha(args.candidate_executable)},
                 "baseline_artifact": {"path": str(args.baseline_artifact.resolve()), "sha256": sha(args.baseline_artifact),
@@ -748,8 +728,6 @@ def main(argv: list[str]) -> int:
         command = commands.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)
         command.add_argument("--output-dir", type=Path, required=True)
-        if name == "verify":
-            command.add_argument("--legacy-offline", action="store_true")
         if name == "run":
             command.add_argument("--progress-every", type=positive_interval, default=1)
     args = parser.parse_args(argv)
@@ -764,7 +742,7 @@ def main(argv: list[str]) -> int:
             if args.command == "run":
                 run(args.manifest, args.output_dir, args.progress_every)
             else:
-                verify(args.manifest, args.output_dir, legacy_offline=args.legacy_offline)
+                verify(args.manifest, args.output_dir)
     except (training.TrainingError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as error:
         print(f"reinforcement error: {error}", file=sys.stderr)
         return 2

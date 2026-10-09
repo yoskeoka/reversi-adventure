@@ -13,7 +13,9 @@ playground: start-playground
 CARGO ?= cargo
 ORACLE_TOOL := tools/reversi-ai-oracle/oracle.py
 ORACLE_CORPUS := tools/reversi-ai-oracle/corpus.jsonl
-ORACLE_GOLDEN := tools/reversi-ai-oracle/golden.jsonl
+ORACLE_GOLDEN := tools/reversi-ai-oracle/golden-winner-empty-v1.jsonl
+ORACLE_SMOKE_CORPUS := tools/reversi-ai-oracle/winner-empty-v1-corpus.jsonl
+ORACLE_SMOKE_GOLDEN := tools/reversi-ai-oracle/winner-empty-v1-golden.jsonl
 ORACLE_PROFILE ?= ci-smoke-v1
 ORACLE_TIMEOUT ?= 300
 ORACLE_MATCH_TIMEOUT ?= 60
@@ -21,7 +23,7 @@ ORACLE_MATCH_GAMES ?= 2
 ORACLE_REPORT ?= /tmp/reversi-adventure-oracle-report.jsonl
 ORACLE_MATCH_REPORT ?= /tmp/reversi-adventure-oracle-match.json
 BENCHMARK_CORPUS := tools/reversi-ai-benchmark/positions-v1.jsonl
-BENCHMARK_REFERENCE := tools/reversi-ai-benchmark/reference-v1.jsonl
+BENCHMARK_REFERENCE := tools/reversi-ai-benchmark/reference-winner-empty-v1.jsonl
 BENCHMARK_COMPARATOR := tools/reversi-ai-benchmark/compare.py
 BENCHMARK_BASELINE ?=
 BENCHMARK_CANDIDATE ?=
@@ -44,7 +46,7 @@ WHOLE_GAME_GAME_REPORT ?= /tmp/reversi-adventure-whole-game-game.json
 WHOLE_GAME_COMPARISON ?= /tmp/reversi-adventure-whole-game-comparison.json
 WHOLE_GAME_ORACLE_EVIDENCE ?= /tmp/reversi-adventure-whole-game-oracle-evidence.json
 PATTERN_TRAINER := tools/reversi-ai-training/training.py
-PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-manifest.json
+PATTERN_MANIFEST := tools/reversi-ai-training/fixtures/tiny-winner-empty-manifest.json
 PATTERN_ARTIFACT ?= /tmp/reversi-adventure-pattern-artifact.json
 PATTERN_REPORT ?= /tmp/reversi-adventure-pattern-report.json
 PATTERN_PROGRESS_EVERY ?= 1
@@ -166,7 +168,7 @@ oracle-corpus:
 	$(PYTHON) $(ORACLE_TOOL) generate-corpus --output $(ORACLE_CORPUS)
 
 oracle-verify: oracle-test
-	$(PYTHON) $(ORACLE_TOOL) verify --corpus $(ORACLE_CORPUS) --golden $(ORACLE_GOLDEN) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT)
+	$(PYTHON) $(ORACLE_TOOL) verify --corpus $(ORACLE_SMOKE_CORPUS) --golden $(ORACLE_SMOKE_GOLDEN) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT)
 
 oracle-golden:
 	$(PYTHON) $(ORACLE_TOOL) generate-golden --corpus $(ORACLE_CORPUS) --output $(ORACLE_GOLDEN) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT)
@@ -181,7 +183,7 @@ oracle-evaluate:
 
 oracle-ci: oracle-test
 	$(CARGO) build -p reversi-ai --bin reversi-ai-cli
-	$(PYTHON) $(ORACLE_TOOL) ci --corpus $(ORACLE_CORPUS) --golden $(ORACLE_GOLDEN) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT) --candidate-command "$(AI_MATCH_COMMAND)" --games $(ORACLE_MATCH_GAMES) --match-timeout $(ORACLE_MATCH_TIMEOUT) --match-output $(ORACLE_MATCH_REPORT)
+	$(PYTHON) $(ORACLE_TOOL) ci --corpus $(ORACLE_SMOKE_CORPUS) --golden $(ORACLE_SMOKE_GOLDEN) --profile $(ORACLE_PROFILE) --timeout $(ORACLE_TIMEOUT) --candidate-command "$(AI_MATCH_COMMAND)" --games $(ORACLE_MATCH_GAMES) --match-timeout $(ORACLE_MATCH_TIMEOUT) --match-output $(ORACLE_MATCH_REPORT)
 
 oracle-calibration:
 	$(CARGO) build -p reversi-ai --bin reversi-ai-cli

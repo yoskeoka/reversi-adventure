@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import NamedTuple, NoReturn
 
 
+SCORE_CONTRACT = "winner-empty-v1"
 ORACLE_VERSION = "7.8.1"
 SOURCE_URL = (
     "https://github.com/Nyanyan/Egaroucid/archive/refs/tags/"
@@ -112,7 +113,7 @@ def analysis_config(opening_depth: int, midgame_depth: int,
             ranges.append(DepthProbabilityRange(start, end, depth, "100"))
     for move in range(first_exact, 61):
         ranges.append(DepthProbabilityRange(move, move, 61 - move, "100"))
-    settings = {"schema_version": 1, "oracle_version": ORACLE_VERSION,
+    settings = {"schema_version": 2, "score_contract": SCORE_CONTRACT, "oracle_version": ORACLE_VERSION,
                 "source_sha256": SOURCE_SHA256, "book": False, "threads": 1,
                 "hash_level": 25, "opening_depth": opening_depth,
                 "midgame_depth": midgame_depth,
@@ -121,7 +122,7 @@ def analysis_config(opening_depth: int, midgame_depth: int,
     identity = hashlib.sha256(json.dumps(settings, sort_keys=True,
                                       separators=(",", ":")).encode("ascii")).hexdigest()
     return AnalysisConfig(opening_depth, midgame_depth, exact_empty_squares,
-                          tuple(ranges), f"oracle-advisor-v1:{identity}")
+                          tuple(ranges), f"oracle-advisor-v2:{identity}")
 
 
 def validate_analysis_config(config: AnalysisConfig) -> None:
@@ -599,6 +600,8 @@ def load_canonical_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 def validate_corpus_record(record: dict[str, object]) -> None:
+    if not isinstance(record, dict):
+        die("corpus record must be an object")
     required = {
         "schema_version",
         "position_id",
@@ -729,7 +732,7 @@ def profile_digest(profile: OracleProfile) -> str:
 
 
 def benchmark_reference_reports(
-    corpus: list[dict[str, object]], reports: list[dict[str, object]]
+    corpus: list[dict[str, object]], reports: list[dict[str, object]], *, legacy_offline: bool = False
 ) -> list[dict[str, object]]:
     validate_benchmark_corpus(corpus)
     if records_digest(corpus) != BENCHMARK_CORPUS_V1_SHA256:
@@ -749,6 +752,10 @@ def benchmark_reference_reports(
         report = by_id.get(position_id)
         if report is None or report.get("profile") != profile_data:
             die(f"reference profile mismatch for {position_id!r}")
+        if type(report.get("schema_version")) is not int or report.get("schema_version") != (1 if legacy_offline else 2) or (
+            "score_contract" in report if legacy_offline else report.get("score_contract") != SCORE_CONTRACT
+        ):
+            die("reference score identity mismatch; legacy evidence requires --legacy-offline")
         analysis = report.get("analysis")
         if not isinstance(analysis, dict):
             die(f"reference analysis is missing for {position_id!r}")
@@ -768,7 +775,8 @@ def benchmark_reference_reports(
         if not exact and not all(isinstance(item, dict) and item.get("completed_depth") == 12 for item in evaluations):
             die(f"reference depth-12 metadata is incomplete for {position_id!r}")
         result.append({
-            "schema_version": 1,
+            "schema_version": 1 if legacy_offline else 2,
+            **({} if legacy_offline else {"score_contract": SCORE_CONTRACT}),
             "position_id": position_id,
             "board_sha256": hashlib.sha256(str(record["board"]).encode("ascii")).hexdigest(),
             "corpus_sha256": corpus_sha256,
@@ -781,9 +789,9 @@ def benchmark_reference_reports(
 
 
 def validate_benchmark_reference_reports(
-    corpus: list[dict[str, object]], reports: list[dict[str, object]]
+    corpus: list[dict[str, object]], reports: list[dict[str, object]], *, legacy_offline: bool = False
 ) -> None:
-    canonical = benchmark_reference_reports(corpus, reports)
+    canonical = benchmark_reference_reports(corpus, reports, legacy_offline=legacy_offline)
     if [canonical_json(item) for item in reports] != [canonical_json(item) for item in canonical]:
         die("benchmark reference report has an invalid schema or digest")
 
@@ -1240,6 +1248,15 @@ def run_analysis_solve(
         problem_path.unlink(missing_ok=True)
 
 
+def terminal_score(board: str, side: str, *, legacy_offline: bool = False) -> int:
+    """Independent side-to-move leaf score; corpus disc counts stay physical."""
+    own, opponent = board.count(side), board.count(other(side))
+    difference = own - opponent
+    if legacy_offline:
+        return difference
+    return difference + (64 - own - opponent) * ((difference > 0) - (difference < 0))
+
+
 def analyze_position(position_id: str, board: str, side: str,
                      config: AnalysisConfig, binary: Path, cwd: Path,
                      timeout: float) -> dict[str, object]:
@@ -1261,7 +1278,7 @@ def analyze_position(position_id: str, board: str, side: str,
     for move in legal:
         child = apply_move(board, side, move)
         if not legal_moves(child, other(side)) and not legal_moves(child, side):
-            scores.append({"move": move, "value": child.count(side) - child.count(other(side)),
+            scores.append({"move": move, "value": terminal_score(child, side),
                            "completed_depth": 1, "exact": True})
             continue
         effective_side, sign = effective_query(child, other(side))
@@ -1274,7 +1291,7 @@ def analyze_position(position_id: str, board: str, side: str,
     scores.sort(key=lambda item: str(item["move"]))
     if len(scores) != len(legal) or {item["move"] for item in scores} != set(legal):
         die("incomplete oracle advisor root-move set")
-    return {"schema_version": 1, "position_id": position_id, "board": board,
+    return {"schema_version": 2, "score_contract": SCORE_CONTRACT, "position_id": position_id, "board": board,
             "side": side, "config_id": config.config_id, "outcome": outcome,
             "completed_depth": root_depth, "exact": bool(legal) and all(
                 bool(item["exact"]) for item in scores), "scores": scores}
@@ -1434,9 +1451,7 @@ def analyze_records(
                     child = apply_move(board, side, str(move))
                     child_side = other(side)
                     if not legal_moves(child, child_side) and not legal_moves(child, other(child_side)):
-                        black = child.count("B")
-                        white = child.count("W")
-                        terminal_value = black - white if side == "B" else white - black
+                        terminal_value = terminal_score(child, side)
                         evaluations_by_position[position_id][move_index] = {
                             "move": move,
                             "value": terminal_value,
@@ -1492,9 +1507,7 @@ def analyze_records(
                 best_value = int(evaluations[0]["value"])
                 optimal_moves = []
             else:
-                black = board.count("B")
-                white = board.count("W")
-                best_value = black - white if side == "B" else white - black
+                best_value = terminal_score(board, side)
                 optimal_moves = []
 
             analysis: dict[str, object] = {
@@ -1539,7 +1552,8 @@ def analyze_records(
                     )
             reports.append(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
+                    "score_contract": SCORE_CONTRACT,
                     "position_id": position_id,
                     "board": board,
                     "side_to_move": side,
@@ -1561,10 +1575,65 @@ def analyze_records(
 def golden_projection(reports: list[dict[str, object]]) -> list[dict[str, object]]:
     projected = copy.deepcopy(reports)
     for report in projected:
+        if report.get("schema_version") != 2 or report.get("score_contract") != SCORE_CONTRACT:
+            die("golden projection requires winner-empty-v1 analysis schema2")
         analysis = report["analysis"]
         for evaluation in analysis["evaluations"]:
             evaluation.pop("elapsed_ms", None)
     return projected
+
+
+def verify_saved_golden(records: list[dict], reports: list[dict], *, legacy_offline: bool = False) -> None:
+    """Read saved evidence without re-labelling or launching independent solves."""
+    if not isinstance(records, list) or not isinstance(reports, list):
+        die("saved golden and corpus must be lists of records")
+    if len(records) != len(reports):
+        die("saved golden position count mismatch")
+    for record, report in zip(records, reports):
+        if not isinstance(record, dict) or not isinstance(report, dict):
+            die("saved golden and corpus records must be objects")
+        expected_schema = 1 if legacy_offline else 2
+        if type(report.get("schema_version")) is not int or report.get("schema_version") != expected_schema or (
+            "score_contract" in report if legacy_offline else report.get("score_contract") != SCORE_CONTRACT
+        ):
+            die("saved golden score identity mismatch; old evidence requires --legacy-offline")
+        for key in ("position_id", "board", "side_to_move", "legal_moves", "outcome", "provenance"):
+            if report.get(key) != record.get(key):
+                die(f"saved golden corpus {key} mismatch")
+        if set(report) != (set(record) | {"profile", "analysis"} | (set() if legacy_offline else {"score_contract"})):
+            die("saved golden report shape mismatch")
+        metadata = report.get("profile")
+        if not isinstance(metadata, dict) or metadata != profile_metadata(profile_from_name(str(metadata.get("name")))):
+            die("saved golden pinned Oracle profile/source mismatch")
+        board, side = record["board"], record["side_to_move"]
+        analysis = report.get("analysis", {})
+        if not isinstance(analysis, dict) or set(analysis) != {"best_value", "optimal_moves", "evaluations"}:
+            die("saved golden analysis shape mismatch")
+        evaluations = analysis.get("evaluations", [])
+        if not isinstance(evaluations, list):
+            die("saved golden evaluation list missing")
+        for row in evaluations:
+            if not isinstance(row, dict) or set(row) != {"move", "value", "completed_depth", "nodes", "exact"}:
+                die("saved golden evaluation shape mismatch")
+            if type(row.get("exact")) is not bool or any(type(row.get(key)) is not int or row[key] < 0 for key in ("nodes", "completed_depth")):
+                die("saved golden evaluation evidence invalid")
+        expected_moves = record["legal_moves"] or (["pass"] if record["outcome"]["kind"] == "Pass" else [])
+        if [row.get("move") for row in evaluations] != expected_moves:
+            die("saved golden move set mismatch")
+        if any(type(row.get("value")) is not int or not -64 <= row["value"] <= 64 for row in evaluations):
+            die("saved golden value invalid")
+        for row in evaluations:
+            child = board if row["move"] == "pass" else apply_move(board, side, row["move"])
+            if not legal_moves(child, "B") and not legal_moves(child, "W"):
+                if row["nodes"] != 0 or row["completed_depth"] != 0 or row["exact"] is not True:
+                    die("saved golden terminal evidence mismatch")
+                if row["value"] != terminal_score(child, side, legacy_offline=legacy_offline):
+                    die("saved golden terminal score mismatch")
+        expected_best = max((row["value"] for row in evaluations), default=terminal_score(
+            board, side, legacy_offline=legacy_offline))
+        if analysis.get("best_value") != expected_best or analysis.get("optimal_moves") != [
+            row["move"] for row in evaluations if row["value"] == expected_best and row["move"] != "pass"]:
+            die("saved golden best value/move mismatch")
 
 
 def initial_board() -> str:
@@ -1893,6 +1962,7 @@ def command_main(argv: list[str]) -> int:
     benchmark_reference.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
 
     benchmark_reference_verify = subparsers.add_parser("verify-benchmark-reference")
+    benchmark_reference_verify.add_argument("--legacy-offline", action="store_true")
     benchmark_reference_verify.add_argument("--corpus", type=Path, required=True)
     benchmark_reference_verify.add_argument("--report", type=Path, required=True)
 
@@ -1913,13 +1983,14 @@ def command_main(argv: list[str]) -> int:
 
     golden = subparsers.add_parser("generate-golden")
     golden.add_argument("--corpus", type=Path, default=default_paths()[0])
-    golden.add_argument("--output", type=Path, default=default_paths()[1])
+    golden.add_argument("--output", type=Path, default=Path(__file__).with_name("golden-winner-empty-v1.jsonl"))
     golden.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     golden.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
 
     verify = subparsers.add_parser("verify")
-    verify.add_argument("--corpus", type=Path, default=default_paths()[0])
-    verify.add_argument("--golden", type=Path, default=default_paths()[1])
+    verify.add_argument("--legacy-offline", action="store_true")
+    verify.add_argument("--corpus", type=Path, default=Path(__file__).with_name("winner-empty-v1-corpus.jsonl"))
+    verify.add_argument("--golden", type=Path, default=Path(__file__).with_name("winner-empty-v1-golden.jsonl"))
     verify.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     verify.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
 
@@ -1932,8 +2003,8 @@ def command_main(argv: list[str]) -> int:
     match.add_argument("--progress-every", type=positive_interval, default=1)
 
     ci = subparsers.add_parser("ci")
-    ci.add_argument("--corpus", type=Path, default=default_paths()[0])
-    ci.add_argument("--golden", type=Path, default=default_paths()[1])
+    ci.add_argument("--corpus", type=Path, default=Path(__file__).with_name("winner-empty-v1-corpus.jsonl"))
+    ci.add_argument("--golden", type=Path, default=Path(__file__).with_name("winner-empty-v1-golden.jsonl"))
     ci.add_argument("--profile", choices=sorted(PROFILES), default=CI_SMOKE_V1.name)
     ci.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     ci.add_argument("--candidate-command", required=True)
@@ -2006,6 +2077,8 @@ def command_main(argv: list[str]) -> int:
             return 0
 
         if args.command == "generate-benchmark-reference":
+            if args.output.exists():
+                die("reference output already exists; preserve saved evidence")
             validate_budget(1, args.timeout)
             records = load_canonical_jsonl(args.corpus)
             validate_benchmark_corpus(records)
@@ -2025,11 +2098,19 @@ def command_main(argv: list[str]) -> int:
             records = load_canonical_jsonl(args.corpus)
             validate_benchmark_corpus(records)
             reports = load_canonical_jsonl(args.report)
-            validate_benchmark_reference_reports(records, reports)
+            validate_benchmark_reference_reports(records, reports, legacy_offline=args.legacy_offline)
             print(f"verified {len(reports)} benchmark reference reports")
             return 0
 
+        if args.command == "verify" and args.legacy_offline:
+            records = load_jsonl(args.corpus)
+            validate_corpus(records)
+            verify_saved_golden(records, load_jsonl(args.golden), legacy_offline=True)
+            print("verified legacy golden identity and saved terminal values offline; minimax not re-solved")
+            return 0
+
         if args.command == "verify":
+            verify_saved_golden(load_jsonl(args.corpus), load_jsonl(args.golden))
             profile = profile_from_name(args.profile)
             validate_budget(1, args.timeout)
             records = load_jsonl(args.corpus)
@@ -2047,6 +2128,8 @@ def command_main(argv: list[str]) -> int:
             return 0
 
         if args.command == "generate-golden":
+            if args.output.exists():
+                die("golden output already exists; preserve saved evidence")
             profile = profile_from_name(args.profile)
             validate_budget(1, args.timeout)
             records = load_jsonl(args.corpus)
@@ -2091,6 +2174,7 @@ def command_main(argv: list[str]) -> int:
             return 0
 
         if args.command == "ci":
+            verify_saved_golden(load_jsonl(args.corpus), load_jsonl(args.golden))
             profile = profile_from_name(args.profile)
             validate_budget(1, args.timeout)
             validate_budget(1, args.match_timeout)

@@ -64,7 +64,12 @@ fn advisor_cli_emits_complete_json_and_match_mode_stays_tab_delimited() {
     assert!(ok);
     assert_eq!(output.lines().count(), 1);
     let value: Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["score_contract"], "winner-empty-v1");
+    assert!(value["config_id"]
+        .as_str()
+        .unwrap()
+        .starts_with("project-ai-advisor-v2:"));
     assert_eq!(value["position_id"], "p1");
     assert_eq!(value["board"], INITIAL);
     assert_eq!(value["side"], "B");

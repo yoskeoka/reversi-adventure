@@ -42,7 +42,7 @@ class DriverTests(unittest.TestCase):
             "returncode": 0, "wall_ns": 1,
             "stdout": f"test {name} ... ok\n1 passed; 0 failed;", "stderr": ""}
             for name in v.REGRESSIONS]
-        result = v.wg.sealed({"version":v.VERSION,"manifest_digest":"fixture",
+        result = v.wg.sealed({"version":v.VERSION,"score_contract":"winner-empty-v1","manifest_digest":"fixture",
             "fixtures":fixtures,"proved_root_score":4,"proved_selected_child_score":4})
         v.verify_regression(m,result)
         result["fixtures"][0]["stdout"]="0 passed; 0 failed;"

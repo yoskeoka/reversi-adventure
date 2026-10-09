@@ -9,7 +9,7 @@ Run the bounded fixture twice and compare its declared output:
 
 ```sh
 python3 tools/reversi-ai-training/training.py train \
-  --manifest tools/reversi-ai-training/fixtures/tiny-manifest.json \
+  --manifest tools/reversi-ai-training/fixtures/tiny-winner-empty-manifest.json \
   --artifact /tmp/pattern-artifact.json --report /tmp/pattern-report.json
 python3 tools/reversi-ai-training/training.py validate --artifact /tmp/pattern-artifact.json
 ```
@@ -95,7 +95,7 @@ accepted 12/12/12 match depth and 16-empty exact threshold, disabled book, a
 five-minute per-move search limit, ten-million-node cap, 310-second protocol
 timeout, and 7,680 total decisions.
 
-Schema 5 gives each search setting its own prepare argument and Make variable.
+Schema 6 gives each search setting its own prepare argument and Make variable.
 
 | Setting | Make variable | Prepare argument | Range | Default |
 | --- | --- | --- | --- | --- |
@@ -114,12 +114,12 @@ and exact threshold 16. The manifest/report freeze all self-play settings, CLI S
 resource limits, and the turn cache policy. Flexible settings do not clear the
 production freeze or its independent correctness gates.
 
-New prepare/run and regret adoption require schema 5. Completed schema 3/4
-reports can be checked offline with their original depths and exact threshold
-16. Their depth contract is 12/(8|12)/12.
+New prepare/run and regret adoption require schema 6. Completed schema 3/4/5 reports require `verify --legacy-offline`; their frozen
+producer replays the original raw disc-difference teachers. Schemas 3/4 retain
+12/(8|12)/12 and exact 16; schema 5 retains its flexible settings.
 
 An interrupted schema 3/4 run must keep its failed evidence. Start a new
-schema 5 run with a separate manifest and output directory. Changing a manifest
+schema 6 run with a separate manifest and output directory. Changing a manifest
 after completion fails the report identity checks. Versions 1/2 are unsupported.
 
 All accepted manifests pin `new_game-v1` and the binary digest. Prepare checks
@@ -188,3 +188,51 @@ search controls and protocol timeout under oracle profile
 `strong-engine-hcap-v1`. It reads the
 existing oracle corpus only; the 0018 held-out openings stay unopened until
 their separate acceptance run.
+
+## Winner-empty migration and preserved evidence
+
+New trainer manifests and records use schema 2, training-v2, explicit
+`score_contract="winner-empty-v1"`, and `target.semantics="winner_empty_v1_for_side"`.
+Artifact/feature format 2 uses `score_scale="winner_empty_v1"`; only training-v2
+(sparse_mean_v1) or reinforcement-v4 (bounded_td_v1) may produce it.
+Random-inputs-v2 emits schema 2 manifests, records, games and reports under
+project-owned-random-games-v2. Reinforcement-v4 uses manifest 6 and game/report/
+checkpoint 4. Teachers use the legally replayed terminal board:
+`own - opponent + sign(own - opponent) * empty`. Random `black`/`white` and
+reinforcement `disc_counts` still count physical discs. Draws score zero.
+
+Old source bytes are preserved in `legacy_offline/`, with pinned source digests.
+The explicit offline adapter loads these isolated producers for verification:
+
+```sh
+python3 tools/reversi-ai-training/training.py validate --legacy-offline --artifact OLD_ARTIFACT
+python3 tools/reversi-ai-training/training.py validate --legacy-offline --manifest OLD_TRAINER_MANIFEST
+python3 tools/reversi-ai-training/random_inputs.py verify --legacy-offline --manifest OLD_MANIFEST --output-dir OLD_OUTPUT
+python3 tools/reversi-ai-training/reinforcement.py verify --legacy-offline --manifest OLD_MANIFEST --output-dir OLD_OUTPUT
+```
+
+These entry points do not launch a CLI or emit migrated data. Runtime, prepare,
+train, generate, run, regret-command and regret-timeout reject old inputs.
+Do not edit old digests or relabel root/minimax scores. The old source snapshot
+is the same producer bytes, preserving random seeds, source digest, raw labels,
+policy presence and original report shapes. Original fixtures stay unchanged;
+the separate tiny winner-empty fixture stores four legal random-game replays
+and their resulting labels. These fixtures provide regression evidence only.
+Production regeneration/retraining and 0037/0019/0018 human gates remain frozen.
+
+The bundled random snapshot reproduces the pre-0047 producer. Older production
+manifests (including 0032) may pin an earlier producer commit. Check out the
+manifest's exact `source_commit` in a separate checkout and point the adapter
+to that checkout's original source directory:
+
+```sh
+python3 tools/reversi-ai-training/random_inputs.py verify --legacy-offline \
+  --legacy-source-dir /original-checkout/tools/reversi-ai-training \
+  --manifest OLD_MANIFEST --output-dir OLD_OUTPUT
+```
+
+Before import, all three original producer files must match the manifest's
+`generator_sha256` and `producer_sources`. The original verifier then checks its
+checkout ancestry and complete output bytes. Keep the original manifest and
+digests intact. A source directory with different producer bytes is rejected;
+`--legacy-source-dir` is available only with explicit `--legacy-offline`.

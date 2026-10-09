@@ -2,6 +2,15 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+> **0047 score移行後の境界**: 新規AI/教師値は `winner-empty-v1`、artifact format2、
+> trainer/record schema2、reinforcement manifest6・report4を使用する。旧schema3/4/5完成証拠と
+> raw差baseline/validationは明示legacy offline検証だけに保持し、新runへ読み替えない。
+> 本番入力の再生成・再学習は件数/上限/進捗/再開を固定した別の人間操作計画で行う。
+> [移行記録](../../references/reversi-ai-winner-empty-migration.md)を参照する。
+> 0040の最新producerでの独立root/選択child一致・資源制限応答・人間の設定/性能判断、
+> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは未達として残す。
+> strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
+
 > **Superseded selection contract**: 0034 implements version-2 method/config recording and baseline-versus-candidate matches. Do not freeze another production run from this version-1 contract. The failed version-1 run is not candidate evidence.
 
 > **New production freeze prerequisite**: 0035 records whole-game oracle and
@@ -26,9 +35,9 @@
 
 ## Objective and completion boundary
 
-> **0046設定契約**: 新規prepare/runはschema5で、自己対局専用3phase深度各1..64・
+> **0047設定契約**: 新規prepare/runはschema6で、自己対局専用3phase深度各1..64・
 > exact0..30を独立指定できる。既定12/12/12・exact16、turn policy、候補比較の
-> strong-v1固定は維持する。旧schema3/4は完成reportのoffline検証だけに用いる。
+> strong-v1固定は維持する。旧schema3/4/5は完成reportの明示legacy offline検証だけに用いる。
 > 設定APIの完成から本番freezeを許可しない。[score調査](../../references/reversi-ai-exact-score-contract.md)
 > と0040の人間による設定/時間予算/採否、0037、凍結producerでの入力再検証が先決。
 

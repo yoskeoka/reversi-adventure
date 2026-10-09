@@ -94,7 +94,7 @@ class PrepareTests(unittest.TestCase):
             path.write_bytes(whole_game.canonical(changed))
             with self.assertRaises(whole_game.BenchmarkError):
                 prepare.verify_manifest(path)
-        path.write_bytes(whole_game.canonical(original).replace(b'"schema_version":1', b'"schema_version":2'))
+        path.write_bytes(whole_game.canonical(original).replace(b'"schema_version":2', b'"schema_version":1'))
         with self.assertRaisesRegex(whole_game.BenchmarkError, "manifest digest"):
             prepare.verify_manifest(path)
 
@@ -105,6 +105,12 @@ class PrepareTests(unittest.TestCase):
             reports = {}
             for name in ("oracle", "legacy", "turn", "game", "persistent"):
                 report = synthetic_report(depth)
+                report.update(schema_version=1, runner_version="reversi-ai-whole-game-v1")
+                report.pop("score_contract")
+                for game in report["games"]:
+                    for step in game["steps"]:
+                        for key in ("score_contract", "search_semantics_version", "score_identity_raw"):
+                            step["search"].pop(key)
                 report["binary"] = prepare.pin(self.oracle if name == "oracle" else self.cli)
                 report["artifact"] = None if name == "oracle" else prepare.pin(self.artifact)
                 report["kind"] = {"oracle": "oracle", "legacy": "cli-legacy", "persistent": "cli-persistent"}.get(name, "cli")
@@ -124,13 +130,13 @@ class PrepareTests(unittest.TestCase):
                                                       "peak_rss_kib": 100, "user_cpu_ns": 8,
                                                       "system_cpu_ns": 0} for side in ("B", "W")}
                 redigest(report)
-                whole_game.verify(report)
+                whole_game.verify(report, legacy_offline=True)
                 reports[name] = report
                 (directory / f"{name}-{depth}.json").write_bytes(whole_game.canonical(report))
             (directory / f"comparison-{depth}.json").write_bytes(whole_game.canonical(
-                whole_game.comparison(reports["turn"], reports["game"])))
+                __import__("legacy_offline").whole_game_comparison(reports["turn"], reports["game"])))
             game = reports["game"]
-            evidence = {"schema_version": 1, "runner_version": whole_game.VERSION,
+            evidence = {"schema_version": 1, "runner_version": "reversi-ai-whole-game-v1",
                         "cli_report_digest": game["report_digest"],
                         "oracle_binary_sha256": whole_game.digest(self.oracle),
                         "oracle_profile": whole_game.oracle.profile_metadata(whole_game.profile(depth)),

@@ -37,7 +37,9 @@ class FakeSeat:
         empty, occupied = board.count("."), 64-board.count(".")
         exact = empty <= self.settings["exact_empty"]
         depth = empty if exact else 0 if not legal else 12 if occupied <= 20 or occupied >= 45 else self.depth
-        diagnostic = {"elapsed_us": 1, "nodes": 1 if legal or exact else 0,
+        diagnostic = {"score_contract": "winner-empty-v1", "search_semantics_version": 2,
+            "score_identity_raw": f"score_contract_v1\tposition_id={identifier}\tscore_contract=winner-empty-v1\tsearch_semantics_version=2",
+            "elapsed_us": 1, "nodes": 1 if legal or exact else 0,
             "exact": exact, "score": 0 if legal or exact else None, "completed_depth": depth,
             "outcome": "move" if legal else "pass", "cache_probes": 0, "cache_hits": 0, "cache_stores": 0}
         if self.policy:
@@ -160,6 +162,7 @@ class GamesTests(unittest.TestCase):
             "search_diagnostic_v1\tposition_id=p\telapsed_us=1\tnodes=1\texact=false\tscore=0"
             "\tcompleted_depth=8\toutcome=move\tcache_probes=0\tcache_hits=0\tcache_stores=0\n")
         seat.diagnostic_offset, seat.diagnostics, seat.cache_policies = 0, {}, {}
+        seat.score_identities = {}
         seat.capture_cache_policy = True
         seat.collect_diagnostics()
         self.assertEqual(seat.diagnostics["p"]["exact_cache_policy"]["scope"], "turn")
@@ -173,6 +176,7 @@ class GamesTests(unittest.TestCase):
             "search_diagnostic_v1\tposition_id=p\telapsed_us=1\tnodes=1\texact=false\tscore=0"
             "\tcompleted_depth=8\toutcome=move\tcache_probes=0\tcache_hits=0\tcache_stores=0\n")
         seat.diagnostic_offset, seat.diagnostics, seat.cache_policies = 0, {}, {}
+        seat.score_identities = {}
         seat.capture_cache_policy = False
         seat.collect_diagnostics()
         self.assertNotIn("exact_cache_policy", seat.diagnostics["p"])
