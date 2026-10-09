@@ -34,6 +34,7 @@ class ComparatorTests(unittest.TestCase):
                 calls.append((binary, record["position_id"]))
                 elapsed = 100 if binary == "baseline" else 80
                 output = json.dumps({
+                    "score_contract": "winner-empty-v1", "search_semantics_version": 2,
                     "position_id": record["position_id"], "elapsed_ns": elapsed,
                     "board_digest": hashlib.sha256(record["board"].encode("ascii")).hexdigest(),
                     "nodes_searched": 1, "outcome": {"kind": "move", "move": "a1"},
@@ -78,7 +79,8 @@ class ComparatorTests(unittest.TestCase):
 
             def fake_run(argv):
                 record = json.loads(Path(argv[2]).read_text(encoding="utf-8"))
-                sample = {"position_id": record["position_id"], "elapsed_ns": 1, "nodes_searched": 1, "outcome": {}, "score": 0, "pv": [], "completed_depth": 0, "exact": False, "timing_success": False, "timing_failure_reason": "incomplete_depth"}
+                sample = {"score_contract": "winner-empty-v1", "search_semantics_version": 2,
+                    "position_id": record["position_id"], "elapsed_ns": 1, "nodes_searched": 1, "outcome": {}, "score": 0, "pv": [], "completed_depth": 0, "exact": False, "timing_success": False, "timing_failure_reason": "incomplete_depth"}
                 return compare.MeasuredProcess(0, json.dumps(sample) + "\n", "", 200, 100, 10, 1024)
 
             with self.assertRaisesRegex(compare.ComparisonError, "did not complete"):
@@ -92,6 +94,7 @@ class ComparatorTests(unittest.TestCase):
         records = self.corpus()
         record = records[0]
         sample = {
+            "score_contract": "winner-empty-v1", "search_semantics_version": 2,
             "position_id": record["position_id"], "board_digest": hashlib.sha256(record["board"].encode("ascii")).hexdigest(), "elapsed_ns": 100,
             "nodes_searched": 100, "outcome": {"kind": "move", "move": "a1"},
             "score": 1, "pv": ["a1"], "completed_depth": 12,

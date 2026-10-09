@@ -15,13 +15,13 @@
 | 通常CLI | 3phase深度とexactを明示指定可能、既定exact16 | 既定・受理範囲を維持 |
 | Playground/Advisor/decision | opening1..12、midgame1..16、exact0..30。24は既に選べる | 柔軟な選択を維持 |
 | Godot | 旧 `set_ai` 互換、新 `set_ai_with_exact_threshold` | 深度各1..64、exact0..30、変換前に検証 |
-| 自己対局manifest | schema5で自己対局の3phase/exactを独立指定 | 深度各1..64、exact0..30、既定12/12/12・exact16 |
+| 自己対局manifest | schema6で自己対局の3phase/exactを独立指定 | 深度各1..64、exact0..30、既定12/12/12・exact16 |
 | 候補比較/0018 | 固定strong-v1、12/12/12・exact16 | 校正条件を維持 |
 
 ユーザーは既定20への変更を求めていない。必要なときに必要な読みの深さを指定できることが目的。
 設定可能であること、時間内に完了すること、正確性・強さの受け入れは別の条件。
 0046のscore調査・残条件は[score契約記録](reversi-ai-exact-score-contract.md)を参照する。
-schema3/4の完成reportは元契約でoffline検証できるが、新規runへ読み替えない。
+schema3/4/5の完成reportは元契約で明示legacy offline検証できるが、新規runへ読み替えない。
 
 ## 速度と正確性
 
@@ -35,8 +35,9 @@ schema3/4の完成reportは元契約でoffline検証できるが、新規runへ�
 
 0045のwall差3.28%は反復なし、heuristic nodesも同一であり、有意なcache高速化とは判断しない。
 0046の終局は白51/黒12/空き1で、projectは実石数差39、Oracle/Edaxは勝者への空き加算で40。
-ユーザーの指定によりOracle/Edax規則へ揃える方向を採用し、別の修正計画で移行する。
-production式・既存教師値の意味はまだ変更していない。本番freezeのgateは残る。
+0047で新規AI/教師値をOracle/Edaxの `winner-empty-v1` へ移行する。旧教師値と証拠は原本の意味を保持し、
+新runtimeへ流用しない。[移行記録](reversi-ai-winner-empty-migration.md)を参照する。
+本番入力の再生成・再学習と本番freezeのgateは残る。
 2–3分/局の目安は未達。学習を回せる速度にするための追加改善と時間予算を0040で整理する。
 12/8/12・exact20の今回のturn平均を単純に掛けると、6局は約52分、64局は約9時間14分。
 これは同じ3開局の時間による概算で、本番runの予測保証ではなく、学習更新・候補比較・regret時間も含まない。

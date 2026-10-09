@@ -45,7 +45,7 @@ class OracleHarnessTests(unittest.TestCase):
     def test_advisor_analysis_ranges_and_identity(self):
         config = oracle.analysis_config(3, 5, 16)
         self.assertEqual(config.config_id,
-                         "oracle-advisor-v1:162caa799632762ba3bce7de1cb84354ebfb9c8dd4fb9a2637ce3489a2faa98f")
+                         "oracle-advisor-v2:171c18e9eaaffd1bac1fed209a9e595f389a1ef2bf02d2f1b3613e725480538a")
         self.assertEqual(oracle.analysis_depth(config, 23), 3)  # move 20
         self.assertEqual(oracle.analysis_depth(config, 24), 5)  # move 21
         self.assertEqual(oracle.analysis_depth(config, 47), 5)  # move 44
@@ -412,6 +412,7 @@ class OracleHarnessTests(unittest.TestCase):
     def test_golden_projection_removes_only_machine_dependent_elapsed_time(self):
         reports = [
             {
+                "schema_version": 2, "score_contract": oracle.SCORE_CONTRACT,
                 "analysis": {
                     "evaluations": [
                         {
@@ -613,6 +614,7 @@ class OracleHarnessTests(unittest.TestCase):
                 "nodes": 1, "elapsed_ms": 1, "exact": exact,
             } for move in record["legal_moves"]]
             analyses.append({
+                "schema_version": 2, "score_contract": oracle.SCORE_CONTRACT,
                 "position_id": record["position_id"],
                 "profile": oracle.profile_metadata(profile),
                 "analysis": {"best_value": 0, "optimal_moves": list(record["legal_moves"]), "evaluations": evaluations},

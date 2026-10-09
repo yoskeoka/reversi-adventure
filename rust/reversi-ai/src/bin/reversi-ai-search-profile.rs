@@ -235,6 +235,8 @@ fn main() -> Result<(), String> {
             "position_id": position_id,
             "pv": pv,
             "score": result.score,
+            "score_contract": reversi_ai::search::SCORE_CONTRACT,
+            "search_semantics_version": reversi_ai::search::SEARCH_SEMANTICS_VERSION,
         });
         if args.trained_artifact.is_some() {
             output["evaluator"] = json!(args.evaluator);

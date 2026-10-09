@@ -18,16 +18,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-FORMAT_VERSION = 2
-SCORE_CONTRACT = "winner-empty-v1"
-TRAINER_VERSION = "reversi-ai-pattern-training-v2"
+FORMAT_VERSION = 1
+TRAINER_VERSION = "reversi-ai-pattern-training-v1"
 REINFORCEMENT_V1_VERSION = "reversi-ai-pattern-reinforcement-v1"
-REINFORCEMENT_VERSION = "reversi-ai-pattern-reinforcement-v4"
+REINFORCEMENT_VERSION = "reversi-ai-pattern-reinforcement-v2"
 REINFORCEMENT_V3_VERSION = "reversi-ai-pattern-reinforcement-v3"
 FEATURE_COUNT = 64
 PHASE_COUNT = 60
-SCORE_SCALE = "winner_empty_v1"
-TARGET_SEMANTICS = "winner_empty_v1_for_side"
+SCORE_SCALE = "final_disc_difference"
+TARGET_SEMANTICS = "final_disc_difference_for_side"
 SPLITS = {"train", "validation", "held_out"}
 BASE_PATTERNS = (
     (0, 1, 2, 8, 9, 16, 17, 18),
@@ -169,13 +168,6 @@ def parse_position(value: dict[str, Any], context: str) -> tuple[str, str, int]:
     return board, side, require_int(target.get("value"), f"{context}.target.value", -64, 64)
 
 
-def terminal_score(board: str, side: str) -> int:
-    """Teacher value from a replay-verified terminal board, independent of AI."""
-    own, opponent = board.count(side), board.count("W" if side == "B" else "B")
-    difference = own - opponent
-    return difference + (1 if difference > 0 else -1 if difference < 0 else 0) * (64 - own - opponent)
-
-
 def board_key(board: str, symmetry: int) -> str:
     inv = inverse(symmetry)
     return "".join(board[transform(square, inv)] for square in range(64))
@@ -199,9 +191,7 @@ def extract_features(board: str, side: str) -> tuple[int, list[int]]:
 
 
 def validate_manifest(manifest: dict[str, Any], root: Path) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
-    if not isinstance(manifest, dict):
-        raise TrainingError("manifest must be an object")
-    if manifest.get("schema_version") != FORMAT_VERSION or manifest.get("trainer_version") != TRAINER_VERSION or manifest.get("score_contract") != SCORE_CONTRACT:
+    if manifest.get("schema_version") != FORMAT_VERSION or manifest.get("trainer_version") != TRAINER_VERSION:
         raise TrainingError("unsupported manifest schema or trainer version")
     require_int(manifest.get("seed"), "manifest.seed", 0, 2**64 - 1)
     feature = manifest.get("feature_contract")
@@ -236,7 +226,7 @@ def validate_records(loaded: list[tuple[dict[str, Any], list[dict[str, Any]]]], 
     for input_entry, records in loaded:
         for record in records:
             started = time.monotonic()
-            if record.get("schema_version") != FORMAT_VERSION or record.get("score_contract") != SCORE_CONTRACT or not isinstance(record.get("record_id"), str):
+            if record.get("schema_version") != FORMAT_VERSION or not isinstance(record.get("record_id"), str):
                 raise TrainingError("record schema_version and record_id are required")
             if any(record.get(key) != input_entry[key] for key in ("source", "license", "source_digest")):
                 raise TrainingError(f"record {record.get('record_id')} provenance differs from its manifest input")
@@ -307,7 +297,7 @@ def artifact_from(manifest: dict[str, Any], records: list[dict[str, Any]], manif
         for index, table in enumerate(tables):
             if table:
                 bounds[index] = max(abs(value) for value in table.values())
-    artifact = {"format_version": FORMAT_VERSION, "score_contract": SCORE_CONTRACT, "feature_contract": manifest["feature_contract"],
+    artifact = {"format_version": FORMAT_VERSION, "feature_contract": manifest["feature_contract"],
                 "provenance": {"trainer_version": TRAINER_VERSION, "input_manifest_digest": manifest_digest,
                                "licenses": sorted({entry["license"] for entry in manifest["inputs"]}),
                                "seed": manifest["seed"], "optimizer": manifest["optimizer"]},
@@ -316,29 +306,11 @@ def artifact_from(manifest: dict[str, Any], records: list[dict[str, Any]], manif
     return artifact
 
 
-def reject_legacy_score_identity(value: Any, context: str) -> None:
-    """Historical shapes never declared a winner-empty score-contract field."""
-    if isinstance(value, dict):
-        if "score_contract" in value:
-            raise TrainingError(f"legacy {context} must retain its original score identity")
-        for child in value.values():
-            reject_legacy_score_identity(child, context)
-    elif isinstance(value, list):
-        for child in value:
-            reject_legacy_score_identity(child, context)
-
-
-def validate_artifact(artifact: dict[str, Any], *, legacy_offline: bool = False) -> None:
-    if legacy_offline:
-        reject_legacy_score_identity(artifact, "artifact")
-        from legacy import producer
-        with producer("training", error_type=TrainingError) as frozen:
-            frozen.validate_artifact(artifact)
-        return
-    if artifact.get("format_version") != FORMAT_VERSION or artifact.get("score_contract") != SCORE_CONTRACT or artifact.get("feature_contract") != {"format_version": FORMAT_VERSION, "catalog_digest": catalog_digest(), "phase_count": PHASE_COUNT, "score_scale": SCORE_SCALE}:
+def validate_artifact(artifact: dict[str, Any]) -> None:
+    if artifact.get("format_version") != FORMAT_VERSION or artifact.get("feature_contract") != {"format_version": FORMAT_VERSION, "catalog_digest": catalog_digest(), "phase_count": PHASE_COUNT, "score_scale": SCORE_SCALE}:
         raise TrainingError("artifact feature contract mismatch")
     provenance = artifact.get("provenance")
-    if not isinstance(provenance, dict) or provenance.get("trainer_version") not in (TRAINER_VERSION, REINFORCEMENT_VERSION):
+    if not isinstance(provenance, dict) or provenance.get("trainer_version") not in (TRAINER_VERSION, REINFORCEMENT_V1_VERSION, REINFORCEMENT_VERSION, REINFORCEMENT_V3_VERSION):
         raise TrainingError("artifact provenance is incomplete")
     manifest_digest = provenance.get("input_manifest_digest")
     if not isinstance(manifest_digest, str) or len(manifest_digest) != 64 or any(character not in "0123456789abcdef" for character in manifest_digest):
@@ -391,7 +363,7 @@ def validation_report(artifact: dict[str, Any], records: list[dict[str, Any]], m
         phases[str(phase)] = {"records": len(rows), "mse": sum(error * error for error in errors) / len(errors),
                                "mae": sum(abs(error) for error in errors) / len(errors),
                                "candidate_top_target_agreement": agreements / candidates if candidates else None}
-    report = {"format_version": FORMAT_VERSION, "score_contract": SCORE_CONTRACT, "artifact_digest": artifact["artifact_digest"],
+    report = {"format_version": FORMAT_VERSION, "artifact_digest": artifact["artifact_digest"],
               "input_manifest_digest": manifest_digest, "phase_metrics": phases}
     report["report_digest"] = digest(report)
     return report
@@ -426,23 +398,6 @@ def run(manifest_path: Path, artifact_path: Path, report_path: Path, progress_ev
     progress.stage_done("output-publication", stage)
 
 
-def validate_input_manifest(path: Path, *, legacy_offline: bool = False) -> None:
-    manifest = read_json(path)
-    if not isinstance(manifest, dict):
-        raise TrainingError("manifest must be an object")
-    if legacy_offline:
-        reject_legacy_score_identity(manifest, "manifest")
-        from legacy import producer
-        with producer("training", error_type=TrainingError) as frozen:
-            loaded = frozen.validate_manifest(manifest, path.parent)
-            for entry, records in loaded:
-                reject_legacy_score_identity(entry, "input")
-                reject_legacy_score_identity(records, "record")
-            frozen.validate_records(loaded)
-    else:
-        validate_records(validate_manifest(manifest, path.parent))
-
-
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -452,21 +407,16 @@ def main(argv: list[str]) -> int:
     train.add_argument("--report", type=Path, required=True)
     train.add_argument("--progress-every", type=positive_interval, default=1)
     validate = subcommands.add_parser("validate")
-    validation_input = validate.add_mutually_exclusive_group(required=True)
-    validation_input.add_argument("--artifact", type=Path)
-    validation_input.add_argument("--manifest", type=Path)
-    validate.add_argument("--legacy-offline", action="store_true")
+    validate.add_argument("--artifact", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "train":
             run(args.manifest, args.artifact, args.report, args.progress_every)
-        elif args.manifest is not None:
-            validate_input_manifest(args.manifest, legacy_offline=args.legacy_offline)
         else:
             artifact = read_json(args.artifact)
             if not isinstance(artifact, dict):
                 raise TrainingError("artifact must be an object")
-            validate_artifact(artifact, legacy_offline=args.legacy_offline)
+            validate_artifact(artifact)
     except TrainingError as error:
         print(f"training error: {error}", file=sys.stderr)
         return 2

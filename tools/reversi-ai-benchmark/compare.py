@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 
-RUNNER_VERSION = "reversi-ai-rust-cost-comparator-v1"
+RUNNER_VERSION = "reversi-ai-rust-cost-comparator-v2"
+SCORE_CONTRACT = "winner-empty-v1"
 CORPUS_V1_SHA256 = "5831839527b433b4b92c314331b9f0e613d98e0f82b9b6edb725f8bd6cb97ff8"
 
 
@@ -192,6 +193,8 @@ def invoke(binary: Path, record: dict[str, object], time_limit_ms: int,
         raise ComparisonError(f"{binary} returned an incomplete profiler sample")
     if sample["position_id"] != record["position_id"] or type(sample["elapsed_ns"]) is not int or sample["elapsed_ns"] <= 0:
         raise ComparisonError(f"{binary} returned an invalid profiler sample")
+    if sample.get("score_contract") != SCORE_CONTRACT or sample.get("search_semantics_version") != 2:
+        raise ComparisonError("profiler score contract identity mismatch")
     if sample["timing_success"] is not True:
         raise ComparisonError(f"{binary} did not complete {record['position_id']}: {sample.get('timing_failure_reason')}")
     resources = {
@@ -212,7 +215,7 @@ def validate_resources(sample: dict[str, object]) -> None:
             raise ComparisonError(f"missing or invalid {key}")
 
 
-SEMANTIC_FIELDS = ("board_digest", "outcome", "score", "pv", "completed_depth", "exact", "nodes_searched")
+SEMANTIC_FIELDS = ("score_contract", "search_semantics_version", "board_digest", "outcome", "score", "pv", "completed_depth", "exact", "nodes_searched")
 
 
 def aggregate(raw: list[dict[str, object]], records: list[dict[str, object]],
@@ -233,6 +236,10 @@ def aggregate(raw: list[dict[str, object]], records: list[dict[str, object]],
             baseline = by_key[(repetition, "baseline")]["sample"]
             candidate = by_key[(repetition, "candidate")]["sample"]
             for label, sample in (("baseline", baseline), ("candidate", candidate)):
+                if not isinstance(sample, dict):
+                    raise ComparisonError("profiler sample must be an object")
+                if sample.get("score_contract") != SCORE_CONTRACT or sample.get("search_semantics_version") != 2:
+                    raise ComparisonError("profiler score contract identity mismatch")
                 item = by_key[(repetition, label)]
                 if not isinstance(sample, dict) or sample.get("position_id") != position_id or sample.get("timing_success") is not True:
                     raise ComparisonError(f"invalid timing sample for {position_id} {repetition} {label}")
@@ -343,17 +350,17 @@ def compare(baseline: Path, candidate: Path, records: list[dict[str, object]], r
     stage = progress.stage("aggregation")
     positions, workloads = aggregate(raw, records, list(range(start_repetition, start_repetition + repetitions)))
     progress.stage("aggregation", stage)
-    return {"schema_version": 2, "runner_version": RUNNER_VERSION, "repetitions": repetitions, "start_repetition": start_repetition, "time_limit_ms": time_limit_ms, "binaries": {"baseline": {"path": str(baseline), "sha256": sha256_file(baseline)}, "candidate": {"path": str(candidate), "sha256": sha256_file(candidate)}}, "environment": environment(), "raw_samples": raw, "positions": positions, "workloads": workloads}
+    return {"schema_version": 2, "score_contract": SCORE_CONTRACT, "runner_version": RUNNER_VERSION, "repetitions": repetitions, "start_repetition": start_repetition, "time_limit_ms": time_limit_ms, "binaries": {"baseline": {"path": str(baseline), "sha256": sha256_file(baseline)}, "candidate": {"path": str(candidate), "sha256": sha256_file(candidate)}}, "environment": environment(), "raw_samples": raw, "positions": positions, "workloads": workloads}
 
 
 def merge_fragments(fragments: list[dict[str, object]]) -> dict[str, object]:
     if len(fragments) != 5:
         raise ComparisonError("exactly five comparison fragments are required")
     first = fragments[0]
-    required = ("schema_version", "runner_version", "time_limit_ms", "binaries", "environment")
+    required = ("schema_version", "score_contract", "runner_version", "time_limit_ms", "binaries", "environment")
     if any(first.get(key) is None for key in required):
         raise ComparisonError("comparison fragment has an incomplete schema")
-    if first["schema_version"] != 2 or first["runner_version"] != RUNNER_VERSION:
+    if first["schema_version"] != 2 or first.get("score_contract") != SCORE_CONTRACT or first["runner_version"] != RUNNER_VERSION:
         raise ComparisonError("comparison fragment has an unsupported schema or runner")
     if (not isinstance(first["environment"], dict)
             or first["environment"].get("measurement_method") != "linux-wait4"
@@ -367,13 +374,15 @@ def merge_fragments(fragments: list[dict[str, object]]) -> dict[str, object]:
     raw = [sample for fragment in fragments for sample in fragment.get("raw_samples", [])]
     records = load_corpus(Path(__file__).with_name("positions-v1.jsonl"))
     positions, workloads = aggregate(raw, records, [1, 2, 3, 4, 5])
-    return {"schema_version": 2, "runner_version": RUNNER_VERSION, "repetitions": 5, "time_limit_ms": first["time_limit_ms"], "binaries": first["binaries"], "environment": first["environment"], "raw_samples": raw, "positions": positions, "workloads": workloads}
+    return {"schema_version": 2, "score_contract": SCORE_CONTRACT, "runner_version": RUNNER_VERSION, "repetitions": 5, "time_limit_ms": first["time_limit_ms"], "binaries": first["binaries"], "environment": first["environment"], "raw_samples": raw, "positions": positions, "workloads": workloads}
 
 
 def verify_report(report: dict[str, object], records: list[dict[str, object]],
                   baseline_binary: Path | None = None,
                   candidate_binary: Path | None = None) -> bool:
-    if report.get("schema_version") != 2 or report.get("runner_version") != RUNNER_VERSION:
+    if not isinstance(report, dict):
+        raise ComparisonError("comparison report must be an object")
+    if report.get("schema_version") != 2 or report.get("score_contract") != SCORE_CONTRACT or report.get("runner_version") != RUNNER_VERSION:
         raise ComparisonError("unsupported report schema or runner")
     repetitions = report.get("repetitions")
     if type(repetitions) is not int or repetitions < 5 or report.get("start_repetition", 1) != 1:
@@ -415,6 +424,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--corpus", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--legacy-offline", action="store_true")
     parser.add_argument("--verify-report", type=Path)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--start-repetition", type=int, default=1)
@@ -424,11 +434,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--progress-every", type=positive_interval, default=1)
     args = parser.parse_args(argv)
     try:
+        if args.legacy_offline and not args.verify_report:
+            raise ComparisonError("--legacy-offline requires --verify-report and cannot run measurements")
         if args.verify_report:
             if not args.corpus:
                 raise ComparisonError("--verify-report requires --corpus")
-            rehashed = verify_report(json.loads(args.verify_report.read_text(encoding="utf-8")),
-                                     load_corpus(args.corpus), args.baseline, args.candidate)
+            if args.legacy_offline:
+                from legacy_offline import cost_comparison
+                verifier = cost_comparison
+            else:
+                verifier = verify_report
+            rehashed = verifier(json.loads(args.verify_report.read_text(encoding="utf-8")),
+                                 load_corpus(args.corpus), args.baseline, args.candidate)
             print("verified comparison report data" +
                   (" and supplied binary digests" if rehashed else
                    "; recorded binary digests were not rehashed"))

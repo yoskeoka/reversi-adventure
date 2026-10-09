@@ -7,7 +7,7 @@ import re
 import exact_threshold as et
 
 wg = et.wg
-VERSION = "exact-cache-verification-v1"
+VERSION = "exact-cache-verification-v2"
 GAME_IDENTITIES = [{"opening_id": f"opening-{i}", "assignment": 0} for i in (1, 2, 4)]
 POLICIES = {"turn": "exact-cache-cross-decision-suspended-v1", "game": "diagnostic-game-v1"}
 
@@ -166,6 +166,6 @@ def summary(results):
             condition.pop("averages", None)
             condition["status"] = "failed"
             condition["failure"] = "semantic mismatch; no averages"
-    return {"version": VERSION, "games_total": 3, "conditions": conditions,
+    return {"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "games_total": 3, "conditions": conditions,
             "comparisons": comparisons, "games_matched": matched, "adoption": False,
             "limitations": "Three selected openings, assignment 0 only, one repetition; human adoption decision and independent Oracle evidence required."}

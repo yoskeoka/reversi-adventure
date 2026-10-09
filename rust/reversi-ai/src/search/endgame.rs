@@ -959,13 +959,8 @@ impl<'a> EndgameSolver<'a> {
 pub(crate) fn terminal_score(board: &Board, color: Color) -> i32 {
     let own = board.count(color) as i32;
     let opponent = board.count(color.opponent()) as i32;
-    if own == 0 && opponent > 0 {
-        -64
-    } else if opponent == 0 && own > 0 {
-        64
-    } else {
-        own - opponent
-    }
+    let difference = own - opponent;
+    difference + difference.signum() * (64 - own - opponent)
 }
 
 #[cfg(test)]
@@ -1140,7 +1135,7 @@ mod tests {
     }
 
     // Independent scoring reference: do not call terminal_score here. The
-    // Oracle awards empties to the winner; the project only does so for wipeout.
+    // Frozen legacy and current winner-empty contracts are deliberately distinct.
     fn score_contract_reference(board: &Board, color: Color, oracle: bool) -> i32 {
         let own = board.count(color) as i32;
         let opponent = board.count(color.opponent()) as i32;
@@ -1157,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn early_both_alive_terminal_preserves_project_contract() {
+    fn early_both_alive_terminal_uses_winner_empty_contract() {
         let mut board = Board::empty();
         for index in 1..64 {
             board.set(Position::from_bit_index(index), Color::Black);
@@ -1169,9 +1164,48 @@ mod tests {
             assert_eq!(score_contract_reference(&board, color, false), sign * 61);
             assert_eq!(score_contract_reference(&board, color, true), sign * 62);
             let result = solve(&board, color).0;
-            assert_eq!(result.score, Some(sign * 61));
+            assert_eq!(result.score, Some(sign * 62));
             assert!(result.exact);
             assert_eq!(result.outcome, SearchOutcome::GameOver);
+        }
+    }
+
+    #[test]
+    fn tiny_both_alive_root_child_and_pv_use_independent_winner_empty_score() {
+        let mut board = Board::empty();
+        for index in 2..64 {
+            board.set(Position::from_bit_index(index), Color::Black);
+        }
+        board.set(Position::new(0, 2), Color::White);
+        board.set(Position::new(1, 7), Color::White);
+        let position = Position::new(0, 1);
+        let child = moves::make_move(&board, Color::Black, position);
+        assert_eq!(child.count(Color::Black), 62);
+        assert_eq!(child.count(Color::White), 1);
+        assert_eq!(child.empty_cells().count_ones(), 1);
+        assert_eq!(moves::legal_moves(&child, Color::Black), 0);
+        assert_eq!(moves::legal_moves(&child, Color::White), 0);
+        let reference = full_window_reference(&board, Color::Black);
+        assert_eq!(reference.score, 62);
+        let result = solve(&board, Color::Black).0;
+        assert_eq!(result.score, Some(reference.score));
+        assert_eq!(result.outcome, SearchOutcome::Move(position));
+        assert_eq!(solve(&child, Color::White).0.score, Some(-62));
+        assert_eq!(solve(&board, Color::White).0.score, Some(-62));
+        assert_proven_pv(&board, Color::Black, reference.score, &result.pv);
+        for threshold in [0, 16] {
+            let config =
+                crate::config::AiConfig::new(1, 1, 1).with_exact_solver_empty_squares(threshold);
+            let actual = crate::search::SearchEngine::new().search_with_budget(
+                &board,
+                Color::Black,
+                &crate::eval::strategic::StrategicEvaluator::new(),
+                &config,
+                &SearchBudget::with_node_limit_only(1000),
+            );
+            assert_eq!(actual.score, Some(62));
+            assert_eq!(actual.pv, vec![position]);
+            assert!(actual.leaf_eval.is_none());
         }
     }
 
@@ -1227,7 +1261,7 @@ mod tests {
         if legal == 0 {
             if !moves::has_legal_move(board, color.opponent()) {
                 return NodeResult {
-                    score: terminal_score(board, color),
+                    score: score_contract_reference(board, color, true),
                     pv: Vec::new(),
                 };
             }
@@ -1281,7 +1315,7 @@ mod tests {
         }
         assert!(!moves::has_legal_move(&board, side));
         assert!(!moves::has_legal_move(&board, side.opponent()));
-        assert_eq!(terminal_score(&board, side), value);
+        assert_eq!(score_contract_reference(&board, side, true), value);
     }
 
     #[test]

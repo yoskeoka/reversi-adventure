@@ -15,8 +15,8 @@ from pathlib import Path
 import reinforcement
 import training
 
-VERSION = "reversi-ai-random-inputs-v2"
-SOURCE = "project-owned-random-games-v2"
+VERSION = "reversi-ai-random-inputs-v1"
+SOURCE = "project-owned-random-games-v1"
 COUNTS = {"train": 2048, "validation": 256, "held_out": 256}
 SPLITS = ("train", "validation", "held_out")
 MASK = (1 << 64) - 1
@@ -129,7 +129,7 @@ def prepare(path: Path, master: int, counts: dict[str, int], start: int, max_tur
         reject("source checkout must be clean before freezing production inputs")
     source = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
     base = subprocess.run(["git", "rev-parse", "origin/main"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
-    manifest = {"schema_version": 2, "score_contract": training.SCORE_CONTRACT, "generator_version": VERSION,
+    manifest = {"schema_version": 1, "generator_version": VERSION,
                 "source_commit": source, "base_commit": base,
                 "generator_sha256": training.sha256_file(Path(__file__)),
                 "producer_sources": {"reinforcement.py": training.sha256_file(Path(reinforcement.__file__)),
@@ -138,7 +138,7 @@ def prepare(path: Path, master: int, counts: dict[str, int], start: int, max_tur
                 "seed_derivation": "sha256-prefix64-v1", "random_rule": "splitmix64-rejection-sorted-legal-v1",
                 "split_rule": "splitmix64-fisher-yates-v1", "counts": counts,
                 "game_ids": assignment(master, counts), "record_start_placements": start,
-                "max_turns": max_turns, "output_schema": 2}
+                "max_turns": max_turns, "output_schema": 1}
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         reject("frozen manifest already exists")
@@ -147,9 +147,9 @@ def prepare(path: Path, master: int, counts: dict[str, int], start: int, max_tur
 
 def check_manifest(path: Path) -> dict:
     manifest = training.read_json(path)
-    if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "generator_version", "source_commit", "base_commit", "generator_sha256", "producer_sources", "license", "source", "seed", "seed_derivation", "random_rule", "split_rule", "counts", "game_ids", "record_start_placements", "max_turns", "output_schema", "score_contract"}:
+    if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "generator_version", "source_commit", "base_commit", "generator_sha256", "producer_sources", "license", "source", "seed", "seed_derivation", "random_rule", "split_rule", "counts", "game_ids", "record_start_placements", "max_turns", "output_schema"}:
         reject("invalid generator manifest shape")
-    if manifest.get("score_contract") != training.SCORE_CONTRACT or manifest["schema_version"] != 2 or manifest["output_schema"] != 2 or manifest["generator_version"] != VERSION or manifest["license"] != "CC0-1.0" or manifest["source"] != SOURCE:
+    if manifest["schema_version"] != 1 or manifest["output_schema"] != 1 or manifest["generator_version"] != VERSION or manifest["license"] != "CC0-1.0" or manifest["source"] != SOURCE:
         reject("unsupported generator manifest")
     if manifest["seed_derivation"] != "sha256-prefix64-v1" or manifest["random_rule"] != "splitmix64-rejection-sorted-legal-v1" or manifest["split_rule"] != "splitmix64-fisher-yates-v1":
         reject("unsupported random stream rule")
@@ -210,16 +210,16 @@ def play(game_id: int, split: str, manifest: dict) -> tuple[dict, list[dict], in
     if reinforcement.legal_moves(board, side) or reinforcement.legal_moves(board, reinforcement.other(side)):
         reject(f"game {game_id} is incomplete at turn cap")
     black, white = board.count("B"), board.count("W")
-    game = {"schema_version": 2, "score_contract": training.SCORE_CONTRACT, "game_id": game_id, "split": split, "seed": seed,
+    game = {"schema_version": 1, "game_id": game_id, "split": split, "seed": seed,
             "turns": turns, "terminal_board": board, "black": black, "white": white}
     game["game_digest"] = training.digest(game)
     rows = []
     for position, turn_side, ply, legal_count, turn_index in positions:
-        rows.append({"schema_version": 2, "score_contract": training.SCORE_CONTRACT, "record_id": f"game-{game_id}-turn-{turn_index}",
+        rows.append({"schema_version": 1, "record_id": f"game-{game_id}-turn-{turn_index}",
                      "split": split, "source": SOURCE, "license": "CC0-1.0",
                      "source_digest": manifest["generator_sha256"], "board": position,
                      "side": turn_side, "target": {"semantics": training.TARGET_SEMANTICS,
-                                                     "value": training.terminal_score(board, turn_side)},
+                                                     "value": (black - white) * (1 if turn_side == "B" else -1)},
                      "game_id": game_id, "turn_index": turn_index, "placements": ply,
                      "phase": phase(ply), "legal_moves": legal_count,
                      "game_digest": game["game_digest"]})
@@ -261,8 +261,8 @@ def build(manifest: dict, progress: Progress | None = None,
     blobs = {"games.jsonl": b"".join(canonical(game) for game in games)}
     for split in SPLITS:
         blobs[f"{split}.jsonl"] = b"".join(canonical(row) for row in records[split])
-    trainer = {"schema_version": 2, "score_contract": training.SCORE_CONTRACT, "trainer_version": training.TRAINER_VERSION,
-               "seed": manifest["seed"], "feature_contract": {"format_version": 2,
+    trainer = {"schema_version": 1, "trainer_version": training.TRAINER_VERSION,
+               "seed": manifest["seed"], "feature_contract": {"format_version": 1,
                "catalog_digest": training.catalog_digest(), "phase_count": 60,
                "score_scale": training.SCORE_SCALE},
                "optimizer": {"name": "sparse_mean_v1", "normalization_divisor": 64},
@@ -270,7 +270,7 @@ def build(manifest: dict, progress: Progress | None = None,
                            "source": SOURCE, "license": "CC0-1.0",
                            "source_digest": manifest["generator_sha256"]} for split in SPLITS]}
     blobs["trainer-manifest.json"] = canonical(trainer)
-    report = {"schema_version": 2, "score_contract": training.SCORE_CONTRACT, "generator_version": VERSION,
+    report = {"schema_version": 1, "generator_version": VERSION,
               "manifest_sha256": None,
               "games": [{"game_id": game["game_id"], "split": game["split"],
                          "seed": game["seed"], "turns": len(game["turns"]),
@@ -286,8 +286,6 @@ def build(manifest: dict, progress: Progress | None = None,
 
 
 def verify_game(game: dict, manifest: dict) -> None:
-    if game.get("schema_version") != 2 or game.get("score_contract") != training.SCORE_CONTRACT:
-        reject("unsupported random game score identity")
     expected = dict(game)
     digest = expected.pop("game_digest", None)
     if digest != training.digest(expected):
@@ -328,29 +326,7 @@ def generate(manifest_path: Path, output: Path, progress_every: int = 1) -> None
     progress.stage_done("random-inputs-output-publication", stage)
 
 
-def verify(manifest_path: Path, output: Path, progress_every: int = 1, *, legacy_offline: bool = False, legacy_source_dir: Path | None = None) -> dict:
-    if legacy_source_dir is not None and not legacy_offline:
-        reject("--legacy-source-dir requires --legacy-offline")
-    if legacy_offline:
-        import inspect
-        from legacy import producer
-        manifest = training.read_json(manifest_path)
-        if not isinstance(manifest, dict):
-            reject("manifest must be an object")
-        training.reject_legacy_score_identity(manifest, "manifest")
-        for name in ("report.json", "trainer-manifest.json"):
-            training.reject_legacy_score_identity(training.read_json(output / name), "output")
-        for name in ("games.jsonl", "train.jsonl", "validation.jsonl", "held_out.jsonl"):
-            records = training.read_jsonl(output / name)
-            training.reject_legacy_score_identity(records, "record")
-            if any(record.get("schema_version") != 1 for record in records):
-                reject("legacy record must retain its original schema")
-        sources = dict(manifest.get("producer_sources", {}))
-        sources["random_inputs.py"] = manifest.get("generator_sha256")
-        with producer("random_inputs", error_type=training.TrainingError, source_dir=legacy_source_dir, source_digests=sources) as frozen:
-            if "progress_every" in inspect.signature(frozen.verify).parameters:
-                return frozen.verify(manifest_path, output, progress_every)
-            return frozen.verify(manifest_path, output)
+def verify(manifest_path: Path, output: Path, progress_every: int = 1) -> dict:
     manifest = check_manifest(manifest_path)
     expected_names = {"games.jsonl", "train.jsonl", "validation.jsonl", "held_out.jsonl", "trainer-manifest.json", "report.json"}
     if not output.is_dir() or {path.name for path in output.iterdir()} != expected_names:
@@ -394,9 +370,6 @@ def main(argv: list[str]) -> int:
         command.add_argument("--manifest", type=Path, required=True)
         command.add_argument("--output-dir", type=Path, required=True)
         command.add_argument("--progress-every", type=positive_interval, default=1)
-        if name == "verify":
-            command.add_argument("--legacy-offline", action="store_true")
-            command.add_argument("--legacy-source-dir", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
@@ -405,7 +378,7 @@ def main(argv: list[str]) -> int:
         elif args.command == "generate":
             generate(args.manifest, args.output_dir, args.progress_every)
         else:
-            verify(args.manifest, args.output_dir, args.progress_every, legacy_offline=args.legacy_offline, legacy_source_dir=args.legacy_source_dir)
+            verify(args.manifest, args.output_dir, args.progress_every)
     except (training.TrainingError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"random inputs error: {error}", file=sys.stderr)
         return 2

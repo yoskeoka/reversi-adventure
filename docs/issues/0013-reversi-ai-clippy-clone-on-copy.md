@@ -28,3 +28,17 @@ contract.
 ## Priority
 
 Low. This is a local quality-gate blocker without a runtime behavior change.
+
+## 0047での任意all-targetsチェック（2026-10-10）
+
+Rust 1.98.1の `cargo clippy --workspace --all-targets -- -D warnings` で
+上記 `player.rs` の警告に加え、既存のendgameテストに次の2件を確認した。
+
+- `endgame.rs:1337` の `transcript.as_bytes().chunks_exact(2)`:
+  `clippy::chunks_exact_to_as_chunks`（constant chunk size）。
+- `endgame.rs:1567` のclosure内 `return;`:
+  `clippy::needless_return`（unneeded return statement）。
+
+対象の式は0047で変更していない。CI必須の
+`cargo clippy --workspace -- -D warnings`、engine/AI tests、Godot build、fmtは成功した。
+任意all-targetsのtest lintは本score移行とは分離し、既存issueを未解決として保持する。

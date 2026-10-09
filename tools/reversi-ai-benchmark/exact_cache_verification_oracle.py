@@ -7,10 +7,10 @@ import re
 import exact_threshold as et
 import whole_game as wg
 
-VERSION = "exact-cache-verification-v1"
+VERSION = "exact-cache-verification-v2"
 TIMEOUT = 30
 MAX_RSS = 1572864
-SCORE_CONTRACT = "side-to-move-disc-difference-wipeout-64-v1"
+SCORE_CONTRACT = "winner-empty-v1"
 
 
 def profile():
@@ -36,8 +36,7 @@ def _terminal(board):
 
 
 def _terminal_score(board, side):
-    own, other = board.count(side), board.count(wg.oracle.other(side))
-    return 64 if other == 0 else -64 if own == 0 else own-other
+    return wg.oracle.terminal_score(board, side)
 
 
 def _selected(results):
@@ -99,13 +98,13 @@ def freeze_stage(m, results, reusable_queries=()):
             else:
                 queries.setdefault(key, {"id": key, "identity": identity, "child_query": is_child})
     wg.require(len(queries)+len(used) <= 18, "Oracle query cap exceeded")
-    return wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"], "roots": roots,
+    return wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"], "roots": roots,
                       "queries": list(queries.values()), "reused": used, "total": len(queries),
                       "timeout_seconds": TIMEOUT, "max_rss_kib": MAX_RSS})
 
 
 def verify_stage(m, stage, results=None, reusable_queries=()):
-    wg.require(stage == wg.sealed(stage) and stage.get("version") == VERSION
+    wg.require(stage == wg.sealed(stage) and stage.get("version") == VERSION and stage.get("score_contract") == SCORE_CONTRACT
                and stage.get("manifest_digest") == m["report_digest"]
                and stage.get("timeout_seconds") == TIMEOUT and stage.get("max_rss_kib") == MAX_RSS
                and type(stage.get("total")) is int and stage.get("total") == len(stage["queries"]) <= 18
@@ -157,7 +156,7 @@ def _process(m, query, observation, timeout, historical=False):
 
 def verify_query(m, query, receipt, reused=False):
     if not reused:
-        wg.require(receipt == wg.sealed(receipt) and receipt.get("version") == VERSION
+        wg.require(receipt == wg.sealed(receipt) and receipt.get("version") == VERSION and receipt.get("score_contract") == SCORE_CONTRACT
                    and receipt.get("manifest_digest") == m["report_digest"] and receipt.get("query") == query,
                    "Oracle checkpoint identity mismatch")
     identity = query["identity"]
@@ -223,7 +222,7 @@ def measure_query(m, query):
                    "independent Oracle incomplete")
     except (wg.BenchmarkError, wg.oracle.OracleError, OSError, ValueError) as exc:
         failure = str(exc)
-    return wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"], "query": query,
+    return wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"], "query": query,
                       "status": "failed" if failure else "completed", "failure": failure,
                       "result": raw, "process_observation": observations[0] if observations else None})
 

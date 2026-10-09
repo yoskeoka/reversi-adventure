@@ -15,7 +15,7 @@ SPEC.loader.exec_module(training)
 
 class PatternTrainingTests(unittest.TestCase):
     def fixture_manifest(self):
-        return ROOT / "fixtures" / "tiny-manifest.json"
+        return ROOT / "fixtures" / "tiny-winner-empty-manifest.json"
 
     def load_fixture(self):
         manifest = training.read_json(self.fixture_manifest())
@@ -33,7 +33,7 @@ class PatternTrainingTests(unittest.TestCase):
             self.assertEqual(first_artifact.read_bytes(), second_artifact.read_bytes())
             self.assertEqual(first_report.read_bytes(), second_report.read_bytes())
             self.assertEqual(training.read_json(first_artifact)["feature_contract"]["catalog_digest"], training.catalog_digest())
-            self.assertEqual(set(training.read_json(first_report)["phase_metrics"]), {"6"})
+            self.assertEqual(set(training.read_json(first_report)["phase_metrics"]), {"8"})
 
     def test_rejects_symmetry_equivalent_split_leakage(self):
         manifest, records = self.load_fixture()

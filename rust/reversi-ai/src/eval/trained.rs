@@ -15,11 +15,9 @@ use crate::eval::pattern::{
     PATTERN_FORMAT_VERSION, PATTERN_PHASE_COUNT,
 };
 
-const TRAINED_EVALUATOR_VERSION: u64 = 1;
-const TRAINER_VERSION: &str = "reversi-ai-pattern-training-v1";
-const REINFORCEMENT_V1_VERSION: &str = "reversi-ai-pattern-reinforcement-v1";
-const REINFORCEMENT_VERSION: &str = "reversi-ai-pattern-reinforcement-v2";
-const REINFORCEMENT_V3_VERSION: &str = "reversi-ai-pattern-reinforcement-v3";
+const TRAINED_EVALUATOR_VERSION: u64 = 2;
+const TRAINER_VERSION: &str = "reversi-ai-pattern-training-v2";
+const REINFORCEMENT_VERSION: &str = "reversi-ai-pattern-reinforcement-v4";
 
 #[derive(Debug)]
 pub enum TrainedEvaluatorError {
@@ -58,6 +56,9 @@ impl TrainedEvaluator {
         let format_version = u64_value(artifact, "format_version")?;
         if format_version != u64::from(PATTERN_FORMAT_VERSION) {
             return invalid("unsupported format version");
+        }
+        if string(artifact, "score_contract")? != crate::search::SCORE_CONTRACT {
+            return invalid("score contract mismatch");
         }
         let feature_contract = object_value(artifact, "feature_contract")?;
         validate_feature_contract(feature_contract)?;
@@ -136,6 +137,9 @@ impl TrainedEvaluator {
             tables,
             context_fingerprint: stable_context_fingerprint(&[
                 TRAINED_EVALUATOR_VERSION,
+                digest_u64(&digest(&Value::String(
+                    crate::search::SCORE_CONTRACT.into(),
+                ))),
                 format_version,
                 parse_hex_u64(
                     string(
@@ -200,7 +204,7 @@ fn validate_feature_contract(value: &Value) -> Result<(), TrainedEvaluatorError>
     if u64_value(contract, "format_version")? != u64::from(PATTERN_FORMAT_VERSION)
         || string(contract, "catalog_digest")? != format!("{:016x}", catalog_digest())
         || u64_value(contract, "phase_count")? != PATTERN_PHASE_COUNT as u64
-        || string(contract, "score_scale")? != "final_disc_difference"
+        || string(contract, "score_scale")? != "winner_empty_v1"
     {
         return invalid("feature contract mismatch");
     }
@@ -210,13 +214,8 @@ fn validate_feature_contract(value: &Value) -> Result<(), TrainedEvaluatorError>
 fn validate_provenance(value: &Value) -> Result<(), TrainedEvaluatorError> {
     let provenance = object(value, "provenance")?;
     let trainer_version = string(provenance, "trainer_version")?;
-    if !matches!(
-        trainer_version,
-        TRAINER_VERSION
-            | REINFORCEMENT_V1_VERSION
-            | REINFORCEMENT_VERSION
-            | REINFORCEMENT_V3_VERSION
-    ) || u64_value(provenance, "seed").is_err()
+    if !matches!(trainer_version, TRAINER_VERSION | REINFORCEMENT_VERSION)
+        || u64_value(provenance, "seed").is_err()
     {
         return invalid("provenance is incomplete");
     }
@@ -346,11 +345,12 @@ mod tests {
         let weights = json!({ "0": tables });
         let mut value = json!({
             "format_version": PATTERN_FORMAT_VERSION,
+            "score_contract": crate::search::SCORE_CONTRACT,
             "feature_contract": {
                 "format_version": PATTERN_FORMAT_VERSION,
                 "catalog_digest": format!("{:016x}", catalog_digest()),
                 "phase_count": PATTERN_PHASE_COUNT,
-                "score_scale": "final_disc_difference",
+                "score_scale": "winner_empty_v1",
             },
             "provenance": {
                 "trainer_version": TRAINER_VERSION,
@@ -399,18 +399,52 @@ mod tests {
 
     #[test]
     fn accepts_bounded_reinforcement_provenance() {
-        for version in [
-            REINFORCEMENT_V1_VERSION,
-            REINFORCEMENT_VERSION,
-            REINFORCEMENT_V3_VERSION,
+        let mut value = artifact(1);
+        value["provenance"]["trainer_version"] = json!(REINFORCEMENT_VERSION);
+        value["provenance"]["optimizer"]["name"] = json!("bounded_td_v1");
+        value.as_object_mut().unwrap().remove("artifact_digest");
+        let artifact_digest = digest(&value);
+        value["artifact_digest"] = json!(artifact_digest);
+        assert!(TrainedEvaluator::from_json_value(value).is_ok());
+    }
+
+    #[test]
+    fn rejects_resealed_legacy_or_mixed_score_and_provenance_contracts() {
+        for (path, replacement) in [
+            (vec!["format_version"], json!(1)),
+            (vec!["score_contract"], json!("raw-disc-difference-v1")),
+            (vec!["feature_contract", "format_version"], json!(1)),
+            (
+                vec!["feature_contract", "score_scale"],
+                json!("final_disc_difference"),
+            ),
+            (
+                vec!["provenance", "trainer_version"],
+                json!("reversi-ai-pattern-training-v1"),
+            ),
+            (
+                vec!["provenance", "trainer_version"],
+                json!("reversi-ai-pattern-reinforcement-v3"),
+            ),
+            (
+                vec!["provenance", "optimizer", "name"],
+                json!("bounded_td_v1"),
+            ),
         ] {
             let mut value = artifact(1);
-            value["provenance"]["trainer_version"] = json!(version);
-            value["provenance"]["optimizer"]["name"] = json!("bounded_td_v1");
+            let mut field = &mut value;
+            for component in path {
+                field = &mut field[component];
+            }
+            *field = replacement;
             value.as_object_mut().unwrap().remove("artifact_digest");
-            let artifact_digest = digest(&value);
-            value["artifact_digest"] = json!(artifact_digest);
-            assert!(TrainedEvaluator::from_json_value(value).is_ok());
+            value["artifact_digest"] = json!(digest(&value));
+            assert!(TrainedEvaluator::from_json_value(value).is_err());
         }
+        let current: Value = serde_json::from_str(include_str!(
+            "../../../../tools/reversi-ai-training/fixtures/tiny-winner-empty-artifact.json"
+        ))
+        .unwrap();
+        assert!(TrainedEvaluator::from_json_value(current).is_ok());
     }
 }

@@ -36,7 +36,7 @@ class PreflightTests(unittest.TestCase):
             self.save_unit(result)
         self.save_oracle_stage("pilot", self.pilot, [])
         admitted, reasons = et.admitted_thresholds(self.pilot, [])
-        self.gate = et.wg.sealed({"version": et.VERSION, "manifest_digest": self.manifest["report_digest"],
+        self.gate = et.wg.sealed({"version": et.VERSION, "score_contract": "winner-empty-v1", "manifest_digest": self.manifest["report_digest"],
             "thresholds": admitted, "excluded": reasons, "units": [], "total": 0,
             "pilot_digests": [r["report_digest"] for r in self.pilot], "oracle_digests": []})
 
@@ -48,7 +48,7 @@ class PreflightTests(unittest.TestCase):
     def save_oracle_stage(self, stage, results, receipts):
         jobs = et.oracle_jobs(results)
         et.wg.atomic_write(self.directory / (stage + "-oracle-manifest.json"), et.wg.sealed({
-            "version": et.VERSION, "manifest_digest": self.manifest["report_digest"],
+            "version": et.VERSION, "score_contract": "winner-empty-v1", "manifest_digest": self.manifest["report_digest"],
             "jobs": jobs, "total": len(jobs)}))
         directory = self.directory / (stage + "-oracle")
         directory.mkdir(exist_ok=True)

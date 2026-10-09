@@ -122,3 +122,28 @@ python3 tools/reversi-ai-oracle/oracle.py generate-corpus
 ```
 
 Do not commit the downloaded source, executable, build tree, or mutable cache.
+
+## winner-empty-v1 の score identity
+
+新規 analysis/golden は schema2 と `score_contract="winner-empty-v1"` を持つ。
+Advisor config も schema2 と score contract を hash に含め、`oracle-advisor-v2` を使う。
+盤面 corpus は実石数・合法手の schema1 を維持する。terminal child/root は
+`own-opponent + sign(own-opponent)*(64-own-opponent)` を返し、実石数を記録する outcome は維持する。
+
+`make oracle-ci` と `make oracle-verify` は別ファイルの小さい
+`winner-empty-v1-corpus.jsonl` / `winner-empty-v1-golden.jsonl` を使う。
+全 leaf は保存 terminal board から独立に照合でき、golden の作成時に Oracle solve は起動していない。
+満盤、空きありの勝敗/draw、wipeout、terminal child を含む。
+既存 `corpus.jsonl` と `golden.jsonl`、benchmark `reference-v1.jsonl` は保持する。
+本番 golden/reference の全量再生成はこの移行の完了条件に含めない。
+生成入口は既存ファイルへの上書きを拒否し、新規出力を要求する。
+
+旧 golden は次の read-only 検証入口を使う。
+
+```sh
+rtk python3 tools/reversi-ai-oracle/oracle.py verify --legacy-offline --corpus tools/reversi-ai-oracle/corpus.jsonl --golden tools/reversi-ai-oracle/golden.jsonl
+```
+
+元 schema、固定 Oracle source/profile、合法手、保存 terminal の元 raw 実石数差を検証する。
+旧 minimax の全 solve は再実行せず、その値の新意味への移植や再受け入れを主張しない。
+旧 schema を新 score contract へ暗黙に読み替えること、保存失敗を成功に変更することは拒否する。

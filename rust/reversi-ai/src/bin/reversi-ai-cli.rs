@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice|trained] [--trained-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
-[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v1)"
+[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v2)"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -315,7 +315,7 @@ fn main() -> Result<(), String> {
                 })
                 .collect::<Vec<_>>();
             let response = serde_json::json!({
-                "schema_version": 1, "position_id": fields[0], "board": fields[1],
+                "schema_version": 2, "score_contract": reversi_ai::search::SCORE_CONTRACT, "position_id": fields[0], "board": fields[1],
                 "side": fields[2], "config_id": analysis.config_id, "outcome": outcome,
                 "completed_depth": analysis.completed_depth, "exact": analysis.exact,
                 "scores": scores,
@@ -352,6 +352,12 @@ fn main() -> Result<(), String> {
             search_result.exact_cache.probes,
             search_result.exact_cache.hits,
             search_result.exact_cache.stores,
+        );
+        eprintln!(
+            "score_contract_v1\tposition_id={}\tscore_contract={}\tsearch_semantics_version={}",
+            fields[0],
+            reversi_ai::search::SCORE_CONTRACT,
+            reversi_ai::search::SEARCH_SEMANTICS_VERSION,
         );
         eprintln!(
             "exact_cache_policy_v1\tposition_id={}\texact_cache_scope={}\texact_cache_policy={}",

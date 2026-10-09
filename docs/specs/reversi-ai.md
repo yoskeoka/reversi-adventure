@@ -6,6 +6,62 @@ Reversi AI engine providing pluggable evaluation strategies, Negascout search wi
 
 ## Evaluation
 
+### Winner-empty score migration (current contract)
+
+This section supersedes the legacy raw-disc-difference contracts below. New AI
+search and training use `score_contract="winner-empty-v1"`. For a terminal
+board with neither side able to move, let `d = own - opponent` and
+`empty = 64 - own - opponent`; return `d + sign(d) * empty` from the queried
+side's perspective. Draws and the empty board return zero, wipeouts return
+±64, and full-board scores equal the physical disc difference. Exact and
+heuristic terminal leaves, root/child values and legal pass/PV propagation
+share this formula. Minimax rankings and PVs may change; old root values must
+never be relabelled or corrected by a constant.
+
+Physical `Board::count`, `Game::score`, Godot/UI scores, `disc_counts`, random
+game `black`/`white`, and whole-game physical `score_black` retain actual disc
+counts. Feature extraction/catalog, 64 features, 60 phases, bounds ±64,
+normalization divisor 64, defaults/presets and turn-cache policy remain fixed.
+
+New identities are mandatory and inconsistent combinations fail closed:
+
+| Surface | Identity |
+| --- | --- |
+| Search/Advisor | semantics 2, `project-ai-advisor-v2`, score contract in context |
+| Training | `reversi-ai-pattern-training-v2`, manifest/record schema2, target `winner_empty_v1_for_side` |
+| Artifact/features | format2, `score_scale="winner_empty_v1"`, explicit score contract, trained runtime2 |
+| Reinforcement | `reversi-ai-pattern-reinforcement-v4`, manifest6, game/report/checkpoint4 |
+| Random inputs | `reversi-ai-random-inputs-v2`, `project-owned-random-games-v2`, manifest/output/game/record2 |
+| Oracle | golden/analysis2 with score contract; corpus1 stays unchanged |
+| Whole game | `reversi-ai-whole-game-v3`, manifest2, report3, evidence2 |
+| Threshold/cache | `exact-threshold-assessment-v2`, `exact-cache-verification-v2`, new query/receipt contract |
+
+New provenance validates the version-specific trainer/optimizer pair. Runtime
+CLI/Godot reject format1 artifacts. Legacy Python artifacts, records and
+evidence are accepted only through explicit `--legacy-offline` validation;
+reinforcement run/regret-command/regret-timeout accept manifest6 only.
+Legacy manifest3 retains no-policy shape; manifest4/5 retain turn policy and
+manifest5's flexible settings. Their report/checkpoint3 and raw-disc training
+targets retain their original semantics, including no solver wipeout rewrite.
+Producer, schema, contract, scale, CLI SHA and source digest mismatches are
+errors, even after a digest is resealed. Random v1 verification requires its
+frozen source snapshot/commit, never replacing its source digest with new code.
+
+Legacy golden/reference/data/receipts remain immutable offline evidence;
+version-specific projections reproduce the original terminal formula and
+preserve failed/incomplete status. New terminal-child validators independently
+use winner-empty. Tiny new fixtures are separate files. Root minimax/golden
+values cannot be migrated from terminal metadata alone. Any future data
+migration writes a separate directory, records original digests and mapping,
+and derives labels from a verified legal replay's terminal board.
+
+Engine migration does not lift production freeze: 0040 independent root/child
+correctness and resource-response gates, human configuration/performance
+judgment, 0037 pilot, 0019 new baseline/validation/candidate cycle, and 0018
+handicapped Oracle acceptance remain separate. `strong-engine-hcap-v1` stays
+12/12/12 with exact16. Production regeneration/retraining, long Oracle solves,
+game-cache adoption, default20 and strength claims are not migration evidence.
+
 ### EvalFactors
 
 Score breakdown for human-readable explanation.
@@ -78,13 +134,13 @@ evaluator, or assign human-readable factors to a pattern score.
   disc count minus four, covering occupied counts `4..=63`. A pass leaves the
   phase unchanged; terminal 64-disc positions have no pattern phase. Scores
   must not interpolate between phase tables.
-- A trained pattern score predicts the requested color's final disc
-  differential. It is an integer in inclusive range `-64..=64`. Accumulation
+- A trained pattern score predicts the requested color's winner-empty terminal
+  score. It is an integer in inclusive range `-64..=64`. Accumulation
   is deterministic integer arithmetic and an artifact is rejected when any
   contribution, declared aggregate bound, or checked aggregate cannot satisfy
   that range without overflow.
 - A weight artifact is immutable and identifies its format version, catalog
-  digest, phase definition, final-disc-difference score scale, safe source
+  digest, phase definition, winner-empty score scale and contract, safe source
   provenance, and weight digest. Provenance may name a reproducible trainer,
   input-manifest digest, and licenses; it must not embed private input data.
   Its catalog, phase, scale, version, and weight identity are score-affecting
@@ -104,7 +160,7 @@ the SHA-256 `weight_digest` and `artifact_digest` identities.  A load or
 validation failure is a clear error; it never selects a fallback evaluator.
 
 The evaluator sums the 64 sparse entries selected by `extract_features()` for
-the board phase and requested color, returning a final-disc-difference score
+the board phase and requested color, returning a winner-empty prediction
 with default (empty) `EvalFactors`.  Its context fingerprint includes a
 trained-runtime version plus the artifact's immutable identity, so retained
 transposition-table entries cannot cross artifacts or feature contracts.
@@ -121,13 +177,13 @@ mode neither constructs `AiPlayer` nor exposes explanation output.
 future pattern-weight artifact. It is not loaded by the game or GDExtension,
 and neither its datasets nor caches are runtime dependencies.
 
-- A version-1 input record is JSON Lines and states a record id, source id,
+- A version-2 input record is JSON Lines and states its score contract, record id, source id,
   SPDX license, source digest, 64-character row-major `B`/`W`/`.` board,
-  side (`B` or `W`), final-disc-difference target for that side, and one of
+  side (`B` or `W`), winner-empty target for that side, and one of
   `train`, `validation`, or `held_out`. Optional candidate positions state the
   same board, side, and target fields and permit move-quality measurement.
   Targets are finite integers in `-64..=64`; the only accepted target semantic
-  is `final_disc_difference_for_side`.
+  is `winner_empty_v1_for_side`. Version-1 raw-difference records remain legacy offline evidence.
 - A versioned manifest pins each input pathname, SHA-256 digest, license,
   trainer version, random seed, feature-contract digest, optimizer parameters,
   and split names. The manifest digest is the SHA-256 of its canonical JSON
@@ -157,8 +213,8 @@ and neither its datasets nor caches are runtime dependencies.
 
 ### Bounded pattern reinforcement cycle
 
-The production baseline and validation inputs are generated from complete,
-legal, project-owned random games under a frozen version-1 generator manifest.
+New production baseline and validation inputs must be generated from complete,
+legal, project-owned random games under a frozen version-2 generator manifest.
 It pins the exact producer checkout commit, its merged-main base commit, SHA-256
 for the generator and both imported game/training modules, `CC0-1.0` provenance,
 master seed, game-id lists for `train`, `validation`, and `held_out`, and the
@@ -167,8 +223,8 @@ separate seeded split shuffle give independent, repeatable streams. Each move
 is selected uniformly by index from sorted legal moves; a pass occurs only
 when no move exists. A game must reach the actual terminal board within its
 turn cap. Its complete log records moves, passes, terminal disc counts and a
-digest. Every emitted nonterminal record has the final black-minus-white disc
-count signed for its side to move, including games ending in an early wipeout.
+digest. Every emitted nonterminal record has the final winner-empty score
+signed for its side to move, including games ending in an early wipeout.
 
 Records start after eight placements by default. Phases use placement counts:
 opening 8-20, midgame 21-44, endgame 45-59. Canonical absolute-color D4
@@ -190,7 +246,7 @@ cycle uses the exact baseline and validation digests; 0018 acceptance openings
 remain unread until their own gate.
 
 The historical version-3 reinforcement contract uses an immutable manifest
-(new prepare/run use schema5 as defined under Explicit search settings below).
+(new prepare/run use schema6 as defined under Explicit search settings below).
 It records the baseline artifact identity and SHA-256, candidate executable
 SHA-256, trainer and update-rule versions, feature contract, trained evaluator,
 all three search depths, exact-solver threshold, disabled book, self-play and
@@ -199,15 +255,16 @@ and an actual random seed. These identify the method and the compared inputs;
 the producer source commit and reproducing the generated openings from a seed
 are not acceptance gates. Version-1 and version-2 manifests and reports are never evidence
 for version-3 candidate selection, although version-1 and version-2 baseline artifacts remain
-valid inputs. Version-3 pins `reset_contract` with protocol `new_game-v1`,
+valid inputs to that historical producer only. Version-3 pins `reset_contract` with protocol `new_game-v1`,
 cache lifetime `one-game`, and the same candidate executable SHA-256. Prepare
 checks a control acknowledgement without playing a game. Every self-play and
 candidate-match game resets each participating player before any move; its
 record preserves the game ID and acknowledged reset events. Offline
 verify rejects a missing contract, an unsupported manifest, mismatched binary identity,
 or missing per-game reset evidence. Version-1 and version-2 trained artifacts
-remain usable baselines, and the artifact loaders also accept version-3
-reinforcement provenance.
+remain usable baselines in explicit legacy offline verification, and the frozen
+artifact loaders accept version-3 reinforcement provenance. New runtime and
+prepare/run require format2 and current producer identities.
 
 The `strong-engine-hcap-v1` candidate label requires all three depths to be
 12 and the exact-solver threshold to be 16. Its decision protocol timeout must
@@ -521,7 +578,14 @@ input position. It runs every position with a fresh `SearchEngine`, strategic
 evaluator, supplied search configuration, and a fixed node-only limit. Each
 record includes the source position id and board digest plus
 the selected outcome, score, PV, completed depth, nodes searched, exact flag,
-and elapsed time.
+and elapsed time. New records explicitly include `score_contract` and
+`search_semantics_version=2`; old profiler samples retain their original
+binary identity and must not be relabelled as winner-empty evidence.
+
+The move-only CLI retains its stdout protocol and existing
+`search_diagnostic_v1` fields. It additionally writes
+`score_contract_v1<TAB>position_id=ID<TAB>score_contract=winner-empty-v1<TAB>search_semantics_version=2`
+to stderr for each search. New benchmark queries require that matching identity.
 
 The deterministic comparison projection excludes elapsed time and requires
 the same outcome, score, PV, completed depth, nodes searched, and exact flag
@@ -530,7 +594,7 @@ same-host release-build measurement only. The profiler is neither game code
 nor an oracle candidate protocol and does not change the public move-only CLI.
 
 `--node-limit` remains the required, deterministic diagnostic mode. Its JSON
-record and deterministic projection remain unchanged. `--time-limit-ms` is a
+record retains its deterministic fields and adds the score identity. `--time-limit-ms` is a
 separate, positive, mutually exclusive full-depth timing mode: every input
 position receives a fresh `SearchEngine` and a time-only monotonic
 `SearchBudget`, never a node ceiling. A timing-mode record identifies its
@@ -1195,8 +1259,8 @@ The versioned corpus and normalized report use the following wire contract:
 
 An oracle analysis reports one record for each legal root move and derives the
 full equal-value `optimal_moves` set. Scores are signed Egaroucid search values
-from the root side's perspective; when `exact` is true, the value is the final
-disc difference, while an incomplete search value is heuristic. A project AI's
+from the root side's perspective; when `exact` is true, the value is the
+winner-empty terminal score, while an incomplete search value is heuristic. A project AI's
 selected move may be included as `selected_move`; its `selected_value` is the
 corresponding oracle value and `regret` is `best_value - selected_value`. Each
 selected/root evaluation contains `completed_depth`, `nodes`, `elapsed_ms`, and
@@ -1261,17 +1325,17 @@ Godot の `set_ai_with_exact_threshold(evaluator, opening, midgame, endgame, exa
 各深度 1..64、exact 0..30 を変換前の整数で検証する。不正値・未知 evaluator は false を
 返し、既存 AI を変更しない。旧 `set_ai` の呼出契約と既定 exact16 は維持する。
 
-Reinforcement の新規 prepare/run は schema5 を使用する。自己対局専用の opening、
+Reinforcement の新規 prepare/run は schema6 を使用する。自己対局専用の opening、
 midgame、endgame 深度は各 1..64、exact は 0..30 を独立に指定でき、既定は
 12/12/12・exact16。manifest/report は全設定、CLI SHA-256、資源上限、turn policy を
 固定し、run は記録値を実行する。candidate-match/regret/0018 の
-`strong-engine-hcap-v1` は常に 12/12/12・exact16。schema3/4 の完成 report は元の
+`strong-engine-hcap-v1` は常に 12/12/12・exact16。schema3/4/5 の完成 report は元の
 設定範囲・policy の意味で offline 検証する。旧 manifest で新 run を開始できず、
 中断 run の別 identity による再開も認めない。reset ack と timeout/未完了時の
 fail-closed は維持し、部分 exact score を教師値へ使わない。
 
-Project の終局 score は両色生存時の実石数差、wipeout のみ ±64、空盤は 0。
-固定 Oracle Egaroucid v7.8.1 は勝者へ残り空きを加算する。両契約の値を区別して保存し、
+旧 Project の終局 score は両色生存時の実石数差、wipeout のみ ±64、空盤は 0。
+新 Project は固定 Oracle Egaroucid v7.8.1 と同じ勝者空き加算を採用する。旧証拠は両契約を区別して保存し、
 root へ一律 ±1 を足す補正は行わない。合法 continuation、terminal leaf、root と
 選択 child の独立再計算を根拠に、調査結果を「score 契約差を terminal/root/child
 まで確認」「符号/手番/validator の誤りを確認」「solver 誤りの証拠あり」

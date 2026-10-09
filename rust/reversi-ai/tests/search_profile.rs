@@ -76,6 +76,10 @@ fn search_profile_encodes_terminal_outcomes_and_repeats_fixed_node_projection() 
     fs::remove_file(&path).expect("failed to remove temporary corpus");
 
     assert_eq!(first.len(), 3);
+    for record in &first {
+        assert_eq!(record["score_contract"], "winner-empty-v1");
+        assert_eq!(record["search_semantics_version"], 2);
+    }
     assert_eq!(
         first[0]["outcome"]["kind"], "move",
         "initial position should encode a move"

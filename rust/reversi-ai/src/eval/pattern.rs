@@ -8,7 +8,7 @@ use reversi_engine::{board::Board, types::Color};
 
 pub const PATTERN_FEATURE_COUNT: usize = 64;
 pub const PATTERN_PHASE_COUNT: usize = 60;
-pub const PATTERN_FORMAT_VERSION: u16 = 1;
+pub const PATTERN_FORMAT_VERSION: u16 = 2;
 pub const FINAL_DISC_DIFFERENTIAL_MIN: i16 = -64;
 pub const FINAL_DISC_DIFFERENTIAL_MAX: i16 = 64;
 
@@ -63,7 +63,7 @@ pub enum PatternError {
 /// The only score scale accepted by this artifact format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatternScoreScale {
-    FinalDiscDifferential,
+    WinnerEmptyV1,
 }
 
 /// Safe provenance identifiers; never raw trainer input data.
@@ -142,7 +142,7 @@ impl PatternWeightArtifact {
         if usize::from(self.phase_count) != PATTERN_PHASE_COUNT {
             return Err(PatternError::InvalidPhaseDefinition);
         }
-        if self.score_scale != PatternScoreScale::FinalDiscDifferential {
+        if self.score_scale != PatternScoreScale::WinnerEmptyV1 {
             return Err(PatternError::InvalidScoreScale);
         }
         if self.weight_digest != digest_weights(&self.weights) {
@@ -217,7 +217,7 @@ pub fn phase_for_occupied(occupied: u32) -> Result<u8, PatternError> {
 }
 
 /// Deterministically accumulates selected table contributions on the required
-/// final-disc-difference scale.
+/// winner-empty-v1 scale.
 pub fn accumulate_final_disc_score(contributions: &[i16]) -> Result<i16, PatternError> {
     let score = contributions.iter().try_fold(0i64, |sum, &contribution| {
         if !(FINAL_DISC_DIFFERENTIAL_MIN..=FINAL_DISC_DIFFERENTIAL_MAX).contains(&contribution) {
@@ -336,7 +336,7 @@ mod tests {
             PATTERN_FORMAT_VERSION,
             catalog_digest(),
             PATTERN_PHASE_COUNT as u8,
-            PatternScoreScale::FinalDiscDifferential,
+            PatternScoreScale::WinnerEmptyV1,
             PatternProvenance {
                 trainer_id: "fixture-trainer-v1".into(),
                 input_manifest_digest: 7,
@@ -439,7 +439,7 @@ mod tests {
             PATTERN_FORMAT_VERSION,
             0,
             PATTERN_PHASE_COUNT as u8,
-            PatternScoreScale::FinalDiscDifferential,
+            PatternScoreScale::WinnerEmptyV1,
             valid.provenance().clone(),
             0,
             [0; PATTERN_FEATURE_COUNT],
@@ -459,7 +459,7 @@ mod tests {
             PATTERN_FORMAT_VERSION,
             catalog_digest(),
             PATTERN_PHASE_COUNT as u8,
-            PatternScoreScale::FinalDiscDifferential,
+            PatternScoreScale::WinnerEmptyV1,
             valid.provenance().clone(),
             digest_weights(&[]),
             [2; PATTERN_FEATURE_COUNT],

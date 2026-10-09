@@ -61,7 +61,7 @@ pub fn generate_explanation(
     };
     let score = search_result.score?;
 
-    // Exact endgame scores are final disc margins, not heuristic values. Do
+    // Exact endgame scores use winner-empty-v1 margins, not heuristic values. Do
     // not call the evaluator or manufacture factor deltas for this path.
     if search_result.exact {
         return Some(MoveExplanation {

@@ -42,7 +42,9 @@ def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
                       "board": board, "side": side,
                       "seat": side if assignment == 0 else oracle.other(side),
                       "move": move, "decision_elapsed_ns": 1,
-                      "search": {"elapsed_us": 1, "nodes": 0 if move == "pass" and not exact else 1,
+                      "search": {"score_contract": whole_game.SCORE_CONTRACT, "search_semantics_version": 2,
+                                 "score_identity_raw": f"score_contract_v1\tposition_id={row['id']}-seat{assignment}-turn{turn}\tscore_contract=winner-empty-v1\tsearch_semantics_version=2",
+                                 "elapsed_us": 1, "nodes": 0 if move == "pass" and not exact else 1,
                                  "exact": exact, "score": None if move == "pass" and not exact else 0,
                                  "completed_depth": depth,
                                  "outcome": "pass" if move == "pass" else "move",
@@ -67,7 +69,7 @@ def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False) -> di
                             target_prefix and row["id"] == "opening-4" and assignment == 0)
              for row in whole_game.opening_rows()
              for assignment in (0, 1)]
-    report = {"schema_version": 1, "runner_version": whole_game.VERSION, "kind": "cli",
+    report = {"schema_version": 3, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION, "kind": "cli",
               "openings_sha256": whole_game.digest(whole_game.OPENINGS),
               "binary": {"path": "/synthetic/cli", "sha256": "0" * 64},
               "artifact": {"path": "/synthetic/artifact", "sha256": "1" * 64},
@@ -333,7 +335,7 @@ class WholeGameTests(unittest.TestCase):
                  "oracle_score": step["search"]["score"],
                  "selected_score": step["search"]["score"]}
                 for game in report["games"] for step in game["steps"] if step["search"]["exact"]]
-        evidence = {"schema_version": 1, "runner_version": whole_game.VERSION,
+        evidence = {"schema_version": 2, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION,
                     "cli_report_digest": report["report_digest"],
                     "oracle_binary_sha256": "2" * 64,
                     "oracle_profile": whole_game.oracle.profile_metadata(whole_game.profile(12)),
@@ -469,7 +471,7 @@ class ResumableTests(unittest.TestCase):
 
     def test_genuine_v1_reports_without_decision_resources_remain_valid(self):
         report = synthetic_report(8)
-        self.assertEqual(report["schema_version"], 1)
+        self.assertEqual(report["schema_version"], 3)
         whole_game.verify(report)
         changed = copy.deepcopy(report)
         changed["games"][0]["steps"][0]["resource_observations"] = {

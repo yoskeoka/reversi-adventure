@@ -24,7 +24,7 @@ import exact_cache_verification_oracle as queries
 import exact_cache_verification_evidence as evidence
 
 prep = et.prep
-VERSION = "exact-cache-verification-v1"
+VERSION = "exact-cache-verification-v2"
 ROOT = prep.ROOT
 SAMPLE = Path(__file__).with_name("exact-cache-verification-sample-v1.json")
 FIXTURE = Path(__file__).with_name("fixtures") / "exact-cache-counterexample-v1.json"
@@ -56,6 +56,7 @@ class Progress:
 
 def seal(value):
     wg.require(value == wg.sealed(value), "verification digest mismatch")
+    wg.require(value.get("score_contract") == wg.SCORE_CONTRACT, "verification score contract mismatch; old evidence requires --legacy-offline")
 
 def sample():
     value = json.loads(SAMPLE.read_text())
@@ -126,13 +127,13 @@ def regression(m, directory, progress, verify_only=False):
         rows.append({"test": test, "argv": argv, "stdout": raw.stdout, "stderr": raw.stderr,
                      "returncode": raw.returncode, "wall_ns": time.monotonic_ns()-started})
         if raw.returncode != 0 or f"test {test} ... ok" not in raw.stdout or "1 passed; 0 failed;" not in raw.stdout:
-            failure = wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"], "fixtures": rows,
+            failure = wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"], "fixtures": rows,
                 "status": "failed", "failure": "short regression failed: "+test})
             verify_regression(m, failure)
             wg.atomic_write(path, failure)
             progress.emit("regression", "none", "fixture", len(rows), len(REGRESSIONS), "failed")
             raise wg.BenchmarkError(failure["failure"])
-    result = wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"],
+    result = wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"],
         "status": "completed", "failure": None, "fixtures": rows, "proved_root_score": 4, "proved_selected_child_score": 4})
     verify_regression(m, result)
     wg.atomic_write(path, result)
@@ -178,7 +179,7 @@ def prepare(args):
     audit = evidence.verify_evidence(args.evidence_dir.resolve())
     units = games.units(sample())
     prep.probe_reset(Path(inputs["cli"]["path"]), Path(inputs["artifact"]["path"]), 10)
-    manifest = wg.sealed({"version": VERSION, "source_revision": revision, "harness_revision": revision,
+    manifest = wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "source_revision": revision, "harness_revision": revision,
         "build": build, "source_files": [prep.pin(p) for p in source_paths()],
         "harness_files": [prep.pin(p) for p in harness_paths()], "inputs": inputs,
         "host": prep.host(), "settings": SETTINGS, "games_total": 3, "conditions_total": 2,
@@ -252,7 +253,7 @@ def report(m, results, oracle, regression_result):
         for condition in base["conditions"]:
             condition.pop("averages", None)
             condition.update(status="failed", failure="independent Oracle evidence failed; no averages")
-    return wg.sealed({"version": VERSION, "manifest_digest": m["report_digest"],
+    return wg.sealed({"version": VERSION, "score_contract": wg.SCORE_CONTRACT, "manifest_digest": m["report_digest"],
         "game_digests": [r["report_digest"] for r in results],
         "regression_digest": regression_result["report_digest"], "games": base, "oracle": oracle,
         "production_adoption": False,
@@ -323,6 +324,8 @@ def main(argv=None):
     p.add_argument("--source-revision", required=True)
     for name in ("run", "verify", "verify-inputs"):
         p = sub.add_parser(name)
+        if name in ("verify", "verify-inputs"):
+            p.add_argument("--legacy-offline", action="store_true")
         p.add_argument("--manifest", required=True, type=Path)
         p.add_argument("--progress-every", type=int, default=1)
     args = parser.parse_args(argv)
@@ -334,7 +337,11 @@ def main(argv=None):
         if args.command == "prepare":
             prepare(args)
         else:
-            execute(args.manifest, args.command, args.progress_every)
+            if getattr(args, "legacy_offline", False):
+                from legacy_offline import assessment
+                assessment(args.manifest, args.command, args.progress_every, Path(__file__).stem)
+            else:
+                execute(args.manifest, args.command, args.progress_every)
     except KeyboardInterrupt:
         Progress().emit(*LAST, "interrupted")
         return 130
