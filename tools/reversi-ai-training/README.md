@@ -117,14 +117,16 @@ Use midgame depth 8 when needed, or exact threshold 0 to disable solving.
 Thresholds such as 18, 20, 22, and 24 set the number of empty squares at which
 exact search starts.
 
-The defaults remain `12/12/12`, exact16. For the selected pre-training
-TrainedEvaluator self-play efficiency profile, explicitly set all three depth
-variables to `8` and retain exact16 and the default `turn` cache policy. Run
-the fixed eight-game sample to completion; record the 180-second mean goal and
-the 300-second nearest-rank P95 review threshold. These are whole-game search
-efficiency references before the larger learning batch. A game is never cut
-short for exceeding them. The per-decision response timeout remains a separate
-watchdog against a stalled search and does not cap the batch's total runtime.
+The defaults are `12/12/12` with exact16. For the selected pre-training
+TrainedEvaluator profile, set all three self-play depth variables to `8`.
+Keep exact16 and cache scope `turn`.
+
+Run all eight fixed games to completion. Record the mean goal of 180 seconds
+and the nearest-rank P95 review point of 300 seconds. These times guide engine
+tuning before a large learning batch. They do not stop a game.
+
+The CLI response timeout is separate. It can detect a search that stops
+responding. It does not limit the full batch.
 
 Completion still depends on the frozen time and node limits. A failed or
 interrupted game cannot supply training labels or a completed report.
