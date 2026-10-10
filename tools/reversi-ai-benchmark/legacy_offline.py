@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,14 @@ def repository_relative(path):
             "reversi-ai-oracle", "reversi-ai-benchmark", "reversi-ai-training"):
             return Path(*parts[index:])
     raise ValueError("legacy producer path is outside the recorded tool registry")
+
+
+def restore_pinned_entrypoint(script, extracted_path, recorded_path):
+    extracted = shlex.quote(str(Path(extracted_path).resolve())).encode()
+    recorded = shlex.quote(str(Path(recorded_path).resolve())).encode()
+    if script.count(extracted) != 1:
+        raise ValueError("legacy launch script entrypoint mismatch")
+    return script.replace(extracted, recorded, 1)
 
 
 class OfflineProcesses:
@@ -181,6 +190,16 @@ def assessment(path, command, every, entrypoint):
         producer.wg.OPENINGS = Path(manifest["inputs"]["openings"]["path"])
         if hasattr(producer, "ROOT"):
             producer.ROOT = recorded_root
+        if entrypoint == "exact_cache_verification":
+            recorded_entrypoints = [item["path"] for item in manifest["harness_files"]
+                                    if Path(item["path"]).name == "exact_cache_verification.py"]
+            if len(recorded_entrypoints) != 1:
+                raise ValueError("legacy exact-cache entrypoint pin is missing or duplicated")
+            original_script_bytes = producer.script_bytes
+            def pinned_script_bytes(directory):
+                return restore_pinned_entrypoint(
+                    original_script_bytes(directory), producer.__file__, recorded_entrypoints[0])
+            producer.script_bytes = pinned_script_bytes
         if "source_files" in manifest:
             entries = subprocess.check_output(["git", "-C", str(ROOT), "ls-tree", "-r", "--name-only",
                 manifest["source_revision"], "Cargo.toml", "Cargo.lock", "rust"], text=True).splitlines()

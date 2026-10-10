@@ -119,3 +119,29 @@ terminal/root/childまで確認した。ユーザーはEdaxも同じ規則なら
 0046の原因確認だけで本番freeze・正確性gateを解除しない。
 設定/時間予算/採否の人間判断、採用時の別計画によるproduction互換更新は未達。
 0045完了を再利用の採用・0035の完了と扱わない。
+
+## winner-empty移行後のoffline検証と残gate（2026-10-10）
+
+ブラックボックス契約を先に更新し、旧0035/0041/0045の時間とOracle証拠は元のscore契約のまま保持した。
+これらのreceiptをwinner-empty-v1の性能・Oracle一致へ読み替えず、productionは12/12/12、exact16、turnを維持する。
+
+保存済み証拠の再検証はすべてofflineで行った。0035のlegacy registry manifestは14件
+（whole-game 10、comparison 2、独立Oracle照合2）が通過した。0041のlegacy exact-threshold manifestも通過した。
+0045のexact-cache manifestは、凍結verifierを一時Git展開した時にlauncher内entrypoint pathが変わる問題を修正後、
+終了code 0で成功した。6局、10 query、3 regressionはすべて保存済み成功としてskipされ、workloadは追加していない。
+修正はmanifest-pinned original entrypointをbyte比較前に復元し、runnerや保存evidenceは変更しない。
+空白を含むpathの復元と不一致時の拒否をoffline unit testで確認した。
+
+winner-empty-v1のbounded Rust testは各1件成功した。
+`tiny_both_alive_root_child_and_pv_use_independent_winner_empty_score`、
+`interruption_after_research_started_discards_exact_attempt`、
+`expired_deadline_returns_the_documented_fallback`、
+`cancellation_returns_the_documented_fallback`、
+`interrupted_before_depth_one_returns_legal_fallback_without_score`。
+専用Python test 7件と`make oracle-test`も成功した。これらはroot/選択child/PVの局所意味と
+未完了探索時の資源応答を確認するが、外部Oracleの新契約照合や性能証拠ではない。
+
+人間の設定/採否判断と許容する局別・平均・学習batch総時間は未決である。新契約での外部Oracle root/選択child
+照合と性能測定もない。したがって設定判断を0037/0019へ同期せず、0035と本計画を削除しない。
+このPRはoffline verificationとbounded code gateまでを閉じ、残る人間判断および別途固定する外部測定の上限を
+本計画のactive gateとして残す。

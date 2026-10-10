@@ -934,13 +934,20 @@ count; regression total is the fixed fixture count. `--progress-every N`
 defaults to one and thins ordinary progress only; failures, interruption and
 completion always flush. No retries add conditions, games or query positions.
 
+Completed 0035, 0041 and 0045 reports retain their original score contracts.
+Their timing and Oracle receipts do not prove winner-empty performance or
+winner-empty Oracle agreement. Until the human accepts the settings, cache
+policy and time budget, production remains at 12/12/12, exact16 and turn, with
+cross-decision reuse suspended.
+
 The report separates exact work from whole-game time and identifies the
 single-run sample bias. Equal heuristic node counts with different timing do
 not prove a cache effect. Unselected exact roots are not independently Oracle
 verified. Historical timing retains its original digest/settings and is not a
-control for the new binary. Even successful evidence leaves production adoption,
-the unresolved score-contract issue and time-budget decisions to 0040 and the
-human; experimental exact20 does not authorize changing production exact16.
+control for the new binary. Even successful historical evidence leaves
+production adoption, winner-empty Oracle/performance comparison and time-budget
+decisions to 0040 and the human; experimental exact20 does not authorize
+changing production exact16.
 
 ### Experimental exact-threshold assessment
 
