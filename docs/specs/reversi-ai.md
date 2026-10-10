@@ -796,22 +796,36 @@ offline under their original version and identities. New whole-game preparation
 and measurement reject current-CLI `game` conditions during preflight.
 The move-only stdout protocol is unchanged.
 
-Self-play may select depth `12/8/12` with the 16-empty exact threshold while
-candidate matches and 0018 acceptance retain their separately frozen search
-settings. A version-4 production manifest and version-3 report identify the selected
-self-play depths, exact threshold, and executable SHA-256. `prepare`, `run`,
-and `verify` reject a mismatched binary or manifest, including an older
-manifest lacking these identities. The report's manifest digest includes the
-version-4 safety policy; artifact/update and report encoding retain version 3.
-Heuristic positions at depth 8 and 12 are
-different workloads.
+Fresh reinforcement manifests may explicitly select a self-play search profile
+independently of candidate matching and 0018 acceptance. The selected profile
+for preparing TrainedEvaluator self-play is `8/8/8`, exact threshold 16, with
+the production `turn` exact-cache policy. The `strong-engine-hcap-v1` candidate
+profile and its match/acceptance conditions remain `12/12/12`, exact16. This
+choice does not change global defaults or reinterpret earlier manifests.
+The version-6 production manifest and version-4 report identify the selected
+self-play depths, exact threshold, cache policy, and executable SHA-256.
+`prepare`, `run`, and `verify` reject mismatched identities. Heuristic
+positions at different depths are different workloads.
+
+Before starting the larger TrainedEvaluator learning batch, measure the
+selected self-play profile with a validated, immutable TrainedEvaluator
+artifact and the current producer. The goal is to reduce the aggregate time of
+that later batch by improving the search engine first. For a fixed three-game
+measurement sample, every game must complete within 300 seconds and the
+arithmetic mean must be at most 180 seconds. These are whole-game efficiency
+targets; they are not per-decision `time_limit_ms` values or a total training
+batch deadline. Record every game, including a timeout as a failed sample;
+never omit slow or incomplete games from the mean. If the baseline misses by a
+large margin, try up to three bounded midgame-search improvements, verify each
+candidate's search results, then remeasure the same games and artifact. If
+those attempts still miss, record the best result and the remaining tradeoff
+before choosing a compromise profile.
 
 Within one configuration, baseline and candidate must
 agree on move, score, and completed exactness for the same positions; exact
-scores are checked against the independent oracle. The report states both
-workload times, measured cause of any improvement, and the available settings
-if the 2–3 minute guide is missed. The guide becomes an acceptance threshold
-only after the oracle's whole-game result has been measured.
+scores are checked against the independent oracle. Performance evidence
+reports the selected self-play profile and its per-game wall times before the
+larger learning batch is started.
 
 ### Durable whole-game measurement and game boundaries
 

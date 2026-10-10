@@ -117,6 +117,13 @@ Use midgame depth 8 when needed, or exact threshold 0 to disable solving.
 Thresholds such as 18, 20, 22, and 24 set the number of empty squares at which
 exact search starts.
 
+The defaults remain `12/12/12`, exact16. For the selected pre-training
+TrainedEvaluator self-play efficiency profile, explicitly set all three depth
+variables to `8` and retain exact16 and the default `turn` cache policy. The
+300-second per-game and 180-second three-game mean goals are whole-game search
+efficiency criteria before the larger learning batch; they do not cap the
+batch's total runtime.
+
 Completion still depends on the frozen time and node limits. A failed or
 interrupted game cannot supply training labels or a completed report.
 

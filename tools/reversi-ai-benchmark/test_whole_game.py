@@ -23,7 +23,8 @@ TARGET_BOARD = "BBBBBBBB.WWBBBBB..WWBWBB.WWWWBBB...WWWBB...WWW.B................
 
 
 def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
-                   target_prefix: bool = False) -> dict:
+                   target_prefix: bool = False, opening_depth: int = 12,
+                   endgame_depth: int = 12) -> dict:
     oracle = whole_game.oracle
     board, side = row["board"], row["side"]
     steps = []
@@ -37,7 +38,8 @@ def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
         occupied = 64 - board.count(".")
         exact = occupied >= 48
         depth = 64 - occupied if exact else (0 if move == "pass" else
-                                           12 if occupied <= 20 or occupied >= 45 else midgame_depth)
+                                           opening_depth if occupied <= 20 else
+                                           endgame_depth if occupied >= 45 else midgame_depth)
         steps.append({"id": f"{row['id']}-seat{assignment}-turn{turn}",
                       "board": board, "side": side,
                       "seat": side if assignment == 0 else oracle.other(side),
@@ -64,9 +66,11 @@ def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
             "search_count": len(steps)}
 
 
-def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False) -> dict:
+def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False,
+                     opening_depth: int = 12, endgame_depth: int = 12) -> dict:
     games = [synthetic_game(row, assignment, midgame_depth,
-                            target_prefix and row["id"] == "opening-4" and assignment == 0)
+                            target_prefix and row["id"] == "opening-4" and assignment == 0,
+                            opening_depth, endgame_depth)
              for row in whole_game.opening_rows()
              for assignment in (0, 1)]
     report = {"schema_version": 3, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION, "kind": "cli",
@@ -74,7 +78,8 @@ def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False) -> di
               "binary": {"path": "/synthetic/cli", "sha256": "0" * 64},
               "artifact": {"path": "/synthetic/artifact", "sha256": "1" * 64},
               "oracle_profile": None,
-              "settings": {"opening_depth": 12, "midgame_depth": midgame_depth, "endgame_depth": 12,
+              "settings": {"opening_depth": opening_depth, "midgame_depth": midgame_depth,
+                           "endgame_depth": endgame_depth,
                            "exact_empty": 16, "timeout_seconds": 310,
                            "exact_cache_scope": "game",
                            "max_decisions": 120, "max_rss_kib": 1000,
@@ -96,6 +101,48 @@ class WholeGameTests(unittest.TestCase):
         oracle = whole_game.oracle
         for occupied, depth in ((20, 12), (21, 8), (44, 8), (45, 12), (47, 12), (48, 16)):
             self.assertEqual(oracle.profile_depth_at(whole_game.profile(8), occupied), depth)
+
+    def test_selected_efficiency_sample_and_phase_profile(self):
+        rows = whole_game.measurement_rows("efficiency3")
+        self.assertEqual([(row["id"], assignment) for row, assignment in rows],
+                         [("opening-1", 0), ("opening-2", 0), ("opening-4", 0)])
+        report = synthetic_report(8, opening_depth=8, endgame_depth=8)
+        whole_game.verify(report)
+        game = report["games"][0]
+        opening_step = next(step for step in game["steps"] if 64 - step["board"].count(".") <= 20
+                            and step["move"] != "pass")
+        self.assertEqual(opening_step["search"]["completed_depth"], 8)
+
+    def test_whole_game_limit_and_three_game_efficiency_aggregate(self):
+        games = [dict(wall_ns=value) for value in (170_000_000_000, 180_000_000_000,
+                                                   190_000_000_000)]
+        gate = whole_game.efficiency_performance_gate(games)
+        self.assertEqual(gate["mean_game_ns"], 180_000_000_000)
+        self.assertTrue(gate["max_game_within_target"])
+        self.assertTrue(gate["mean_within_target"])
+        report = synthetic_report(8, opening_depth=8, endgame_depth=8)
+        report["settings"]["game_time_limit_seconds"] = 0.00000005
+        redigest(report)
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "game exceeded configured wall limit"):
+            whole_game.verify(report)
+
+    def test_efficiency_identity_requires_real_artifact_and_production_search_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "cli"
+            artifact = Path(directory) / "artifact.json"
+            binary.write_bytes(b"cli")
+            artifact.write_bytes(b"validated-artifact")
+            args = SimpleNamespace(kind="cli-persistent", binary=binary, artifact=artifact,
+                exact_empty=16, node_limit=50_000, cache_scope="turn", opening_depth=8,
+                midgame_depth=8, endgame_depth=8, game_sample="efficiency3",
+                game_time_limit_seconds=300, search_time_limit_ms=2_500,
+                timeout_seconds=310, max_decisions=120, max_rss_kib=1_000_000)
+            identity = whole_game.measurement_identity(args)
+            self.assertEqual(identity["settings"]["game_sample"], "efficiency3")
+            self.assertEqual(identity["settings"]["search_time_limit_ms"], 2_500)
+            args.endgame_depth = 12
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "TrainedEvaluator efficiency sample requires"):
+                whole_game.measurement_identity(args)
 
     def test_independent_replay_and_resource_verification(self):
         report = synthetic_report()
@@ -351,14 +398,18 @@ class WholeGameTests(unittest.TestCase):
 
 
 class FakeSeat:
-    def __init__(self, kind, binary, artifact, depth, timeout, side, *args):
+    def __init__(self, kind, binary, artifact, depth, timeout, side, *args, **kwargs):
         self.depth, self.side, self.kind = depth, side, kind
+        self.opening_depth = kwargs.get("opening_depth", 12)
+        self.endgame_depth = kwargs.get("endgame_depth", 12)
+        self.search_time_limit_ms = kwargs.get("search_time_limit_ms")
+        self.node_limit = None
         self.process = SimpleNamespace(pid=1)
         self.diagnostics = {}
         self.startup_ns = 1
         self.started_at_ns = 1
 
-    def new_game(self, identifier):
+    def new_game(self, identifier, game_deadline=None):
         return {"game_id": identifier, "acknowledged": True, "elapsed_ns": 1,
                 "protocol": "gtp-clear-board" if self.kind == "oracle" else "new_game-v1"}
 
@@ -392,7 +443,8 @@ class ResumableTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def fixture_game(self, row, assignment, seats, kind, timeout, max_decisions):
+    def fixture_game(self, row, assignment, seats, kind, timeout, max_decisions,
+                     game_time_limit_seconds=None):
         if self.interrupt_after is not None and len(self.calls) == self.interrupt_after:
             raise KeyboardInterrupt
         self.calls.append((row["id"], assignment))
@@ -512,7 +564,7 @@ class ResumableTests(unittest.TestCase):
         changed = copy.deepcopy(resumed)
         changed["games"].pop()
         changed = whole_game.sealed(changed)
-        with self.assertRaisesRegex(whole_game.BenchmarkError, "incomplete eight-game"):
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "incomplete whole-game"):
             whole_game.verify(changed)
 
     def test_corrupt_checkpoint_and_changed_identity_fail_before_launch(self):
@@ -662,8 +714,8 @@ class ResumableTests(unittest.TestCase):
         with self.assertRaisesRegex(whole_game.BenchmarkError, "acknowledgement mismatch"):
             whole_game.verify(whole_game.sealed(changed))
         self.args.node_limit = 10_000_000
-        with self.assertRaisesRegex(whole_game.BenchmarkError, "must not use a node cap"):
-            whole_game.measurement_identity(self.args)
+        self.assertEqual(whole_game.measurement_identity(self.args)["settings"]["node_limit"],
+                         10_000_000)
 
     def test_reset_ack_rejected(self):
         with patch.object(FakeSeat, "new_game", return_value={"game_id": "bad", "acknowledged": False}):
@@ -695,10 +747,10 @@ class ResumableTests(unittest.TestCase):
         original = FakeSeat.__init__
         started = []
         aborted = []
-        def construct(seat, kind, binary, artifact, depth, timeout, side, *args):
+        def construct(seat, kind, binary, artifact, depth, timeout, side, *args, **kwargs):
             if side == "W":
                 raise whole_game.BenchmarkError("second seat failed")
-            original(seat, kind, binary, artifact, depth, timeout, side, *args)
+            original(seat, kind, binary, artifact, depth, timeout, side, *args, **kwargs)
             started.append(side)
         def abort(seat):
             aborted.append(seat.side)

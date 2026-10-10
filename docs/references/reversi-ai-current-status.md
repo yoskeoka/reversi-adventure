@@ -1,6 +1,6 @@
 # 探索設定・速度・強さの現在地
 
-2026-10-08の判断材料。merged [PR #255](https://github.com/yoskeoka/reversi-adventure/pull/255)
+2026-10-10の判断材料。merged [PR #255](https://github.com/yoskeoka/reversi-adventure/pull/255)
 と0046実装元 main `2b56e8f`、保存証拠を参照する。新しい対局・学習・Oracle solveは起動していない。
 
 全体目標は計算資源ハンデ付きOracleへの勝率50%。現在は強化学習の足かせを減らすため、
@@ -15,13 +15,15 @@
 | 通常CLI | 3phase深度とexactを明示指定可能、既定exact16 | 既定・受理範囲を維持 |
 | Playground/Advisor/decision | opening1..12、midgame1..16、exact0..30。24は既に選べる | 柔軟な選択を維持 |
 | Godot | 旧 `set_ai` 互換、新 `set_ai_with_exact_threshold` | 深度各1..64、exact0..30、変換前に検証 |
-| 自己対局manifest | schema6で自己対局の3phase/exactを独立指定 | 深度各1..64、exact0..30、既定12/12/12・exact16 |
+| 自己対局manifest | schema6で自己対局の3phase/exactを独立指定 | 既定12/12/12・exact16を維持。学習前測定profileは明示設定8/8/8・exact16・turn |
 | 候補比較/0018 | 固定strong-v1、12/12/12・exact16 | 校正条件を維持 |
 
 ユーザーは既定20への変更を求めていない。必要なときに必要な読みの深さを指定できることが目的。
 設定可能であること、時間内に完了すること、正確性・強さの受け入れは別の条件。
 0046のscore調査・残条件は[score契約記録](reversi-ai-exact-score-contract.md)を参照する。
 schema3/4/5の完成reportは元契約で明示legacy offline検証できるが、新規runへ読み替えない。
+TrainedEvaluator自己対局の測定目標は各局300秒以内、固定3局の算術平均180秒以下。
+これは後続の学習batch時間を短縮するための探索エンジン効率基準であり、per-move上限やbatch総時間ではない。
 
 ## 速度と正確性
 
@@ -38,9 +40,10 @@ schema3/4/5の完成reportは元契約で明示legacy offline検証できるが�
 0047で新規AI/教師値をOracle/Edaxの `winner-empty-v1` へ移行する。旧教師値と証拠は原本の意味を保持し、
 新runtimeへ流用しない。[移行記録](reversi-ai-winner-empty-migration.md)を参照する。
 本番入力の再生成・再学習と本番freezeのgateは残る。
-2–3分/局の目安は未達。学習を回せる速度にするための追加改善と時間予算を0040で整理する。
-12/8/12・exact20の今回のturn平均を単純に掛けると、6局は約52分、64局は約9時間14分。
-これは同じ3開局の時間による概算で、本番runの予測保証ではなく、学習更新・候補比較・regret時間も含まない。
+この目標を選択profileで測った結果はまだない。0045の12/8/12・exact20・旧score契約の平均519.254秒は
+過去の別profile/別契約の結果であり、新しい8/8/8設定の所要時間や合否を示さない。
+同じ旧平均を6局/64局に単純換算した約52分/約9時間14分も歴史的な参考値に限り、選択profileの予測には使わない。
+検証済みTrainedEvaluator artifactを固定した測定と、必要に応じた中盤探索改善を0040のgateに残す。
 旧8局と今回3局はbinary/棋譜が異なるため、直接の改善率にしない。
 詳細は[0041記録](reversi-ai-exact-threshold-reuse-assessment.md)とPR #255の正確性記録を参照する。
 
