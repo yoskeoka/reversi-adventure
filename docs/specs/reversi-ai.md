@@ -796,22 +796,41 @@ offline under their original version and identities. New whole-game preparation
 and measurement reject current-CLI `game` conditions during preflight.
 The move-only stdout protocol is unchanged.
 
-Self-play may select depth `12/8/12` with the 16-empty exact threshold while
-candidate matches and 0018 acceptance retain their separately frozen search
-settings. A version-4 production manifest and version-3 report identify the selected
-self-play depths, exact threshold, and executable SHA-256. `prepare`, `run`,
-and `verify` reject a mismatched binary or manifest, including an older
-manifest lacking these identities. The report's manifest digest includes the
-version-4 safety policy; artifact/update and report encoding retain version 3.
-Heuristic positions at depth 8 and 12 are
-different workloads.
+Fresh reinforcement manifests may explicitly select a self-play search profile
+independently of candidate matching and 0018 acceptance. The selected profile
+for preparing TrainedEvaluator self-play is `8/8/8`, exact threshold 16, with
+the production `turn` exact-cache policy. The `strong-engine-hcap-v1` candidate
+profile and its match/acceptance conditions remain `12/12/12`, exact16. This
+choice does not change global defaults or reinterpret earlier manifests.
+The version-6 production manifest and version-4 report identify the selected
+self-play depths, exact threshold, cache policy, and executable SHA-256.
+`prepare`, `run`, and `verify` reject mismatched identities. Heuristic
+positions at different depths are different workloads.
+
+Before starting the larger TrainedEvaluator learning batch, measure the
+selected self-play profile with a validated, immutable TrainedEvaluator
+artifact and the current producer. The goal is to reduce the aggregate time of
+that later batch by improving the search engine first. Measure the fixed
+eight-game sample (four openings, both seat assignments) to completion and
+report its arithmetic mean and nearest-rank P95. The mean goal is 180 seconds;
+P95 reaching 300 seconds is a signal to consider search optimization. These
+are whole-game efficiency references, never game deadlines or acceptance
+cutoffs. With this eight-game sample, nearest-rank P95 is the slowest observed
+game and is only a rough tail signal. The runner's per-decision response timeout
+exists only to detect a stalled process; it is separate from performance
+targets and the total learning-batch duration. If the baseline is far from the
+mean goal or its P95 reaches the review threshold, try up to three bounded
+midgame-search improvements, verify each candidate's search results, then
+remeasure the same games and artifact. If those attempts still miss, record
+the best result and remaining tradeoff before choosing a compromise profile.
 
 Within one configuration, baseline and candidate must
 agree on move, score, and completed exactness for the same positions; exact
-scores are checked against the independent oracle. The report states both
-workload times, measured cause of any improvement, and the available settings
-if the 2–3 minute guide is missed. The guide becomes an acceptance threshold
-only after the oracle's whole-game result has been measured.
+scores are checked against the independent oracle. Performance evidence
+reports the selected self-play profile, every completed game's wall time, the
+sample mean, and its P95 before the larger learning batch is started. A slow
+game completes and remains in those statistics; a per-decision watchdog may
+end a game only when an individual search response stalls.
 
 ### Durable whole-game measurement and game boundaries
 
@@ -934,13 +953,20 @@ count; regression total is the fixed fixture count. `--progress-every N`
 defaults to one and thins ordinary progress only; failures, interruption and
 completion always flush. No retries add conditions, games or query positions.
 
+Completed 0035, 0041 and 0045 reports retain their original score contracts.
+Their timing and Oracle receipts do not prove winner-empty performance or
+winner-empty Oracle agreement. Until the human accepts the settings, cache
+policy and time budget, production remains at 12/12/12, exact16 and turn, with
+cross-decision reuse suspended.
+
 The report separates exact work from whole-game time and identifies the
 single-run sample bias. Equal heuristic node counts with different timing do
 not prove a cache effect. Unselected exact roots are not independently Oracle
 verified. Historical timing retains its original digest/settings and is not a
-control for the new binary. Even successful evidence leaves production adoption,
-the unresolved score-contract issue and time-budget decisions to 0040 and the
-human; experimental exact20 does not authorize changing production exact16.
+control for the new binary. Even successful historical evidence leaves
+production adoption, winner-empty Oracle/performance comparison and time-budget
+decisions to 0040 and the human; experimental exact20 does not authorize
+changing production exact16.
 
 ### Experimental exact-threshold assessment
 

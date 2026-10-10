@@ -142,3 +142,12 @@ for name in ("game-12", "game-8", "persistent-8"):
     print(name, {key: value / 1e9 for key, value in times.items()})
 PY
 ```
+
+## 0040のoffline再検証（2026-10-10）
+
+保存済み0035入力は、登録済みlegacy manifestを使った
+`prepare-whole-game-measurement.py verify-inputs --legacy-offline` で再検証した。
+14件（whole-game report 10件、comparison 2件、独立Oracle照合2件）が終了code 0で通った。
+これは元のscore契約とidentityに固定された既存証拠の検証であり、新しい対局や探索は実行していない。
+0035/0041/0045の時間・Oracle receiptはwinner-empty-v1の性能やOracle一致を示さない。
+その境界と人間判断の残件は[0040](../exec-plan/todo/0040-reversi-ai-self-play-performance-closeout.md)に記録する。

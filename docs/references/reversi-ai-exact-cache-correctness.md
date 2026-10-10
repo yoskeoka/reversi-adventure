@@ -58,6 +58,24 @@ reinforcementの20 tests、whole-game/prepareの40 testsが成功した。
 この停止措置をroot/PV修正、全設定の正確性、性能改善や本番採用の完了と扱わない。
 全局対局、Oracle同士対局、性能再測定は起動していない。
 
+## 0040/0047のoffline再検証（2026-10-10）
+
+0041の登録済みmanifestと0045の6局manifestをそれぞれlegacy offline verifierで再検証した。
+0041の保存window/Oracle receiptと0045の6局、10 Oracle query、3 regressionが元のidentityで通り、
+実行済み単位は全てskipされた。対局、探索、Oracle queryは追加していない。これらは旧score契約の証拠で、
+winner-empty-v1の性能比較や新契約での独立root/選択child一致を証明しない。
+
+0045では、legacy verifierをGitから一時展開した際に、生成launcher内のentrypointが一時パスとなり、
+保存manifestのentrypoint pinと一致しない問題があった。offline wrapperはmanifest内の一意な
+`exact_cache_verification.py` pinを読み、生成script内の一時entrypointを元のshell-quoted pathへ
+復元してからbyte identityを検証する。対象が一意でない場合や一時pathが一度だけ現れない場合は拒否する。
+scriptやmanifest、receipt、reportは変更せず、launcherを実行しない。空白を含むpathと不一致拒否の回帰を追加した。
+
+winner-empty-v1の現在の根拠はbounded testまでである。root/選択child/PV、exact探索開始後のnode上限、
+deadline/cancellation fallbackの5件を各1件で確認し、`make oracle-test`も成功した。
+これらは本番設定・cross-decision reuse採否・人間が定める局別/平均/batch時間予算を決めない。
+新契約の外部Oracle root/選択child照合と性能測定が残り、productionは12/12/12、exact16、turnを維持する。
+
 Copilotの指摘に従いCLI helpも既定turnとgame停止の案内へ更新した。
 CLI integration 10 testsと実際の `--help` 出力を再確認した。
 

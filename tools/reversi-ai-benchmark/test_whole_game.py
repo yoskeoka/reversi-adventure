@@ -23,7 +23,8 @@ TARGET_BOARD = "BBBBBBBB.WWBBBBB..WWBWBB.WWWWBBB...WWWBB...WWW.B................
 
 
 def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
-                   target_prefix: bool = False) -> dict:
+                   target_prefix: bool = False, opening_depth: int = 12,
+                   endgame_depth: int = 12) -> dict:
     oracle = whole_game.oracle
     board, side = row["board"], row["side"]
     steps = []
@@ -37,7 +38,8 @@ def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
         occupied = 64 - board.count(".")
         exact = occupied >= 48
         depth = 64 - occupied if exact else (0 if move == "pass" else
-                                           12 if occupied <= 20 or occupied >= 45 else midgame_depth)
+                                           opening_depth if occupied <= 20 else
+                                           endgame_depth if occupied >= 45 else midgame_depth)
         steps.append({"id": f"{row['id']}-seat{assignment}-turn{turn}",
                       "board": board, "side": side,
                       "seat": side if assignment == 0 else oracle.other(side),
@@ -64,23 +66,37 @@ def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
             "search_count": len(steps)}
 
 
-def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False) -> dict:
+def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False,
+                     opening_depth: int = 12, endgame_depth: int = 12,
+                     game_sample: str = "full8") -> dict:
+    kind = "cli-persistent" if game_sample == "efficiency8" else "cli"
     games = [synthetic_game(row, assignment, midgame_depth,
-                            target_prefix and row["id"] == "opening-4" and assignment == 0)
+                            target_prefix and row["id"] == "opening-4" and assignment == 0,
+                            opening_depth, endgame_depth)
              for row in whole_game.opening_rows()
              for assignment in (0, 1)]
-    report = {"schema_version": 3, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION, "kind": "cli",
+    report = {"schema_version": 3, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION, "kind": kind,
               "openings_sha256": whole_game.digest(whole_game.OPENINGS),
               "binary": {"path": "/synthetic/cli", "sha256": "0" * 64},
               "artifact": {"path": "/synthetic/artifact", "sha256": "1" * 64},
               "oracle_profile": None,
-              "settings": {"opening_depth": 12, "midgame_depth": midgame_depth, "endgame_depth": 12,
+              "settings": {"opening_depth": opening_depth, "midgame_depth": midgame_depth,
+                           "endgame_depth": endgame_depth,
                            "exact_empty": 16, "timeout_seconds": 310,
-                           "exact_cache_scope": "game",
+                           "search_time_limit_ms": 2500 if game_sample == "efficiency8" else None,
+                           "node_limit": 50000 if game_sample == "efficiency8" else None,
+                           "exact_cache_scope": "turn" if game_sample == "efficiency8" else "game",
                            "max_decisions": 120, "max_rss_kib": 1000,
-                           "process_lifetime": "one-game-per-seat"},
+                           "process_lifetime": "all-games-per-seat" if game_sample == "efficiency8"
+                                               else "one-game-per-seat",
+                           "game_sample": game_sample},
               "environment": {"measurement": "linux-wait4"},
-              "games": games, "aggregate": whole_game.totals(games), "process_totals": None}
+              "games": games, "aggregate": whole_game.totals(games),
+              "process_totals": ({seat: {"startup_ns": 1, "shutdown_ns": 1, "user_cpu_ns": 100,
+                                          "system_cpu_ns": 0, "peak_rss_kib": 100}
+                                  for seat in ("B", "W")} if game_sample == "efficiency8" else None),
+              "performance_summary": (whole_game.efficiency_performance_summary(games)
+                                      if game_sample == "efficiency8" else None)}
     report["report_digest"] = hashlib.sha256(whole_game.canonical(report)).hexdigest()
     return report
 
@@ -96,6 +112,55 @@ class WholeGameTests(unittest.TestCase):
         oracle = whole_game.oracle
         for occupied, depth in ((20, 12), (21, 8), (44, 8), (45, 12), (47, 12), (48, 16)):
             self.assertEqual(oracle.profile_depth_at(whole_game.profile(8), occupied), depth)
+
+    def test_selected_efficiency_sample_and_phase_profile(self):
+        rows = whole_game.measurement_rows("efficiency8")
+        self.assertEqual([(row["id"], assignment) for row, assignment in rows],
+                         [(f"opening-{opening}", assignment)
+                          for opening in range(1, 5) for assignment in (0, 1)])
+        report = synthetic_report(8, opening_depth=8, endgame_depth=8)
+        whole_game.verify(report)
+        game = report["games"][0]
+        opening_step = next(step for step in game["steps"] if 64 - step["board"].count(".") <= 20
+                            and step["move"] != "pass")
+        self.assertEqual(opening_step["search"]["completed_depth"], 8)
+
+    def test_efficiency_summary_reports_mean_and_advisory_p95(self):
+        games = [dict(wall_ns=value) for value in [160_000_000_000] * 7 + [310_000_000_000]]
+        summary = whole_game.efficiency_performance_summary(games)
+        self.assertEqual(summary["game_count"], 8)
+        self.assertEqual(summary["p95_wall_ns"], 310_000_000_000)
+        self.assertTrue(summary["mean_goal_met"])
+        self.assertTrue(summary["consider_search_optimization"])
+
+    def test_slow_completed_game_is_not_cut_off_by_performance_reference(self):
+        report = synthetic_report(8, opening_depth=8, endgame_depth=8, game_sample="efficiency8")
+        report["games"][0]["wall_ns"] = 301_000_000_000
+        report["aggregate"] = whole_game.totals(report["games"])
+        report["performance_summary"] = whole_game.efficiency_performance_summary(report["games"])
+        redigest(report)
+        whole_game.verify(report)
+        self.assertTrue(report["performance_summary"]["consider_search_optimization"])
+        self.assertEqual(report["performance_summary"]["p95_wall_ns"], 301_000_000_000)
+
+    def test_efficiency_identity_requires_real_artifact_and_production_search_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "cli"
+            artifact = Path(directory) / "artifact.json"
+            binary.write_bytes(b"cli")
+            artifact.write_bytes(b"validated-artifact")
+            args = SimpleNamespace(kind="cli-persistent", binary=binary, artifact=artifact,
+                exact_empty=16, node_limit=50_000, cache_scope="turn", opening_depth=8,
+                midgame_depth=8, endgame_depth=8, game_sample="efficiency8",
+                search_time_limit_ms=2_500,
+                timeout_seconds=310, max_decisions=120, max_rss_kib=1_000_000)
+            identity = whole_game.measurement_identity(args)
+            self.assertEqual(identity["settings"]["game_sample"], "efficiency8")
+            self.assertNotIn("game_time_limit_seconds", identity["settings"])
+            self.assertEqual(identity["settings"]["search_time_limit_ms"], 2_500)
+            args.endgame_depth = 12
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "TrainedEvaluator efficiency sample requires"):
+                whole_game.measurement_identity(args)
 
     def test_independent_replay_and_resource_verification(self):
         report = synthetic_report()
@@ -351,8 +416,12 @@ class WholeGameTests(unittest.TestCase):
 
 
 class FakeSeat:
-    def __init__(self, kind, binary, artifact, depth, timeout, side, *args):
+    def __init__(self, kind, binary, artifact, depth, timeout, side, *args, **kwargs):
         self.depth, self.side, self.kind = depth, side, kind
+        self.opening_depth = kwargs.get("opening_depth", 12)
+        self.endgame_depth = kwargs.get("endgame_depth", 12)
+        self.search_time_limit_ms = kwargs.get("search_time_limit_ms")
+        self.node_limit = None
         self.process = SimpleNamespace(pid=1)
         self.diagnostics = {}
         self.startup_ns = 1
@@ -512,7 +581,7 @@ class ResumableTests(unittest.TestCase):
         changed = copy.deepcopy(resumed)
         changed["games"].pop()
         changed = whole_game.sealed(changed)
-        with self.assertRaisesRegex(whole_game.BenchmarkError, "incomplete eight-game"):
+        with self.assertRaisesRegex(whole_game.BenchmarkError, "incomplete whole-game"):
             whole_game.verify(changed)
 
     def test_corrupt_checkpoint_and_changed_identity_fail_before_launch(self):
@@ -662,8 +731,8 @@ class ResumableTests(unittest.TestCase):
         with self.assertRaisesRegex(whole_game.BenchmarkError, "acknowledgement mismatch"):
             whole_game.verify(whole_game.sealed(changed))
         self.args.node_limit = 10_000_000
-        with self.assertRaisesRegex(whole_game.BenchmarkError, "must not use a node cap"):
-            whole_game.measurement_identity(self.args)
+        self.assertEqual(whole_game.measurement_identity(self.args)["settings"]["node_limit"],
+                         10_000_000)
 
     def test_reset_ack_rejected(self):
         with patch.object(FakeSeat, "new_game", return_value={"game_id": "bad", "acknowledged": False}):
@@ -695,10 +764,10 @@ class ResumableTests(unittest.TestCase):
         original = FakeSeat.__init__
         started = []
         aborted = []
-        def construct(seat, kind, binary, artifact, depth, timeout, side, *args):
+        def construct(seat, kind, binary, artifact, depth, timeout, side, *args, **kwargs):
             if side == "W":
                 raise whole_game.BenchmarkError("second seat failed")
-            original(seat, kind, binary, artifact, depth, timeout, side, *args)
+            original(seat, kind, binary, artifact, depth, timeout, side, *args, **kwargs)
             started.append(side)
         def abort(seat):
             aborted.append(seat.side)
