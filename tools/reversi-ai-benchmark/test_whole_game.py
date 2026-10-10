@@ -67,13 +67,15 @@ def synthetic_game(row: dict, assignment: int, midgame_depth: int = 12,
 
 
 def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False,
-                     opening_depth: int = 12, endgame_depth: int = 12) -> dict:
+                     opening_depth: int = 12, endgame_depth: int = 12,
+                     game_sample: str = "full8") -> dict:
+    kind = "cli-persistent" if game_sample == "efficiency8" else "cli"
     games = [synthetic_game(row, assignment, midgame_depth,
                             target_prefix and row["id"] == "opening-4" and assignment == 0,
                             opening_depth, endgame_depth)
              for row in whole_game.opening_rows()
              for assignment in (0, 1)]
-    report = {"schema_version": 3, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION, "kind": "cli",
+    report = {"schema_version": 3, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION, "kind": kind,
               "openings_sha256": whole_game.digest(whole_game.OPENINGS),
               "binary": {"path": "/synthetic/cli", "sha256": "0" * 64},
               "artifact": {"path": "/synthetic/artifact", "sha256": "1" * 64},
@@ -81,11 +83,20 @@ def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False,
               "settings": {"opening_depth": opening_depth, "midgame_depth": midgame_depth,
                            "endgame_depth": endgame_depth,
                            "exact_empty": 16, "timeout_seconds": 310,
-                           "exact_cache_scope": "game",
+                           "search_time_limit_ms": 2500 if game_sample == "efficiency8" else None,
+                           "node_limit": 50000 if game_sample == "efficiency8" else None,
+                           "exact_cache_scope": "turn" if game_sample == "efficiency8" else "game",
                            "max_decisions": 120, "max_rss_kib": 1000,
-                           "process_lifetime": "one-game-per-seat"},
+                           "process_lifetime": "all-games-per-seat" if game_sample == "efficiency8"
+                                               else "one-game-per-seat",
+                           "game_sample": game_sample},
               "environment": {"measurement": "linux-wait4"},
-              "games": games, "aggregate": whole_game.totals(games), "process_totals": None}
+              "games": games, "aggregate": whole_game.totals(games),
+              "process_totals": ({seat: {"startup_ns": 1, "shutdown_ns": 1, "user_cpu_ns": 100,
+                                          "system_cpu_ns": 0, "peak_rss_kib": 100}
+                                  for seat in ("B", "W")} if game_sample == "efficiency8" else None),
+              "performance_summary": (whole_game.efficiency_performance_summary(games)
+                                      if game_sample == "efficiency8" else None)}
     report["report_digest"] = hashlib.sha256(whole_game.canonical(report)).hexdigest()
     return report
 
@@ -103,9 +114,10 @@ class WholeGameTests(unittest.TestCase):
             self.assertEqual(oracle.profile_depth_at(whole_game.profile(8), occupied), depth)
 
     def test_selected_efficiency_sample_and_phase_profile(self):
-        rows = whole_game.measurement_rows("efficiency3")
+        rows = whole_game.measurement_rows("efficiency8")
         self.assertEqual([(row["id"], assignment) for row, assignment in rows],
-                         [("opening-1", 0), ("opening-2", 0), ("opening-4", 0)])
+                         [(f"opening-{opening}", assignment)
+                          for opening in range(1, 5) for assignment in (0, 1)])
         report = synthetic_report(8, opening_depth=8, endgame_depth=8)
         whole_game.verify(report)
         game = report["games"][0]
@@ -113,18 +125,23 @@ class WholeGameTests(unittest.TestCase):
                             and step["move"] != "pass")
         self.assertEqual(opening_step["search"]["completed_depth"], 8)
 
-    def test_whole_game_limit_and_three_game_efficiency_aggregate(self):
-        games = [dict(wall_ns=value) for value in (170_000_000_000, 180_000_000_000,
-                                                   190_000_000_000)]
-        gate = whole_game.efficiency_performance_gate(games)
-        self.assertEqual(gate["mean_game_ns"], 180_000_000_000)
-        self.assertTrue(gate["max_game_within_target"])
-        self.assertTrue(gate["mean_within_target"])
-        report = synthetic_report(8, opening_depth=8, endgame_depth=8)
-        report["settings"]["game_time_limit_seconds"] = 0.00000005
+    def test_efficiency_summary_reports_mean_and_advisory_p95(self):
+        games = [dict(wall_ns=value) for value in [160_000_000_000] * 7 + [310_000_000_000]]
+        summary = whole_game.efficiency_performance_summary(games)
+        self.assertEqual(summary["game_count"], 8)
+        self.assertEqual(summary["p95_wall_ns"], 310_000_000_000)
+        self.assertTrue(summary["mean_goal_met"])
+        self.assertTrue(summary["consider_search_optimization"])
+
+    def test_slow_completed_game_is_not_cut_off_by_performance_reference(self):
+        report = synthetic_report(8, opening_depth=8, endgame_depth=8, game_sample="efficiency8")
+        report["games"][0]["wall_ns"] = 301_000_000_000
+        report["aggregate"] = whole_game.totals(report["games"])
+        report["performance_summary"] = whole_game.efficiency_performance_summary(report["games"])
         redigest(report)
-        with self.assertRaisesRegex(whole_game.BenchmarkError, "game exceeded configured wall limit"):
-            whole_game.verify(report)
+        whole_game.verify(report)
+        self.assertTrue(report["performance_summary"]["consider_search_optimization"])
+        self.assertEqual(report["performance_summary"]["p95_wall_ns"], 301_000_000_000)
 
     def test_efficiency_identity_requires_real_artifact_and_production_search_limits(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -134,11 +151,12 @@ class WholeGameTests(unittest.TestCase):
             artifact.write_bytes(b"validated-artifact")
             args = SimpleNamespace(kind="cli-persistent", binary=binary, artifact=artifact,
                 exact_empty=16, node_limit=50_000, cache_scope="turn", opening_depth=8,
-                midgame_depth=8, endgame_depth=8, game_sample="efficiency3",
-                game_time_limit_seconds=300, search_time_limit_ms=2_500,
+                midgame_depth=8, endgame_depth=8, game_sample="efficiency8",
+                search_time_limit_ms=2_500,
                 timeout_seconds=310, max_decisions=120, max_rss_kib=1_000_000)
             identity = whole_game.measurement_identity(args)
-            self.assertEqual(identity["settings"]["game_sample"], "efficiency3")
+            self.assertEqual(identity["settings"]["game_sample"], "efficiency8")
+            self.assertNotIn("game_time_limit_seconds", identity["settings"])
             self.assertEqual(identity["settings"]["search_time_limit_ms"], 2_500)
             args.endgame_depth = 12
             with self.assertRaisesRegex(whole_game.BenchmarkError, "TrainedEvaluator efficiency sample requires"):
@@ -409,7 +427,7 @@ class FakeSeat:
         self.startup_ns = 1
         self.started_at_ns = 1
 
-    def new_game(self, identifier, game_deadline=None):
+    def new_game(self, identifier):
         return {"game_id": identifier, "acknowledged": True, "elapsed_ns": 1,
                 "protocol": "gtp-clear-board" if self.kind == "oracle" else "new_game-v1"}
 
@@ -443,8 +461,7 @@ class ResumableTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def fixture_game(self, row, assignment, seats, kind, timeout, max_decisions,
-                     game_time_limit_seconds=None):
+    def fixture_game(self, row, assignment, seats, kind, timeout, max_decisions):
         if self.interrupt_after is not None and len(self.calls) == self.interrupt_after:
             raise KeyboardInterrupt
         self.calls.append((row["id"], assignment))

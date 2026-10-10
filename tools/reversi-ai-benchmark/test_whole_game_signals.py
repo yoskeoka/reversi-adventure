@@ -25,7 +25,7 @@ args = SimpleNamespace(kind="cli", binary=root/"binary", artifact=root/"artifact
     max_decisions=120, oracle_cwd=None, output=root/"report.json", progress_every=1,
     source_revision="fixture")
 calls = []
-def game(row, assignment, seats, kind, timeout, max_decisions, game_time_limit_seconds=None):
+def game(row, assignment, seats, kind, timeout, max_decisions):
     if sys.argv[2] == "interrupt" and len(calls) == 2:
         print("READY", flush=True)
         time.sleep(30)

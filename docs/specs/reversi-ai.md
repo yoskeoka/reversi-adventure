@@ -810,22 +810,27 @@ positions at different depths are different workloads.
 Before starting the larger TrainedEvaluator learning batch, measure the
 selected self-play profile with a validated, immutable TrainedEvaluator
 artifact and the current producer. The goal is to reduce the aggregate time of
-that later batch by improving the search engine first. For a fixed three-game
-measurement sample, every game must complete within 300 seconds and the
-arithmetic mean must be at most 180 seconds. These are whole-game efficiency
-targets; they are not per-decision `time_limit_ms` values or a total training
-batch deadline. Record every game, including a timeout as a failed sample;
-never omit slow or incomplete games from the mean. If the baseline misses by a
-large margin, try up to three bounded midgame-search improvements, verify each
-candidate's search results, then remeasure the same games and artifact. If
-those attempts still miss, record the best result and the remaining tradeoff
-before choosing a compromise profile.
+that later batch by improving the search engine first. Measure the fixed
+eight-game sample (four openings, both seat assignments) to completion and
+report its arithmetic mean and nearest-rank P95. The mean goal is 180 seconds;
+P95 reaching 300 seconds is a signal to consider search optimization. These
+are whole-game efficiency references, never game deadlines or acceptance
+cutoffs. With this eight-game sample, nearest-rank P95 is the slowest observed
+game and is only a rough tail signal. The runner's per-decision response timeout
+exists only to detect a stalled process; it is separate from performance
+targets and the total learning-batch duration. If the baseline is far from the
+mean goal or its P95 reaches the review threshold, try up to three bounded
+midgame-search improvements, verify each candidate's search results, then
+remeasure the same games and artifact. If those attempts still miss, record
+the best result and remaining tradeoff before choosing a compromise profile.
 
 Within one configuration, baseline and candidate must
 agree on move, score, and completed exactness for the same positions; exact
 scores are checked against the independent oracle. Performance evidence
-reports the selected self-play profile and its per-game wall times before the
-larger learning batch is started.
+reports the selected self-play profile, every completed game's wall time, the
+sample mean, and its P95 before the larger learning batch is started. A slow
+game completes and remains in those statistics; a per-decision watchdog may
+end a game only when an individual search response stalls.
 
 ### Durable whole-game measurement and game boundaries
 

@@ -10,8 +10,8 @@
 > 0040の最新producerでの独立root/選択child一致・資源制限応答・人間の設定/性能判断、
 > 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは未達として残す。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
-> TrainedEvaluator自己対局前の測定profileは明示設定8/8/8・exact16・turn、1局300秒以内・固定3局平均180秒以下。
-> これは候補match/0018用12/12/12の既定値や学習batch全体の所要時間を変更しない。
+> TrainedEvaluator自己対局前の測定profileは明示設定8/8/8・exact16・turn。固定8局を完了まで実行し、平均180秒を目標、
+> P95 300秒を探索改善の検討目安として記録する。候補match/0018用12/12/12や学習batch全体の所要時間は変更しない。
 
 > **Superseded selection contract**: 0034 implements version-2 method/config recording and baseline-versus-candidate matches. Do not freeze another production run from this version-1 contract. The failed version-1 run is not candidate evidence.
 

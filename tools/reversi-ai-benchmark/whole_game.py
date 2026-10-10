@@ -80,12 +80,8 @@ def opening_rows(path: Path = OPENINGS) -> list[dict]:
 def measurement_rows(sample: str, rows: list[dict] | None = None) -> list[tuple[dict, int]]:
     available = rows or opening_rows()
     assignments = [(row, assignment) for row in available for assignment in (0, 1)]
-    if sample == "full8":
+    if sample in ("full8", "efficiency8"):
         return assignments
-    if sample == "efficiency3":
-        wanted = (("opening-1", 0), ("opening-2", 0), ("opening-4", 0))
-        by_id = {(row["id"], assignment): (row, assignment) for row, assignment in assignments}
-        return [by_id[key] for key in wanted]
     raise BenchmarkError("unknown whole-game sample")
 
 
@@ -186,8 +182,7 @@ class Seat:
                 "peak RSS cap exceeded")
         return usage
 
-    def choose(self, identifier: str, board: str, side: str,
-               game_deadline: float | None = None) -> tuple[str, int]:
+    def choose(self, identifier: str, board: str, side: str) -> tuple[str, int]:
         self.peak_observation = None
         started = time.monotonic_ns()
         if self.gtp:
@@ -198,13 +193,9 @@ class Seat:
             self.process.stdin.write(f"{identifier}\t{board}\t{side}\n".encode("ascii"))
             self.process.stdin.flush()
             deadline = time.monotonic() + self.timeout
-            if game_deadline is not None:
-                deadline = min(deadline, game_deadline)
             while b"\n" not in self.buffer:
                 remaining = deadline - time.monotonic()
-                require(remaining > 0, f"whole-game wall limit exceeded at {identifier}"
-                        if game_deadline is not None and game_deadline <= time.monotonic()
-                        else f"CLI timed out at {identifier}")
+                require(remaining > 0, f"CLI timed out at {identifier}")
                 if self.max_rss_kib is not None:
                     self.observe_resources()
                 ready, _, _ = select.select([self.process.stdout], [], [], min(remaining, 0.05)
@@ -274,7 +265,7 @@ class Seat:
             if identifier in self.diagnostics:
                 self.diagnostics[identifier]["exact_cache_policy"] = policy
 
-    def new_game(self, identifier: str, game_deadline: float | None = None) -> dict:
+    def new_game(self, identifier: str) -> dict:
         started = time.monotonic_ns()
         if self.gtp:
             self.gtp.command("clear_board")
@@ -283,13 +274,9 @@ class Seat:
             self.process.stdin.write(f"new_game\t{identifier}\n".encode("ascii"))
             self.process.stdin.flush()
             deadline = time.monotonic() + self.timeout
-            if game_deadline is not None:
-                deadline = min(deadline, game_deadline)
             while b"\n" not in self.buffer:
                 remaining = deadline - time.monotonic()
-                require(remaining > 0, "whole-game wall limit exceeded during reset"
-                        if game_deadline is not None and game_deadline <= time.monotonic()
-                        else "new_game acknowledgement timed out")
+                require(remaining > 0, "new_game acknowledgement timed out")
                 ready, _, _ = select.select([self.process.stdout], [], [], remaining)
                 require(bool(ready), "new_game acknowledgement timed out")
                 chunk = os.read(self.process.stdout.fileno(), 4096)
@@ -341,18 +328,13 @@ def replay_opening_on_oracle(seats: dict[str, Seat], transcript: str) -> None:
 
 
 def game(row: dict, assignment: int, seats: dict[str, Seat], kind: str,
-         timeout: float, max_decisions: int,
-         game_time_limit_seconds: float | None = None) -> dict:
+         timeout: float, max_decisions: int) -> dict:
     board, side = row["board"], row["side"]
     if kind == "oracle":
         replay_opening_on_oracle(seats, row["moves"])
     steps = []
     started = time.monotonic_ns()
-    game_deadline = (time.monotonic() + game_time_limit_seconds
-                     if game_time_limit_seconds is not None else None)
     for turn in range(max_decisions):
-        require(game_deadline is None or time.monotonic() < game_deadline,
-                f"whole-game wall limit exceeded at {row['id']}-seat{assignment}")
         legal = oracle.legal_moves(board, side)
         if not legal and not oracle.legal_moves(board, oracle.other(side)):
             break
@@ -363,10 +345,7 @@ def game(row: dict, assignment: int, seats: dict[str, Seat], kind: str,
             active_seat.peak_observation = None
         before_usage = active_seat.observe_resources() if hasattr(active_seat, "observe_resources") else None
         if legal or kind != "oracle":
-            if game_deadline is None:
-                move, elapsed = seats[seat_label].choose(identifier, board, side)
-            else:
-                move, elapsed = seats[seat_label].choose(identifier, board, side, game_deadline)
+            move, elapsed = seats[seat_label].choose(identifier, board, side)
         else:
             move, elapsed = "pass", 0
         after_usage = active_seat.observe_resources() if before_usage is not None else None
@@ -713,16 +692,17 @@ def verify_v1(report: dict, binary: Path | None = None, artifact: Path | None = 
     _verify_complete(report, binary, artifact)
 
 
-def efficiency_performance_gate(games: list[dict]) -> dict:
-    require(len(games) == 3, "efficiency sample requires exactly three completed games")
-    total_wall_ns = sum(record["wall_ns"] for record in games)
-    mean_wall_ns = total_wall_ns / len(games)
-    max_game_ns = max(record["wall_ns"] for record in games)
-    return {"game_count": len(games), "max_game_target_ns": 300_000_000_000,
-            "mean_game_target_ns": 180_000_000_000, "max_game_ns": max_game_ns,
-            "mean_game_ns": mean_wall_ns,
-            "max_game_within_target": max_game_ns <= 300_000_000_000,
-            "mean_within_target": mean_wall_ns <= 180_000_000_000}
+def efficiency_performance_summary(games: list[dict]) -> dict:
+    require(len(games) == 8, "efficiency sample requires exactly eight completed games")
+    wall_times = sorted(record["wall_ns"] for record in games)
+    mean_wall_ns = sum(wall_times) / len(wall_times)
+    p95_rank = (95 * len(wall_times) + 99) // 100
+    p95_wall_ns = wall_times[p95_rank - 1]
+    return {"game_count": len(wall_times), "mean_goal_ns": 180_000_000_000,
+            "p95_review_threshold_ns": 300_000_000_000,
+            "mean_wall_ns": mean_wall_ns, "p95_wall_ns": p95_wall_ns,
+            "mean_goal_met": mean_wall_ns <= 180_000_000_000,
+            "consider_search_optimization": p95_wall_ns >= 300_000_000_000}
 
 
 def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | None = None,
@@ -762,19 +742,15 @@ def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | 
                 "unsupported Oracle phase profile")
     sample = settings.get("game_sample", "full8")
     rows = measurement_rows(sample)
-    game_limit = settings.get("game_time_limit_seconds")
-    require(game_limit is None or type(game_limit) in (int, float) and game_limit > 0,
-            "invalid whole-game wall limit")
-    if sample == "efficiency3":
+    if sample == "efficiency8":
         require(kind == "cli-persistent" and settings.get("opening_depth") == 8
                 and settings.get("midgame_depth") == 8 and settings.get("endgame_depth") == 8
                 and settings.get("exact_empty") == 16 and settings.get("exact_cache_scope") == "turn"
                 and type(settings.get("search_time_limit_ms")) is int
                 and settings["search_time_limit_ms"] > 0
                 and type(settings.get("node_limit")) is int and settings["node_limit"] > 0
-                and game_limit == 300, "invalid TrainedEvaluator efficiency sample settings")
-    elif game_limit is not None:
-        require(game_limit > 0, "invalid whole-game wall limit")
+                and settings.get("game_sample") == "efficiency8",
+                "invalid TrainedEvaluator efficiency sample settings")
     expected_oracle_profile = (oracle.profile_metadata(profile(settings["midgame_depth"], settings["exact_empty"]))
                                if kind == "oracle" else None)
     require(report.get("oracle_profile") == expected_oracle_profile, "oracle profile mismatch")
@@ -784,11 +760,9 @@ def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | 
     for index, (row, assignment) in enumerate(rows):
         record = games[index]
         verify_game(record, row, assignment, kind, settings, require_decision_resources)
-        require(game_limit is None or record["wall_ns"] <= game_limit * 1_000_000_000,
-                "game exceeded configured wall limit")
     require(report.get("aggregate") == totals(games), "whole-game aggregate mismatch")
-    expected_gate = (efficiency_performance_gate(games) if sample == "efficiency3" else None)
-    require(report.get("performance_gate") == expected_gate, "whole-game performance gate mismatch")
+    expected_summary = (efficiency_performance_summary(games) if sample == "efficiency8" else None)
+    require(report.get("performance_summary") == expected_summary, "whole-game performance summary mismatch")
     if kind == "cli-persistent":
         process_totals = report.get("process_totals")
         require(isinstance(process_totals, dict) and set(process_totals) == {"B", "W"},
@@ -1143,21 +1117,18 @@ def measurement_identity(args) -> dict:
     require(all(type(depth) is int and 1 <= depth <= 64
                 for depth in (opening_depth, args.midgame_depth, endgame_depth)), "invalid phase depth")
     game_sample = getattr(args, "game_sample", "full8")
-    game_time_limit = getattr(args, "game_time_limit_seconds", None)
     rows = measurement_rows(game_sample)
-    require(game_time_limit is None or isinstance(game_time_limit, (int, float))
-            and game_time_limit > 0, "invalid whole-game wall limit")
     if args.kind == "oracle":
         require(opening_depth == 12 and endgame_depth == 12, "unsupported Oracle phase profile")
-    if game_sample == "efficiency3":
+    if game_sample == "efficiency8":
         require(args.kind == "cli-persistent" and args.artifact is not None and args.artifact.is_file()
                 and (opening_depth, args.midgame_depth, endgame_depth) == (8, 8, 8)
                 and getattr(args, "exact_empty", 16) == 16 and args.cache_scope == "turn"
-                and game_time_limit == 300 and len(rows) == 3
+                and len(rows) == 8
                 and search_time_limit_ms is not None and node_limit is not None
                 and args.timeout_seconds > search_time_limit_ms / 1000,
-                "TrainedEvaluator efficiency sample requires 8/8/8 exact16 turn, fixed 3 games, "
-                "a 300s game cap, and explicit production search limits")
+                "TrainedEvaluator efficiency sample requires 8/8/8 exact16 turn, fixed 8 games, "
+                "and explicit production search limits")
     return {"score_contract": SCORE_CONTRACT, "kind": args.kind, "binary": {"path": str(args.binary.resolve()), "sha256": digest(args.binary)},
             "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)} if args.artifact else None),
             "openings_sha256": digest(OPENINGS), "source_revision": getattr(args, "source_revision", None),
@@ -1170,7 +1141,7 @@ def measurement_identity(args) -> dict:
                          "exact_cache_scope": args.cache_scope, "max_decisions": args.max_decisions,
                          "max_rss_kib": args.max_rss_kib,
                          "process_lifetime": "segments-per-seat" if args.kind == "cli-persistent" else "one-game-per-seat",
-                         "game_sample": game_sample, "game_time_limit_seconds": game_time_limit}}
+                         "game_sample": game_sample}}
 
 
 def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_dir: Path,
@@ -1202,20 +1173,8 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
         for path in checkpoint_dir.iterdir():
             require(path.name == ".lock" or path.name.startswith(".unfinished-")
                     or path.name.startswith("game-") and path.suffix == ".json"
-                    or path.name.startswith("failure-") and path.suffix == ".json"
                     or path.name.startswith("segment-") and path.suffix == ".json",
                     "unknown checkpoint file")
-        for path in checkpoint_dir.glob("failure-*.json"):
-            failure = read_canonical(path)
-            game_id = failure.get("game_id")
-            require(failure.get("report_digest") == sealed(failure)["report_digest"]
-                    and game_id in known and path.name == f"failure-{game_id}.json"
-                    and failure.get("condition_digest") == condition_digest
-                    and failure.get("manifest_digest") == manifest_digest
-                    and failure.get("status") == "wall-limit-exceeded"
-                    and type(failure.get("elapsed_ns")) is int and failure["elapsed_ns"] > 0,
-                    "invalid failed-game checkpoint")
-            raise BenchmarkError(f"game {game_id} previously exceeded its wall limit; use a new measurement identity")
         prior_segments = {}
         for path in checkpoint_dir.glob("segment-*.json"):
             segment = read_canonical(path)
@@ -1239,9 +1198,6 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
             record = item["game"]
             row, assignment = next(pair for pair in rows if f"{pair[0]['id']}-seat{pair[1]}" == key)
             verify_game(record, row, assignment, args.kind, identity["settings"], require_decision_resources=True)
-            require(identity["settings"]["game_time_limit_seconds"] is None
-                    or record["wall_ns"] <= identity["settings"]["game_time_limit_seconds"] * 1_000_000_000,
-                    "checkpoint game exceeded configured wall limit")
             verify_boundary(record, args.kind)
             require(record.get("condition_digest") == condition_digest and record.get("manifest_digest") == manifest_digest
                     and isinstance(record.get("session_id"), str) and isinstance(record.get("segment_id"), str),
@@ -1258,8 +1214,6 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
         segment_path = checkpoint_dir / f"segment-{segment_id}.json"
         segments = []
         seats = {}
-        active_game_key = None
-        active_game_started_ns = None
         old_handler = signal.getsignal(signal.SIGTERM)
         def interrupted(signum, frame):
             raise KeyboardInterrupt
@@ -1269,8 +1223,6 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                 key = f"{row['id']}-seat{assignment}"
                 if key in games:
                     continue
-                active_game_key = key
-                active_game_started_ns = None
                 progress("measure", condition_id, conditions_done, conditions_total, len(games),
                          "measuring", started, every, game_total)
                 if not seats:
@@ -1283,20 +1235,10 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                                            endgame_depth=identity["settings"]["endgame_depth"],
                                            search_time_limit_ms=identity["settings"]["search_time_limit_ms"])
                 game_started_at_ns = time.time_ns()
-                game_started_monotonic_ns = time.monotonic_ns()
-                active_game_started_ns = game_started_monotonic_ns
-                configured_game_limit = identity["settings"]["game_time_limit_seconds"]
-                game_deadline = (time.monotonic() + configured_game_limit
-                                 if configured_game_limit is not None else None)
                 before = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
-                events = {side: seat.new_game(key, game_deadline) for side, seat in seats.items()}
-                remaining_game_limit = (None if game_deadline is None
-                                        else game_deadline - time.monotonic())
-                require(remaining_game_limit is None or remaining_game_limit > 0,
-                        f"whole-game wall limit exceeded during reset at {key}")
+                events = {side: seat.new_game(key) for side, seat in seats.items()}
                 record = game(row, assignment, seats, "cli" if args.kind == "cli-persistent" else args.kind,
-                              args.timeout_seconds, args.max_decisions,
-                              remaining_game_limit)
+                              args.timeout_seconds, args.max_decisions)
                 if args.kind == "cli-persistent":
                     after = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
                     usages = {side: {"startup_ns": 0, "shutdown_ns": 0,
@@ -1318,9 +1260,6 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                 verify_game(record, row, assignment, args.kind, identity["settings"], require_decision_resources=True)
                 verify_boundary(record, args.kind)
                 record["wall_ns"] += sum(event["elapsed_ns"] for event in events.values())
-                require(identity["settings"]["game_time_limit_seconds"] is None
-                        or record["wall_ns"] <= identity["settings"]["game_time_limit_seconds"] * 1_000_000_000,
-                        f"whole-game wall limit exceeded at {key}")
                 if args.kind == "cli-persistent":
                     # A live segment receipt survives SIGKILL; final wait4 reconciliation supersedes it.
                     atomic_write(segment_path, sealed({"segment_id": segment_id, "session_id": session_id,
@@ -1342,14 +1281,6 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                     "status": "closed", "resource_observation": "wait4", "rss_scope": "segment-cumulative", "process_totals": process_totals}))
                 seats = {}
         except BaseException as exc:
-            if (isinstance(exc, BenchmarkError) and "whole-game wall limit exceeded" in str(exc)
-                    and active_game_key is not None and active_game_started_ns is not None):
-                atomic_write(checkpoint_dir / f"failure-{active_game_key}.json", sealed({
-                    "game_id": active_game_key, "condition_digest": condition_digest,
-                    "manifest_digest": manifest_digest, "status": "wall-limit-exceeded",
-                    "elapsed_ns": time.monotonic_ns() - active_game_started_ns,
-                    "limit_seconds": identity["settings"]["game_time_limit_seconds"],
-                    "reason": str(exc)}))
             if seats and args.kind == "cli-persistent":
                 # On orderly interrupt, close idle or working seats with a bounded exit before aborting.
                 interrupted_usages = {side: seat.abort() for side, seat in seats.items()}
@@ -1393,8 +1324,8 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                 "os": platform.platform(), "measurement": "linux-wait4"},
             "oracle_profile": oracle.profile_metadata(profile(args.midgame_depth, getattr(args, "exact_empty", 16))) if args.kind == "oracle" else None,
             "games": ordered, "aggregate": totals(ordered), "process_totals": None, "segments": segments,
-            "performance_gate": (efficiency_performance_gate(ordered)
-                                 if identity["settings"]["game_sample"] == "efficiency3" else None),
+            "performance_summary": (efficiency_performance_summary(ordered)
+                                    if identity["settings"]["game_sample"] == "efficiency8" else None),
             "segment_aggregate": segment_totals(segments),
             "resource_scopes": {"aggregate": "completed-game-checkpoints",
                                 "segment_aggregate": "seat-process-segments" if args.kind == "cli-persistent" else None}})
@@ -1424,8 +1355,7 @@ def main(argv: list[str] | None = None) -> int:
     measure.add_argument("--node-limit", type=int)
     measure.add_argument("--max-rss-kib", type=int, required=True)
     measure.add_argument("--max-decisions", type=int, default=120)
-    measure.add_argument("--game-sample", choices=("full8", "efficiency3"), default="full8")
-    measure.add_argument("--game-time-limit-seconds", type=float)
+    measure.add_argument("--game-sample", choices=("full8", "efficiency8"), default="full8")
     measure.add_argument("--output", type=Path, required=True)
     measure.add_argument("--checkpoint-dir", type=Path)
     measure.add_argument("--progress-every", type=int, default=1)

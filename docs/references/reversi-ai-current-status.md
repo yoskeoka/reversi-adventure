@@ -22,8 +22,9 @@
 設定可能であること、時間内に完了すること、正確性・強さの受け入れは別の条件。
 0046のscore調査・残条件は[score契約記録](reversi-ai-exact-score-contract.md)を参照する。
 schema3/4/5の完成reportは元契約で明示legacy offline検証できるが、新規runへ読み替えない。
-TrainedEvaluator自己対局の測定目標は各局300秒以内、固定3局の算術平均180秒以下。
-これは後続の学習batch時間を短縮するための探索エンジン効率基準であり、per-move上限やbatch総時間ではない。
+TrainedEvaluator自己対局前の性能測定は固定8局を完了まで実行し、平均180秒を目標、nearest-rank P95 300秒を
+探索改善の検討目安として記録する。これは後続の学習batch時間を短縮するための探索エンジン効率基準で、
+局を打ち切るhard limitやbatch総時間ではない。ハング検出用の1手ごとの応答timeoutは別設定とする。
 
 ## 速度と正確性
 
