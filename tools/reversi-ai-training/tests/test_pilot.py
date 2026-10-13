@@ -92,6 +92,26 @@ class PilotTests(unittest.TestCase):
             self.assertEqual(one["players"]["B"], two["players"]["W"])
             self.assertEqual(one["players"]["W"], two["players"]["B"])
 
+    def test_relabelled_production_inputs_cannot_establish_strength(self):
+        self.mutate_manifest(lambda m: m.update(input_kind="production"))
+        # Even an otherwise fully checked context with strong-profile metadata
+        # and renamed provenance cannot enable recognition in this release.
+        context = pilot.load_manifest(self.args.manifest)
+        self.assertTrue(context["tooling_only"])
+        output = self.complete()
+        context["tooling_only"] = False
+        context["manifest"]["oracle_profile"]["name"] = "strong-engine-hcap-v1"
+        for name in ("validation", "held_out"):
+            context["manifest"]["inputs"][name]["provenance"]["source"] = "independent-production"
+        rebuilt = pilot.reconstruct(context, training.read_jsonl(output / "games.jsonl"),
+                                    training.read_jsonl(output / "corpus-decisions.jsonl"))
+        import json
+        report = json.loads(rebuilt["report.json"])
+        self.assertTrue(report["tooling_only"])
+        self.assertFalse(report["improvement_checks"]["strength_inputs"])
+        self.assertFalse(report["improvement_observed"])
+        self.assertFalse(report["production_authorized"])
+
     def test_caps_source_search_and_optimizer_tampering_rejected(self):
         original = training.read_json(self.args.manifest)
         changes = [(lambda m: m["caps"].update(teacher_rows=769), "caps"),

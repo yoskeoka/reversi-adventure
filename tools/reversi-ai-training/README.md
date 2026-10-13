@@ -222,28 +222,34 @@ their separate acceptance run.
 
 ## Training method pilot (0037)
 
-`pilot.py` provides a separate one-stage pilot. Its immutable manifest fixes
-production denominators 64/7,680/200 and floor-by-ten caps 6/768/20. Six legal
-Black-start self-play continuations yield terminal winner-empty teachers;
-deduplicated rows actually used by one bounded update are counted. Ten legal
-openings are played twice with the players exchanging Black/White seats.
-The production reinforcement 50/200 checkpoint is not used.
+The pilot tool fixes the full-size counts at 64 games, 7,680 teacher rows and
+200 match games, then divides by ten and rounds down to caps of 6/768/20.
+Only unique rows passed to the one bounded weight update count as teachers.
 
-Self-play uses 8/8/8, exact16, turn. Comparison and corpus decisions use
-12/12/12, exact16, turn. The teacher is the completed project-AI game's outcome;
-it is not a random-rollout outcome or a separate per-position exact score.
+Six legal Black-start games produce terminal winner-empty teachers.
+Ten other legal openings are each played twice, with the players swapping seats.
+
+The frozen search settings are 8/8/8 for self-play and 12/12/12 for match and
+corpus choices, all with exact16 and turn cache scope.
+The teacher is the completed project-AI game's final value.
+
+Random rollout labels and per-position exact scores are separate label types.
 Read the [method review](../../docs/references/reversi-ai-training-method-review.md)
-for pinned upstream sources and the reason for this choice.
+for pinned sources and the reason for this choice.
 
-Prepare requires a current-format baseline artifact and its original trainer
-manifest, independent schema2 validation/held-out JSONL, a reserved-opening key
-file, and a current-score Oracle corpus with saved golden values. The reserved
-file has `{"schema_version":1,"position_keys":["<canonical-board>:B", ...]}`;
-keys are produced by `training.canonical_position_key`. Supply the independently
-reserved 0018 keys without playing its suite. Pin all inputs and the accepted
-CLI before running. Keep production inputs outside the checkout and generate
-new winner-empty inputs under a separate human-operated plan. Old format1
-baselines and raw-disc labels are rejected.
+Prepare needs a format2 baseline and its original trainer manifest, separate
+schema2 validation and held-out rows, plus the Oracle corpus and saved golden values.
+Pin these inputs and the accepted CLI before running.
+
+Also supply a reserved-opening file with
+`{"schema_version":1,"position_keys":["<canonical-board>:B", ...]}`.
+The key helper is `training.canonical_position_key`.
+
+Use the reserved 0018 keys without playing its suite.
+Keep real inputs outside the checkout and generate new winner-empty data under
+a separate plan that a human runs.
+
+Prepare rejects old format1 baselines and raw-disc labels.
 
 ```sh
 make pattern-pilot-prepare \
@@ -258,13 +264,15 @@ make pattern-pilot-prepare \
   PILOT_GOLDEN=/absolute/path/strong-profile-golden.jsonl
 ```
 
-Defaults freeze seed 20261014, six opening plies, 300000 ms and 10000000 nodes
-per decision, and a 310-second protocol watchdog. These caps are search limits,
-not a whole-batch completion guarantee. Overrides use `PILOT_SEED`,
-`PILOT_OPENING_PLIES`, `PILOT_TIME_LIMIT_MS`, `PILOT_NODE_LIMIT` and
-`PILOT_DECISION_TIMEOUT_SECONDS`. A changed configuration requires a fresh
-manifest and directory. Prepare verifies reset acknowledgement and does not
-play the batch.
+Defaults are seed 20261014, six opening plies, 300000 ms and 10000000 nodes
+per decision, with a 310-second reply timeout.
+The time and node caps limit each search; they do not bound the whole batch.
+
+To change them, set `PILOT_SEED`, `PILOT_OPENING_PLIES`, `PILOT_TIME_LIMIT_MS`,
+`PILOT_NODE_LIMIT` and `PILOT_DECISION_TIMEOUT_SECONDS` before prepare.
+Each new setup needs a fresh manifest and output folder.
+
+Prepare checks the reset reply to confirm that the CLI accepts the baseline.
 
 A human starts the real run in another terminal:
 
@@ -273,11 +281,12 @@ make pattern-pilot-run PILOT_MANIFEST=/absolute/path/pilot/manifest.json \
   PILOT_OUTPUT_DIR=/absolute/path/pilot/output PILOT_PROGRESS_EVERY=1
 ```
 
-Stop by terminating that process. A failed or interrupted directory is retained
-for diagnosis; it is not evidence and cannot be resumed. Start a new run in a
-fresh directory. The final report is published last after all six self-play
-and twenty comparison games and all independent measurements finish.
-Agents do not start, wait for or monitor the real batch.
+Stop by ending that process and keep failed output for diagnosis.
+Restart in a fresh folder, since the tool cannot resume partial runs.
+
+The final report is saved last, after all six self-play and twenty match games
+and all metrics finish.
+Agents leave startup, waiting and monitoring of the real batch to the human.
 
 After the human supplies completed immutable output:
 
@@ -286,28 +295,37 @@ make pattern-pilot-verify PILOT_MANIFEST=/absolute/path/pilot/manifest.json \
   PILOT_OUTPUT_DIR=/absolute/path/pilot/output
 ```
 
-Verification starts no subprocess. It replays every opening and decision,
-checks the 10 complete seat-exchange pairs, recomputes unique teacher rows,
-artifact update, validation/held-out MSE, corpus regret and match points, and
-checks input/output identities. Corpus values are already saved Oracle values;
-the runner records project CLI choices rather than issuing new Oracle solves.
-Corpus positions overlapping baseline training, reserved openings or played
-positions are excluded with IDs, and an independent legal decision root must
-remain. Validation and held-out exclusions include the random opening prefixes.
-Use the manifest's pinned producer checkout for verification. Source changes
-fail the digest check; do not rewrite an old manifest with current hashes.
-Progress uses the existing stderr stage and completed-game format. Default
-interval one emits every game; positive `PILOT_PROGRESS_EVERY=N` reduces normal
-updates and always emits the final unit.
+The offline check replays every opening and move, checks all ten seat-swap pairs,
+then rebuilds the unique teachers, weights, errors, regret and match points.
+It also checks each input and output digest.
 
-The primary improvement metric is lower held-out MSE. Validation MSE and mean
-corpus regret must remain within 10% of baseline (zero must stay zero), and
-the candidate must earn at least 10/20 match points. Both successful and failed
-comparisons retain the candidate and raw evidence. Fixtures use
-`PILOT_INPUT_KIND=fixture` and always report tooling evidence; smoke corpora
-cannot establish strength. Real evidence requires the strong-engine Oracle
-profile and production inputs. A verified complete pilot with a failed
-improvement gate does not authorize 0019.
+Corpus values come from the saved Oracle golden file, while the runner records
+project CLI choices without new Oracle solves.
+The offline check starts no process.
+
+Corpus rows that overlap training, reserved roots or played boards are excluded
+with IDs; at least one separate legal root must remain.
+Validation and held-out exclusions also cover the random opening moves.
+
+Use the manifest's pinned source checkout for the offline check.
+Source changes fail the digest check, so preserve the original hashes.
+
+Progress goes to stderr and shows each completed game by default.
+Set a positive `PILOT_PROGRESS_EVERY=N` to print less often; the final unit always prints.
+
+The main success rule is lower held-out MSE, with validation MSE and mean regret
+no more than 10% worse than baseline and at least 10/20 match points.
+A zero baseline must stay zero.
+
+Both success and failure retain the candidate and raw output.
+Fixtures use `PILOT_INPUT_KIND=fixture` to mark their results as tool checks.
+
+This release always reports `tooling_only=true`, `strength_inputs=false`, and
+`improvement_observed=false`, even with `PILOT_INPUT_KIND=production`.
+Hashes preserve input bytes but do not prove who produced them.
+A reviewed follow-up must check producer manifests and saved Oracle output
+against independently approved input identities before recognizing improvement.
+Only a complete real pilot with that verification permits the next 0019 manifest.
 
 The [tooling verification record](../../docs/references/reversi-ai-training-pilot-tooling.md)
 tracks implementation evidence. With no new-contract production inputs as of

@@ -1338,6 +1338,12 @@ queries are made. Every baseline/candidate decision records its position and
 legal move so offline verification recomputes regret from the saved values.
 The manifest pins Oracle source/version/profile and score semantics. Fixture
 and smoke corpora establish tooling correctness only, not strength evidence.
+This tooling release never authenticates production evidence. Caller labels,
+profile metadata, and matching hashes cannot establish an independent producer.
+All reports therefore set `tooling_only=true`, `strength_inputs=false`, and
+`improvement_observed=false`, including inputs labeled `production`. A reviewed
+follow-up must authenticate producer manifests and saved Oracle output against
+independently approved input identities before enabling improvement recognition.
 
 The report records before/after validation and held-out sample counts and
 squared errors, corpus regret sum/count, match wins/draws/losses/points, actual
@@ -1345,8 +1351,9 @@ counts, exclusions, all game/input/artifact digests and deterministic update
 identity. Its predeclared improvement rule is lower held-out MSE, with
 validation MSE and mean corpus regret no more than 10% worse (zero baselines
 require zero), and candidate points at least 10/20. Only complete production
-inputs and a strong-engine corpus permit the statement that improvement was
-observed in this pilot. Failure preserves the candidate and all measurements;
+inputs and a strong-engine corpus with independently authenticated provenance
+can permit improvement recognition after the follow-up above. Failure preserves
+the candidate and all measurements;
 it never authorizes 0019 or claims the 0018 strength target.
 
 Run refuses nonempty output directories and publishes the report last. Verify

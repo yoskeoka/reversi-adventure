@@ -240,14 +240,12 @@ def load_manifest(path: Path) -> dict:
             forbidden | {key(row["board"], row["side"]) for row in expected_self}, "comparison", reserved)
     require(same(manifest["self_play_openings"], expected_self) and same(manifest["comparison_openings"], expected_match),
             "frozen legal opening set mismatch")
-    # Labels alone cannot turn smoke inputs into strength evidence.
-    source_labels = [item["source"] for item, _ in loaded] + [inputs[name]["provenance"]["source"] for name in ("validation", "held_out")]
-    source_labels += [row["provenance"].get("source", "") for row in records]
-    tooling = manifest["input_kind"] != "production" or manifest["oracle_profile"]["name"] != "strong-engine-hcap-v1"
-    tooling = tooling or any("fixture" in label.lower() or "smoke" in label.lower() for label in source_labels)
+    # Hashes pin bytes; caller labels and saved values do not authenticate their
+    # producers. Production recognition needs independently approved identities
+    # in a reviewed follow-up, so this release only establishes tooling evidence.
     return {"manifest": manifest, "paths": paths, "baseline": baseline, "baseline_keys": baseline_keys,
             "validation": validation, "held_out": held_out, "reserved": reserved, "corpus": records,
-            "golden": golden, "corpus_keys": corpus_keys, "tooling_only": tooling}
+            "golden": golden, "corpus_keys": corpus_keys, "tooling_only": True}
 
 
 def prepare(args: argparse.Namespace) -> None:
@@ -426,7 +424,7 @@ def reconstruct(context: dict, games: list[dict], decisions: list[dict]) -> dict
         "validation_not_materially_worse": validation["candidate"]["sum_squared_error"] * 10 <= validation["baseline"]["sum_squared_error"] * 11,
         "corpus_not_materially_worse": regret["candidate"]["sum_regret"] * 10 <= regret["baseline"]["sum_regret"] * 11,
         "match_points_sufficient": match["match_points"] >= 10,
-        "strength_inputs": not context["tooling_only"]}
+        "strength_inputs": False}
     blobs = {"games.jsonl": lines(games), "teachers.jsonl": lines(teachers),
              "candidate-artifact.json": blob(candidate), "corpus-decisions.jsonl": lines(decisions)}
     report = {"schema_version": 1, "producer_version": VERSION, "score_contract": training.SCORE_CONTRACT,
@@ -437,8 +435,8 @@ def reconstruct(context: dict, games: list[dict], decisions: list[dict]) -> dict
                           "comparison_pairs": 10, "corpus_positions": regret["baseline"]["positions"],
                           "decisions": sum(len(game["decisions"]) for game in games)},
         "teacher_excluded_ids": excluded_teachers, "independent_metrics": metrics, "corpus_regret": regret,
-        "match": match, "improvement_checks": checks, "tooling_only": context["tooling_only"],
-        "improvement_observed": all(checks.values()), "production_authorized": False,
+        "match": match, "improvement_checks": checks, "tooling_only": True,
+        "improvement_observed": False, "production_authorized": False,
         "game_digests": [game["game_digest"] for game in games],
         "outputs": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(blobs.items())}}
     report["report_digest"] = training.digest(report)

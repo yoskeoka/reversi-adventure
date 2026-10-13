@@ -98,6 +98,7 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 - 新契約のsaved Oracle corpus/golden（strong-engine profile）と0018の予約position keysを用意する。
 - 新しいimmutable manifestと空のoutput directoryをprepareし、人間がrunを起動する。
 - 全6自己対局・重複排除後768教師行以下・10完全ペア20比較局が完成した不変出力をoffline検証する。
+- 改善認定を有効にする前に、独立承認した入力identityに対してproducer manifest・CLI・saved Oracle outputを認証する仕組みを別のreview済み計画で実装する。このtooling releaseの全reportは改善認定を無効にする。
 - raw dataから改善/不成立を記録する。成功時だけ0019を別の新しいmanifestで準備する。
 - fixture結果は[ツール検証記録](../../references/reversi-ai-training-pilot-tooling.md)へ記録し、実pilot結果と区別する。
 
