@@ -67,6 +67,15 @@ pub struct SearchBudget {
 }
 
 impl SearchBudget {
+    /// Run a search without time, node-count, or cancellation limits.
+    pub fn unbounded() -> Self {
+        Self {
+            deadline: None,
+            node_limit: None,
+            cancellation: None,
+        }
+    }
+
     pub fn new(deadline: Instant) -> Self {
         Self {
             deadline: Some(deadline),

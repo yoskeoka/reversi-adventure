@@ -84,9 +84,10 @@ def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False,
               "settings": {"evaluator": "strategic" if game_sample == "efficiency8" else "trained",
                            "opening_depth": opening_depth, "midgame_depth": midgame_depth,
                            "endgame_depth": endgame_depth,
-                           "exact_empty": 16, "timeout_seconds": 310,
-                           "search_time_limit_ms": 2500 if game_sample == "efficiency8" else None,
-                           "node_limit": 50000 if game_sample == "efficiency8" else None,
+                           "exact_empty": 16, "timeout_seconds": 600 if game_sample == "efficiency8" else 310,
+                           "search_time_limit_ms": None,
+                           "node_limit": None,
+                           "unbounded_search": game_sample == "efficiency8",
                            "exact_cache_scope": "turn" if game_sample == "efficiency8" else "game",
                            "max_decisions": 120, "max_rss_kib": 1000,
                            "process_lifetime": "all-games-per-seat" if game_sample == "efficiency8"
@@ -145,23 +146,44 @@ class WholeGameTests(unittest.TestCase):
         self.assertTrue(report["performance_summary"]["consider_search_optimization"])
         self.assertEqual(report["performance_summary"]["p95_wall_ns"], 301_000_000_000)
 
+    def test_search_elapsed_and_nodes_are_observations_not_cutoffs(self):
+        report = synthetic_report(8, opening_depth=8, endgame_depth=8, game_sample="efficiency8")
+        diagnostic = report["games"][0]["steps"][0]["search"]
+        diagnostic["elapsed_us"] = 600_000_001
+        diagnostic["nodes"] = 50_000_001
+        redigest(report)
+        whole_game.verify(report)
+
+    def test_schema_v4_requires_explicit_evaluator_phase_and_sample_identity(self):
+        fields = ("evaluator", "opening_depth", "midgame_depth", "endgame_depth", "game_sample")
+        for field in fields:
+            report = synthetic_report()
+            report["settings"].pop(field)
+            redigest(report)
+            with self.subTest(field=field), self.assertRaisesRegex(
+                    whole_game.BenchmarkError, "whole-game settings identity missing"):
+                whole_game.verify(report)
+
     def test_efficiency_identity_uses_strategic_without_artifact_and_freezes_limits(self):
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / "cli"
             binary.write_bytes(b"cli")
             args = SimpleNamespace(kind="cli-persistent", binary=binary, artifact=None,
                 evaluator="strategic",
-                exact_empty=16, node_limit=50_000, cache_scope="turn", opening_depth=8,
+                exact_empty=16, node_limit=None, cache_scope="turn", opening_depth=8,
                 midgame_depth=8, endgame_depth=8, game_sample="efficiency8",
-                search_time_limit_ms=2_500,
-                timeout_seconds=310, max_decisions=120, max_rss_kib=1_000_000,
+                search_time_limit_ms=None,
+                timeout_seconds=600, max_decisions=120, max_rss_kib=1_000_000,
                 source_revision="a" * 40)
             identity = whole_game.measurement_identity(args)
             self.assertEqual(identity["settings"]["game_sample"], "efficiency8")
             self.assertEqual(identity["settings"]["evaluator"], "strategic")
             self.assertIsNone(identity["artifact"])
             self.assertNotIn("game_time_limit_seconds", identity["settings"])
-            self.assertEqual(identity["settings"]["search_time_limit_ms"], 2_500)
+            self.assertIsNone(identity["settings"]["search_time_limit_ms"])
+            self.assertIsNone(identity["settings"]["node_limit"])
+            self.assertTrue(identity["settings"]["unbounded_search"])
+            self.assertEqual(identity["settings"]["timeout_seconds"], 600)
             args.endgame_depth = 12
             with self.assertRaisesRegex(whole_game.BenchmarkError, "StrategicEvaluator efficiency sample requires"):
                 whole_game.measurement_identity(args)
@@ -173,9 +195,9 @@ class WholeGameTests(unittest.TestCase):
             binary.write_bytes(b"cli")
             artifact.write_bytes(b"not-needed")
             args = SimpleNamespace(kind="cli-persistent", binary=binary, artifact=artifact,
-                evaluator="trained", exact_empty=16, node_limit=50_000, cache_scope="turn",
+                evaluator="trained", exact_empty=16, node_limit=None, cache_scope="turn",
                 opening_depth=8, midgame_depth=8, endgame_depth=8, game_sample="efficiency8",
-                search_time_limit_ms=2_500, timeout_seconds=310, max_decisions=120,
+                search_time_limit_ms=None, timeout_seconds=600, max_decisions=120,
                 max_rss_kib=1_000_000, source_revision="a" * 40)
             with self.assertRaisesRegex(whole_game.BenchmarkError, "StrategicEvaluator efficiency sample requires"):
                 whole_game.measurement_identity(args)
@@ -191,6 +213,38 @@ class WholeGameTests(unittest.TestCase):
             command = popen.call_args.args[0]
             self.assertEqual(command[command.index("--evaluator") + 1], "strategic")
             self.assertNotIn("--trained-artifact", command)
+
+    def test_efficiency_seat_uses_unbounded_search_and_separate_watchdog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "cli"
+            binary.write_bytes(b"cli")
+            with patch.object(whole_game.subprocess, "Popen") as popen:
+                whole_game.Seat("cli-persistent", binary, None, 8, 600, "B", cache_scope="turn",
+                                opening_depth=8, endgame_depth=8, search_time_limit_ms=None,
+                                node_limit=None, unbounded_search=True, evaluator="strategic")
+            command = popen.call_args.args[0]
+            self.assertIn("--unbounded-search", command)
+            self.assertNotIn("--time-limit-ms", command)
+            self.assertNotIn("--node-limit", command)
+
+    def test_nonresumable_efficiency_run_records_and_verifies_limits(self):
+        source = synthetic_report(8, opening_depth=8, endgame_depth=8, game_sample="efficiency8")
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "cli"
+            binary.write_bytes(b"cli")
+            args = SimpleNamespace(kind="cli-persistent", binary=binary, artifact=None,
+                evaluator="strategic", opening_depth=8, midgame_depth=8, endgame_depth=8,
+                exact_empty=16, cache_scope="turn", timeout_seconds=600,
+                search_time_limit_ms=None, node_limit=None, max_decisions=120,
+                max_rss_kib=1_000, game_sample="efficiency8")
+            with patch.object(whole_game, "persistent_games",
+                              return_value=(source["games"], source["process_totals"])):
+                report = whole_game.run(args)
+            self.assertIsNone(report["settings"]["search_time_limit_ms"])
+            self.assertIsNone(report["settings"]["node_limit"])
+            self.assertTrue(report["settings"]["unbounded_search"])
+            self.assertEqual(report["settings"]["timeout_seconds"], 600)
+            whole_game.verify(report)
 
     def test_independent_replay_and_resource_verification(self):
         report = synthetic_report()

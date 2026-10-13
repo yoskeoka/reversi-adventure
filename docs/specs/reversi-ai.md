@@ -805,7 +805,12 @@ choice does not change global defaults or reinterpret earlier manifests.
 The version-6 production manifest and version-4 report identify the selected
 self-play depths, exact threshold, cache policy, and executable SHA-256.
 `prepare`, `run`, and `verify` reject mismatched identities. Heuristic
-positions at different depths are different workloads.
+positions at different depths are different workloads. A schema-v4 report must
+explicitly record its evaluator, opening/midgame/endgame depths, and game sample;
+verification rejects a missing identity field instead of supplying a default.
+The efficiency sample has no per-decision search-time or node-count budget, so
+each configured search depth can finish. Its 600-second per-decision protocol
+timeout is a separate watchdog for a stalled response.
 
 Before starting the larger TrainedEvaluator learning batch, measure the
 selected search profile with `StrategicEvaluator` and the current whole-game
@@ -819,9 +824,13 @@ completion and report its arithmetic mean and nearest-rank P95. The mean goal is
 consider search optimization. These are whole-game efficiency references,
 never game deadlines or acceptance cutoffs. With this eight-game sample,
 nearest-rank P95 is the slowest observed game and is only a rough tail signal.
-The runner's per-decision response timeout exists only to detect a stalled
-process; it is separate from performance targets and the total learning-batch
-duration. If the baseline is far from the mean goal or its P95 reaches the
+The CLI diagnostic's `elapsed_us` includes board-specific configuration as well
+as search. Time and node counts are observations, not per-decision budgets, and
+verification does not reject a completed game because either value is large.
+The per-decision protocol response timeout is 600 seconds and detects a search
+that does not respond; it is separate from the whole-game references and total
+learning-batch duration.
+If the baseline is far from the mean goal or its P95 reaches the
 review threshold, try up to three bounded midgame-search improvements, verify
 each candidate's search results, then remeasure the same games and evaluator.
 If those attempts still miss, record the best result and remaining tradeoff

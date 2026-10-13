@@ -126,6 +126,7 @@ class Seat:
                  capture_cache_policy: bool = False,
                  opening_depth: int = 12, endgame_depth: int = 12,
                  search_time_limit_ms: int | None = None,
+                 unbounded_search: bool = False,
                  evaluator: str = "trained"):
         require(exact_empty in (16, 20, 24), "unsupported exact threshold")
         require(all(type(depth) is int and 1 <= depth <= 64
@@ -133,6 +134,8 @@ class Seat:
         require(search_time_limit_ms is None or type(search_time_limit_ms) is int and search_time_limit_ms > 0,
                 "invalid search time limit")
         require(node_limit is None or type(node_limit) is int and node_limit > 0, "invalid node limit")
+        require(not unbounded_search or search_time_limit_ms is None and node_limit is None,
+                "unbounded search conflicts with search limits")
         require(max_rss_kib is None or type(max_rss_kib) is int and max_rss_kib > 0, "invalid RSS limit")
         self.exact_empty, self.node_limit, self.max_rss_kib = exact_empty, node_limit, max_rss_kib
         self.capture_cache_policy = capture_cache_policy
@@ -142,6 +145,7 @@ class Seat:
         self.kind, self.timeout, self.label, self.depth = kind, timeout, label, depth
         self.opening_depth, self.endgame_depth = opening_depth, endgame_depth
         self.search_time_limit_ms = search_time_limit_ms
+        self.unbounded_search = unbounded_search
         self.stderr = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
         started = time.monotonic_ns()
         self.started_at_ns = time.time_ns()
@@ -153,15 +157,19 @@ class Seat:
             require(evaluator in ("strategic", "trained"), "unsupported CLI evaluator")
             require((artifact is not None) == (evaluator == "trained"),
                     "trained evaluator/artifact identity mismatch")
-            search_time_limit_ms = (search_time_limit_ms if search_time_limit_ms is not None
-                                    else int(timeout * 1000) - 1000)
+            if not unbounded_search:
+                search_time_limit_ms = (search_time_limit_ms if search_time_limit_ms is not None
+                                        else int(timeout * 1000) - 1000)
             argv = [str(binary), "--evaluator", evaluator]
             if evaluator == "trained":
                 argv.extend(["--trained-artifact", str(artifact)])
             argv.extend([
                     "--opening-depth", str(opening_depth), "--midgame-depth", str(depth),
-                    "--endgame-depth", str(endgame_depth), "--exact-solver-empty-squares", str(exact_empty),
-                    "--time-limit-ms", str(search_time_limit_ms)])
+                    "--endgame-depth", str(endgame_depth), "--exact-solver-empty-squares", str(exact_empty)])
+            if unbounded_search:
+                argv.append("--unbounded-search")
+            else:
+                argv.extend(["--time-limit-ms", str(search_time_limit_ms)])
             if node_limit is not None:
                 argv.extend(["--node-limit", str(node_limit)])
             if kind != "cli-legacy":
@@ -438,9 +446,7 @@ def decision_phase(board: str, exact_empty: int = 16) -> str:
 
 def validate_cli_diagnostic(step: dict, sample: dict, midgame_depth: int,
                             exact_empty: int = 16, opening_depth: int = 12,
-                            endgame_depth: int = 12,
-                            search_time_limit_ms: int | None = None,
-                            node_limit: int | None = None) -> None:
+                            endgame_depth: int = 12) -> None:
     require(exact_empty in (16, 20, 24), "unsupported exact threshold")
     require(isinstance(sample, dict) and sample.get("score_contract") == SCORE_CONTRACT
             and sample.get("search_semantics_version") == 2
@@ -469,12 +475,6 @@ def validate_cli_diagnostic(step: dict, sample: dict, midgame_depth: int,
             and sample["exact"] == exact
             and sample["outcome"] == ("pass" if forced_pass else "move"),
             "incomplete or inconsistent CLI search")
-    require(search_time_limit_ms is None or sample["elapsed_us"] <= search_time_limit_ms * 1000,
-            "CLI search exceeded configured time limit")
-    require(node_limit is None or sample["nodes"] <= node_limit,
-            "CLI search exceeded configured node limit")
-
-
 def attach_diagnostics(record: dict, seats: dict[str, Seat], kind: str) -> None:
     if kind in ("oracle", "cli-legacy"):
         record["cache"] = None
@@ -488,9 +488,7 @@ def attach_diagnostics(record: dict, seats: dict[str, Seat], kind: str) -> None:
             validate_cli_diagnostic(step, diagnostic, seats[step["seat"]].depth,
                                     getattr(seats[step["seat"]], "exact_empty", 16),
                                     getattr(seats[step["seat"]], "opening_depth", 12),
-                                    getattr(seats[step["seat"]], "endgame_depth", 12),
-                                    getattr(seats[step["seat"]], "search_time_limit_ms", None),
-                                    getattr(seats[step["seat"]], "node_limit", None))
+                                    getattr(seats[step["seat"]], "endgame_depth", 12))
         except BenchmarkError as exc:
             raise BenchmarkError(f"{exc} at {step['id']}") from exc
         step["search"] = diagnostic
@@ -505,7 +503,8 @@ def persistent_games(rows: list[dict], binary: Path, artifact: Path | None, dept
                      cache_scope: str, evaluator: str = "trained", opening_depth: int = 12,
                      endgame_depth: int = 12, exact_empty: int = 16,
                      node_limit: int | None = None,
-                     search_time_limit_ms: int | None = None) -> tuple[list[dict], dict]:
+                     search_time_limit_ms: int | None = None,
+                     unbounded_search: bool = False) -> tuple[list[dict], dict]:
     seats: dict[str, Seat] = {}
     games = []
     try:
@@ -514,7 +513,8 @@ def persistent_games(rows: list[dict], binary: Path, artifact: Path | None, dept
                                cache_scope=cache_scope, exact_empty=exact_empty,
                                node_limit=node_limit, max_rss_kib=max_rss_kib,
                                opening_depth=opening_depth, endgame_depth=endgame_depth,
-                               search_time_limit_ms=search_time_limit_ms, evaluator=evaluator)
+                               search_time_limit_ms=search_time_limit_ms,
+                               unbounded_search=unbounded_search, evaluator=evaluator)
         for row in rows:
             for assignment in (0, 1):
                 before = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
@@ -549,7 +549,8 @@ def measured_game(row: dict, assignment: int, kind: str, binary: Path, artifact:
                   cwd: Path | None, cache_scope: str, evaluator: str = "trained",
                   opening_depth: int = 12, endgame_depth: int = 12,
                   exact_empty: int = 16, node_limit: int | None = None,
-                  search_time_limit_ms: int | None = None) -> dict:
+                  search_time_limit_ms: int | None = None,
+                  unbounded_search: bool = False) -> dict:
     seats = {}
     try:
         for side in ("B", "W"):
@@ -557,7 +558,7 @@ def measured_game(row: dict, assignment: int, kind: str, binary: Path, artifact:
                                cache_scope, exact_empty=exact_empty, node_limit=node_limit,
                                max_rss_kib=max_rss_kib, opening_depth=opening_depth,
                                endgame_depth=endgame_depth, search_time_limit_ms=search_time_limit_ms,
-                               evaluator=evaluator)
+                               unbounded_search=unbounded_search, evaluator=evaluator)
         record = game(row, assignment, seats, kind, timeout, max_decisions)
         usages = {side: seat.close() for side, seat in seats.items()}
         attach_diagnostics(record, seats, kind)
@@ -594,6 +595,17 @@ def run(args: argparse.Namespace) -> dict:
     require(args.timeout_seconds > 1 and args.max_rss_kib > 0 and args.max_decisions >= 120,
             "invalid resource caps")
     evaluator = selected_evaluator(args)
+    game_sample = getattr(args, "game_sample", "full8")
+    unbounded_search = game_sample == "efficiency8"
+    search_time_limit_ms = getattr(args, "search_time_limit_ms", None)
+    node_limit = getattr(args, "node_limit", None)
+    if unbounded_search:
+        require(args.kind == "cli-persistent" and evaluator == "strategic" and args.artifact is None
+                and (getattr(args, "opening_depth", 12), args.midgame_depth,
+                     getattr(args, "endgame_depth", 12)) == (8, 8, 8)
+                and getattr(args, "exact_empty", 16) == 16 and args.cache_scope == "turn"
+                and search_time_limit_ms is None and node_limit is None and args.timeout_seconds == 600,
+                "efficiency8 requires unbounded StrategicEvaluator 8/8/8 exact16 turn and a 600-second decision watchdog")
     require(args.binary.is_file() and (args.artifact is None or args.artifact.is_file()),
             "binary or trained artifact is missing")
     require(args.kind not in ("oracle", "cli-legacy") or args.cache_scope == "game",
@@ -610,8 +622,9 @@ def run(args: argparse.Namespace) -> dict:
                                                   opening_depth=getattr(args, "opening_depth", 12),
                                                   endgame_depth=getattr(args, "endgame_depth", 12),
                                                   exact_empty=getattr(args, "exact_empty", 16),
-                                                  node_limit=getattr(args, "node_limit", None),
-                                                  search_time_limit_ms=getattr(args, "search_time_limit_ms", None))
+                                                  node_limit=node_limit,
+                                                  search_time_limit_ms=search_time_limit_ms,
+                                                  unbounded_search=unbounded_search)
     else:
         for row in rows:
             for assignment in (0, 1):
@@ -622,8 +635,9 @@ def run(args: argparse.Namespace) -> dict:
                                            opening_depth=getattr(args, "opening_depth", 12),
                                            endgame_depth=getattr(args, "endgame_depth", 12),
                                            exact_empty=getattr(args, "exact_empty", 16),
-                                           node_limit=getattr(args, "node_limit", None),
-                                           search_time_limit_ms=getattr(args, "search_time_limit_ms", None)))
+                                           node_limit=node_limit,
+                                           search_time_limit_ms=search_time_limit_ms,
+                                           unbounded_search=unbounded_search))
                 print(f"progress whole-game {len(games)}/8 opening={row['id']} seat={assignment} "
                       f"game={games[-1]['wall_ns'] / 1e9:.1f}s elapsed={time.monotonic() - started:.1f}s",
                       file=sys.stderr, flush=True)
@@ -638,16 +652,18 @@ def run(args: argparse.Namespace) -> dict:
                            "midgame_depth": args.midgame_depth,
                            "endgame_depth": getattr(args, "endgame_depth", 12),
                            "exact_empty": getattr(args, "exact_empty", 16), "timeout_seconds": args.timeout_seconds,
+                           "search_time_limit_ms": search_time_limit_ms,
+                           "node_limit": node_limit, "unbounded_search": unbounded_search,
                            "exact_cache_scope": args.cache_scope,
                            "max_decisions": args.max_decisions, "max_rss_kib": args.max_rss_kib,
                            "process_lifetime": ("all-games-per-seat" if args.kind == "cli-persistent"
                                                 else "one-game-per-seat"),
-                           "game_sample": getattr(args, "game_sample", "full8")},
+                           "game_sample": game_sample},
               "environment": {"host": platform.node(), "cpu_model": platform.processor(),
                               "os": platform.platform(), "measurement": "linux-wait4"},
               "games": games, "aggregate": totals(games), "process_totals": process_totals,
               "performance_summary": (efficiency_performance_summary(games)
-                                      if getattr(args, "game_sample", "full8") == "efficiency8" else None)}
+                                      if game_sample == "efficiency8" else None)}
     report["report_digest"] = hashlib.sha256(canonical(report)).hexdigest()
     return report
 
@@ -725,8 +741,7 @@ def verify_game(record: dict, row: dict, assignment: int, kind: str, settings: d
         for step in record["steps"]:
             sample = step.get("search")
             validate_cli_diagnostic(step, sample, settings["midgame_depth"], settings["exact_empty"],
-                                    settings.get("opening_depth", 12), settings.get("endgame_depth", 12),
-                                    settings.get("search_time_limit_ms"), settings.get("node_limit"))
+                                    settings["opening_depth"], settings["endgame_depth"])
             for key in cache:
                 cache[key] += sample[f"cache_{key}"]
         require(record.get("cache") == cache, "cache totals mismatch")
@@ -769,15 +784,17 @@ def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | 
         require(report.get("artifact") is not None and digest(artifact) == report["artifact"]["sha256"],
                 "artifact digest mismatch")
     settings = report.get("settings")
-    evaluator = settings.get("evaluator", "oracle" if kind == "oracle" else "trained") if isinstance(settings, dict) else None
+    require(isinstance(settings, dict)
+            and all(key in settings for key in ("evaluator", "opening_depth", "midgame_depth",
+                                                "endgame_depth", "game_sample")),
+            "whole-game settings identity missing")
+    evaluator = settings["evaluator"]
     require(evaluator in ("oracle", "strategic", "trained")
             and (evaluator == "oracle") == (kind == "oracle")
             and (report.get("artifact") is not None) == (evaluator == "trained"),
             "evaluator/artifact workload identity mismatch")
-    require(isinstance(settings, dict)
-            and all(type(settings.get(key, default)) is int and 1 <= settings.get(key, default) <= 64
-                    for key, default in (("opening_depth", 12), ("midgame_depth", 12),
-                                         ("endgame_depth", 12)))
+    require(all(type(settings.get(key)) is int and 1 <= settings[key] <= 64
+                for key in ("opening_depth", "midgame_depth", "endgame_depth"))
             and settings.get("exact_empty") in allowed_exact
             and (settings.get("node_limit") is None or type(settings.get("node_limit")) is int
                  and settings["node_limit"] > 0)
@@ -788,18 +805,19 @@ def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | 
             and settings.get("process_lifetime") == ("all-games-per-seat" if kind == "cli-persistent"
                                                      else "one-game-per-seat"), "search settings mismatch")
     if kind == "oracle":
-        require(settings.get("opening_depth", 12) == 12 and settings.get("endgame_depth", 12) == 12,
+        require(settings["opening_depth"] == 12 and settings["endgame_depth"] == 12,
                 "unsupported Oracle phase profile")
-    sample = settings.get("game_sample", "full8")
+    sample = settings["game_sample"]
+    unbounded_search = settings.get("unbounded_search", False)
     rows = measurement_rows(sample)
     if sample == "efficiency8":
         require(kind == "cli-persistent" and evaluator == "strategic"
                 and report.get("artifact") is None and settings.get("opening_depth") == 8
                 and settings.get("midgame_depth") == 8 and settings.get("endgame_depth") == 8
                 and settings.get("exact_empty") == 16 and settings.get("exact_cache_scope") == "turn"
-                and type(settings.get("search_time_limit_ms")) is int
-                and settings["search_time_limit_ms"] > 0
-                and type(settings.get("node_limit")) is int and settings["node_limit"] > 0
+                and settings.get("search_time_limit_ms") is None
+                and settings.get("node_limit") is None and unbounded_search is True
+                and settings.get("timeout_seconds") == 600
                 and settings.get("game_sample") == "efficiency8",
                 "invalid StrategicEvaluator efficiency sample settings")
     expected_oracle_profile = (oracle.profile_metadata(profile(settings["midgame_depth"], settings["exact_empty"]))
@@ -1168,6 +1186,7 @@ def measurement_identity(args) -> dict:
     require(all(type(depth) is int and 1 <= depth <= 64
                 for depth in (opening_depth, args.midgame_depth, endgame_depth)), "invalid phase depth")
     game_sample = getattr(args, "game_sample", "full8")
+    unbounded_search = game_sample == "efficiency8"
     evaluator = selected_evaluator(args)
     rows = measurement_rows(game_sample)
     if args.kind == "oracle":
@@ -1178,11 +1197,11 @@ def measurement_identity(args) -> dict:
                 and (opening_depth, args.midgame_depth, endgame_depth) == (8, 8, 8)
                 and getattr(args, "exact_empty", 16) == 16 and args.cache_scope == "turn"
                 and len(rows) == 8
-                and search_time_limit_ms is not None and node_limit is not None
-                and args.timeout_seconds > search_time_limit_ms / 1000
+                and search_time_limit_ms is None and node_limit is None
+                and args.timeout_seconds == 600
                 and isinstance(source_revision, str) and re.fullmatch(r"[0-9a-f]{40}", source_revision),
                 "StrategicEvaluator efficiency sample requires 8/8/8 exact16 turn, fixed 8 games, "
-                "a source revision, and explicit search limits")
+                "a source revision, unbounded searches, and a 600-second decision watchdog")
     return {"score_contract": SCORE_CONTRACT, "kind": args.kind, "binary": {"path": str(args.binary.resolve()), "sha256": digest(args.binary)},
             "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)} if args.artifact else None),
             "openings_sha256": digest(OPENINGS), "source_revision": getattr(args, "source_revision", None),
@@ -1193,6 +1212,7 @@ def measurement_identity(args) -> dict:
                          "endgame_depth": endgame_depth,
                          "exact_empty": getattr(args, "exact_empty", 16), "timeout_seconds": args.timeout_seconds,
                          "search_time_limit_ms": search_time_limit_ms, "node_limit": node_limit,
+                         "unbounded_search": unbounded_search,
                          "exact_cache_scope": args.cache_scope, "max_decisions": args.max_decisions,
                          "max_rss_kib": args.max_rss_kib,
                          "process_lifetime": "segments-per-seat" if args.kind == "cli-persistent" else "one-game-per-seat",
@@ -1289,6 +1309,7 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                                            args.max_rss_kib, opening_depth=identity["settings"]["opening_depth"],
                                            endgame_depth=identity["settings"]["endgame_depth"],
                                            search_time_limit_ms=identity["settings"]["search_time_limit_ms"],
+                                           unbounded_search=identity["settings"]["unbounded_search"],
                                            evaluator=identity["settings"]["evaluator"])
                 game_started_at_ns = time.time_ns()
                 before = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
@@ -1407,7 +1428,7 @@ def main(argv: list[str] | None = None) -> int:
     measure.add_argument("--exact-empty", type=int, choices=(16, 20, 24), default=16)
     measure.add_argument("--cache-scope", choices=("game", "turn"),
                          help="CLI defaults to turn; Oracle uses game")
-    measure.add_argument("--timeout-seconds", type=float, default=310)
+    measure.add_argument("--timeout-seconds", type=float, default=600)
     measure.add_argument("--search-time-limit-ms", type=int)
     measure.add_argument("--node-limit", type=int)
     measure.add_argument("--max-rss-kib", type=int, required=True)

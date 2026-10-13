@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice|trained] [--trained-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
-[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v2)"
+[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--unbounded-search] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v2)"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -46,6 +46,7 @@ struct CliArgs {
     config: AiConfig,
     time_limit: Duration,
     node_limit: Option<u64>,
+    unbounded_search: bool,
     advisor_config: Option<DecisionMoveConfig>,
     decision_move_config: Option<DecisionMoveConfig>,
     print_advisor_config_id: bool,
@@ -64,6 +65,8 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
     let mut exact_solver_empty_squares = AiConfig::DEFAULT_EXACT_SOLVER_EMPTY_SQUARES;
     let mut time_limit = Duration::from_secs(30);
     let mut node_limit = None;
+    let mut unbounded_search = false;
+    let mut explicit_search_limit = false;
     let mut exact_cache_scope = String::from("turn");
     let mut profile = None;
     let mut has_explicit_config = false;
@@ -103,9 +106,14 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
             }
             "--trained-artifact" => trained_artifact = Some(value()?),
             "--time-limit-ms" => {
-                time_limit = Duration::from_millis(parse_u64(&value()?, "--time-limit-ms")?)
+                time_limit = Duration::from_millis(parse_u64(&value()?, "--time-limit-ms")?);
+                explicit_search_limit = true;
             }
-            "--node-limit" => node_limit = Some(parse_u64(&value()?, "--node-limit")?),
+            "--node-limit" => {
+                node_limit = Some(parse_u64(&value()?, "--node-limit")?);
+                explicit_search_limit = true;
+            }
+            "--unbounded-search" => unbounded_search = true,
             "--exact-cache-scope" => exact_cache_scope = value()?,
             "--profile" => profile = Some(value()?),
             "--advisor-analysis" => advisor_analysis = true,
@@ -117,6 +125,9 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
 
     if !matches!(evaluator.as_str(), "strategic" | "novice" | "trained") {
         return Err(format!("unknown evaluator {evaluator:?}"));
+    }
+    if unbounded_search && explicit_search_limit {
+        return Err("--unbounded-search conflicts with --time-limit-ms and --node-limit".into());
     }
     if evaluator == "trained" && trained_artifact.is_none() {
         return Err("--evaluator trained requires --trained-artifact PATH".to_string());
@@ -165,6 +176,7 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
         config,
         time_limit,
         node_limit,
+        unbounded_search,
         advisor_config,
         decision_move_config,
         print_advisor_config_id,
@@ -214,8 +226,13 @@ fn choose_move<E: BoardEvaluator + ?Sized>(
     config: &AiConfig,
     time_limit: Duration,
     node_limit: Option<u64>,
+    unbounded_search: bool,
 ) -> (String, SearchResult) {
-    let mut budget = SearchBudget::with_time_limit(time_limit);
+    let mut budget = if unbounded_search {
+        SearchBudget::unbounded()
+    } else {
+        SearchBudget::with_time_limit(time_limit)
+    };
     if let Some(limit) = node_limit {
         budget = budget.with_node_limit(limit);
     }
@@ -293,7 +310,11 @@ fn main() -> Result<(), String> {
         let board = board_from_flat_string(fields[1])?;
         let color = parse_color(fields[2])?;
         if let Some(config) = &args.advisor_config {
-            let mut budget = SearchBudget::with_time_limit(args.time_limit);
+            let mut budget = if args.unbounded_search {
+                SearchBudget::unbounded()
+            } else {
+                SearchBudget::with_time_limit(args.time_limit)
+            };
             if let Some(limit) = args.node_limit {
                 budget = budget.with_node_limit(limit);
             }
@@ -334,6 +355,7 @@ fn main() -> Result<(), String> {
             &match_config,
             args.time_limit,
             args.node_limit,
+            args.unbounded_search,
         );
         let outcome = match search_result.outcome {
             SearchOutcome::Move(_) => "move",
@@ -390,6 +412,31 @@ mod tests {
     fn board_with_stones(stones: usize) -> Board {
         let flat = format!("{}{}", "B".repeat(stones), ".".repeat(64 - stones));
         board_from_flat_string(&flat).unwrap()
+    }
+
+    #[test]
+    fn unbounded_search_is_explicit_and_rejects_search_limits() {
+        assert!(!args(&[]).unwrap().unbounded_search);
+        assert!(args(&["--unbounded-search"]).unwrap().unbounded_search);
+        assert!(args(&["--unbounded-search", "--time-limit-ms", "1000"]).is_err());
+        assert!(args(&["--unbounded-search", "--node-limit", "1000"]).is_err());
+    }
+
+    #[test]
+    fn unbounded_search_completes_the_configured_depth() {
+        let evaluator = StrategicEvaluator::new();
+        let config = AiConfig::new(2, 2, 2);
+        let (_, result) = choose_move(
+            &mut SearchEngine::new(),
+            &evaluator,
+            &Board::new(),
+            Color::Black,
+            &config,
+            Duration::ZERO,
+            None,
+            true,
+        );
+        assert_eq!(result.completed_depth, 2);
     }
 
     #[test]

@@ -36,6 +36,7 @@ Godotと新規自己対局schema6の明示設定は深度各1..64・exact0..30�
 大規模な自己対局/学習batchは起動しない。学習前の探索器/対局ハーネス性能を測るため、ユーザーが選んだprofileで
 StrategicEvaluatorを使った固定8局の性能測定を行う。評価器の単局面あたり計算量と探索に必要な方向性は十分な代理となるため、
 `--trained-artifact`でCLIに渡すTrainedEvaluator重みJSONは不要とする。現行runnerが8/8/8とStrategicEvaluatorを表現できないため、測定前に対応する。
+8/8/8の各探索は時間/node budgetなしで完了させ、各手のprotocol応答timeoutを600秒のハング検知watchdogとして使う。
 平均が目標から大きく外れる、またはP95が300秒に達した場合は中盤探索の改善を最大3案まで試し、
 同じ評価器/局面で再測定する。速度目安を超えた局も最後まで実行し、時間だけを理由に打ち切らない。
 後続のTrainedEvaluator学習batchそのものの速度や評価器load/evaluate時間はこの計測から主張しない。目標に届かない場合は最良の実測結果と
