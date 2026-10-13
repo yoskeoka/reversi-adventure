@@ -3,6 +3,7 @@ import copy
 import contextlib
 import hashlib
 import json
+import shlex
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -103,6 +104,27 @@ class WinnerEmptyMigrationTests(unittest.TestCase):
             processes.check_output(["cargo", "test"])
         with self.assertRaisesRegex(ValueError, "cannot execute"):
             legacy_offline.assessment(Path("unused"), "run", 1, "exact_threshold")
+
+    def test_legacy_exact_cache_runner_uses_the_manifest_pinned_entrypoint(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            extracted = root/"temporary verifier"/"exact_cache_verification.py"
+            recorded = root/"original worktree"/"exact_cache_verification.py"
+            manifest = root/"saved manifest.json"
+            temporary_command = (
+                "rtk python3 "+shlex.quote(str(extracted.resolve()))
+                +" run --manifest "+shlex.quote(str(manifest.resolve()))+' "$@"\n'
+            ).encode()
+            pinned_command = (
+                "rtk python3 "+shlex.quote(str(recorded.resolve()))
+                +" run --manifest "+shlex.quote(str(manifest.resolve()))+' "$@"\n'
+            ).encode()
+            self.assertEqual(
+                legacy_offline.restore_pinned_entrypoint(temporary_command, extracted, recorded),
+                pinned_command,
+            )
+            with self.assertRaisesRegex(ValueError, "entrypoint mismatch"):
+                legacy_offline.restore_pinned_entrypoint(b"tampered runner", extracted, recorded)
 
     def test_legacy_manifest_harness_pins_route_original_worktree_without_relabelling(self):
         with TemporaryDirectory() as directory:

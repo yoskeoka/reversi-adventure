@@ -117,8 +117,24 @@ Use midgame depth 8 when needed, or exact threshold 0 to disable solving.
 Thresholds such as 18, 20, 22, and 24 set the number of empty squares at which
 exact search starts.
 
-Completion still depends on the frozen time and node limits. A failed or
-interrupted game cannot supply training labels or a completed report.
+The defaults are `12/12/12` with exact16. Before the larger TrainedEvaluator
+learning batch, measure search-engine and game-harness throughput with
+`StrategicEvaluator`: set all three phase depths to `8`, keep exact16 and cache
+scope `turn`. This is a directional heuristic with comparable per-position
+evaluation cost. The efficiency sample therefore needs no TrainedEvaluator
+artifact and does not claim trained-model strength or evaluator cost.
+
+Run all eight fixed games to completion. Record the mean goal of 180 seconds
+and the nearest-rank P95 review point of 300 seconds. These times guide engine
+tuning before a large learning batch. They do not stop a game.
+
+The per-decision CLI response timeout is separate. It can detect a search that
+stops responding. The 180/300-second whole-game references never stop a game
+or limit the full training batch.
+
+The measurement manifest freezes the per-decision search limit, node cap, and
+protocol watchdog. A failed or interrupted game is not a completed timing
+sample. These settings do not impose a whole-game time cap.
 
 Candidate matches, corpus regret, and later 0018 acceptance retain 12/12/12
 and exact threshold 16. The manifest/report freeze all self-play settings, CLI SHA-256,
