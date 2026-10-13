@@ -844,6 +844,46 @@ sample mean, and its P95 before the larger learning batch is started. A slow
 game completes and remains in those statistics; a per-decision watchdog may
 end a game only when an individual search response stalls.
 
+### 0040 one-command efficiency closeout
+
+The human-operated 0040 efficiency run has one entrypoint. From a clean Linux
+checkout it pins the full source revision, builds the release `reversi-ai-cli`,
+then runs these stages serially: the fixed eight-game `efficiency8` sample;
+offline verification of its canonical report; independent external Oracle
+root/selected-child checks for every exact decision in that report; offline
+verification of the Oracle evidence; and publication of a canonical completion
+summary. It accepts the Oracle binary and working directory, output directory,
+host RSS cap, and progress interval as explicit inputs. It uses StrategicEvaluator,
+8/8/8, exact16, `turn`, no search-time or node budget, and a 600-second
+per-decision CLI response watchdog. It never starts a training batch or makes
+an adoption decision.
+
+Every stage validates existing artifacts against source, CLI and Oracle binary
+digests, settings, score contract, and upstream report digests before skipping
+it. Whole-game progress reuses the verified per-game checkpoints. Oracle
+root/selected-child evidence is checkpointed by exact decision and can resume
+only after validating each saved query and its identities. A changed input,
+corrupt checkpoint, failed exact solve, or score disagreement fails closed;
+the runner does not replace prior evidence or publish a completion summary.
+All eight games must finish. The 180-second mean goal and 300-second
+nearest-rank P95 review point never stop a game. The final summary records all
+game times, mean, P95, exact Oracle positions checked, evidence digests, and
+elapsed time for each stage and for the full invocation.
+
+The runner writes flushed stderr progress with these stable forms:
+
+```text
+progress efficiency8 stage=<stage> status=<started|verified|completed|failed> elapsed_s=<seconds> [identity=<digest>]
+progress efficiency8 stage=self-play game=<game-id> done=<n> total=8 game_s=<seconds> elapsed_s=<seconds>
+progress efficiency8 stage=oracle-check position=<position-id> done=<n> total=<exact-position-count> elapsed_s=<seconds>
+progress efficiency8 stage=complete games=8 mean_s=<seconds> nearest_rank_p95_s=<seconds> oracle_positions=<n> elapsed_s=<seconds>
+```
+
+`--progress-every` is a positive interval, defaults to 1, and always emits stage
+boundaries and the final completion line. A human starts this command in a
+terminal and may wait for it to finish; no CI job or background process starts
+the long measurement.
+
 ### Durable whole-game measurement and game boundaries
 
 Prepared measurement manifests pin source and harness revisions; absolute paths
