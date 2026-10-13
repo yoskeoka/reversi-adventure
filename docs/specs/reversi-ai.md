@@ -847,7 +847,7 @@ end a game only when an individual search response stalls.
 The first fixed `efficiency8` sample completed on 2026-10-13: its eight
 StrategicEvaluator games averaged 3.7699 seconds, with nearest-rank P95 at
 8.0750 seconds. The 132 exact positions were checked by 252 exact Oracle root
-and selected-child queries, and the saved report and Oracle evidence verified.
+and selected-child queries, and the saved report and Oracle evidence were verified.
 This is well below the 180-second mean goal and 300-second P95 review point, so
 it gives no reason to optimize this search profile before training. It does not
 measure TrainedEvaluator evaluation cost, total learning-batch duration, or

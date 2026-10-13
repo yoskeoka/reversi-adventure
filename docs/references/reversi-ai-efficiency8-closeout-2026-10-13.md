@@ -34,6 +34,9 @@ Egaroucid同士の全局self-play速度計測ではない。Oracle query process
 最初の実行はnode `xps`、machine `x86_64`、WSL2 Linux kernel `6.18.40.1`。
 検証済みresumeは同じnode・machine・platformのkernel `6.18.54.1`で行われた。
 reportには両方のinvocation記録があり、元のrun identityを維持している。
+resume側のsource revisionは`7672816`。元の`b82b04d`からの差分はbenchmark runner、
+そのtests、specだけで、Rust AI search codeは変更されていない。build receiptとCLI SHA-256は
+run開始時のidentityに固定された。
 
 ## 保存した証拠
 

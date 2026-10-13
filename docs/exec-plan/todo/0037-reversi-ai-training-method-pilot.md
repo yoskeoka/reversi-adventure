@@ -7,29 +7,35 @@
 > raw差baseline/validationは明示legacy offline検証だけに保持し、新runへ読み替えない。
 > 本番入力の再生成・再学習は件数/上限/進捗/再開を固定した別の人間操作計画で行う。
 > [移行記録](../../references/reversi-ai-winner-empty-migration.md)を参照する。
-> 0040の最新producerでの独立root/選択child一致・資源制限応答・人間の設定/性能判断、
-> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは未達として残す。
+> 0040のreport-pinned producerでの独立root/選択child照合（132 exact positions、252 Oracle queries）・資源観測・
+> 人間の性能判断は2026-10-13に完了した（[結果](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md)）。
+> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは別の未達gateとして残す。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
-> 0040では学習前の探索器/対局ハーネス性能をStrategicEvaluatorで8/8/8・exact16・turn計測し、固定8局を完了まで実行する。
-> 平均180秒を目標、P95 300秒を探索改善の検討目安として記録する。局のhard limitやpilot batchのwall上限ではなく、
-> candidate match/0018の12/12/12も変更しない。
+> 学習前の探索器/対局ハーネスprofileはStrategicEvaluator・8/8/8・exact16・turnで計測済み。
+> 平均3.77秒、nearest-rank P95 8.08秒で、当該profileに広い探索最適化を加える根拠はない。
+> 局のhard limitやpilot batchのwall上限を定める値ではなく、candidate match/0018の12/12/12も変更しない。
+> これはTrainedEvaluator評価コストや学習batch総時間を測っていない。higher thresholdでのgame-scope採否は0035に残る。
 
 > **2026-10-02 performance evidence**: 0035の深度12/8の全局計測は完了し、
 > `docs/references/reversi-ai-whole-game-0035-results.md` に検証済み結果を記録した。
-> pilotの実行設定は0040の意味検証と人間の設定/時間予算判断後に固定する。
+> 0040の意味検証と人間の設定/性能判断は完了し、測定profileと結果は上記記録に固定した。
+> pilotの学習方法/教師値/実行設定の選択はこの計画の未完了作業として残る。
 > 追加計測は0039のパラメータ固定scriptと局単位保存/再開を利用し、既存条件を再測定しない。
 
-> **2026-10-06 correctness prerequisite**: エンジン採否は0043の停止→0044の修正→
-> 0045の12/8/12・exact20・turn/game各3局の縮小検証→0040の人間判断を経て固定する。
-> 再利用の不一致が未解決のままpilotを開始しない。0045は新しい速度基準の総当たりではなく、
+> **2026-10-06 correctness prerequisite**: PR #251の反例を受けた0043の停止→0044の修正→
+> 0045の12/8/12・exact20・turn/game各3局の縮小検証と0040の人間による設定/性能判断は完了した。
+> pilotのexact16/`turn` profileで未解決の不一致は確認されていない。高い閾値やgame-scopeを
+> pilotで使う場合は0035で先に評価する。0045は新しい速度基準の総当たりではなく、
 > 修正の回帰/実行可能性確認である。本pilotの6局/768行/20比較局の上限は変更しない。
 
 ## 目的と完了条件
 
 0047実装後の自己対局設定はschema6で3phase各1..64・exact0..30を明示指定できる。
 既定12/12/12・exact16、turn policyと候補比較strong-v1は維持する。
-[score契約調査](../../references/reversi-ai-exact-score-contract.md)の残条件と0040の設定/時間予算判断を
-pilot前に確認する。設定可能性を本pilotの完了や本番freezeの承認にしない。
+[score契約調査](../../references/reversi-ai-exact-score-contract.md)の残条件と
+[0040の設定/性能判断](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md)をpilot前に確認する。
+higher exact thresholdでのgame-scope再利用は0035で保留中であり、学習方法が必要とする場合に評価する。
+設定可能性を本pilotの完了や本番freezeの承認にしない。
 
 学習データの生成方法と教師値を明示して選び、0019 の本格的な再実行より先に、予定規模の 10% 以下の小規模 batch で `TrainedEvaluator` の更新前後を独立に比べる。改善が観測された artifact、全入力/設定の digest、検証結果を残す。改善しなければ失敗結果を保存し、方法を再計画する。小規模結果から 0018 の 50% 目標達成や統計的な一般化は主張しない。
 
