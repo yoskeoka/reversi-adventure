@@ -572,8 +572,12 @@ class OracleCheckpointTests(unittest.TestCase):
             evidence = whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
                 progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
             self.assertEqual(calls, [False, True])
-            self.assertEqual(evidence["schema_version"], 3)
+            self.assertEqual(evidence["schema_version"], 4)
             self.assertEqual(evidence["positions"][0]["query_count"], 2)
+            self.assertEqual([query["execution_host"] for query in evidence["positions"][0]["queries"]],
+                             [whole_game.execution_host_identity()] * 2)
+            checkpoint = whole_game.read_canonical(next(self.checkpoint_dir.glob("position-*.json")))
+            self.assertEqual(checkpoint["schema_version"], 2)
             self.assertEqual(evidence["oracle_runtime"]["resources_digest"],
                              whole_game.oracle_runtime_identity(self.binary, self.cwd)["resources_digest"])
             whole_game.verify_oracle_checkpoints(self.report, evidence, self.binary, self.cwd,
@@ -584,9 +588,15 @@ class OracleCheckpointTests(unittest.TestCase):
 
     def test_interrupted_selected_child_resumes_without_repeating_root(self):
         calls = []
+        original_host = {"node": "xps", "machine": "x86_64",
+                         "system": "Linux-6.18.40.1-microsoft-standard-WSL2-x86_64-with-glibc2.35"}
+        resumed_host = {"node": "xps", "machine": "x86_64",
+                        "system": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.35"}
         with contextlib.ExitStack() as stack:
             for context in self.patch_oracle(calls):
                 stack.enter_context(context)
+            stack.enter_context(patch.object(whole_game, "execution_host_identity",
+                                             side_effect=[original_host, resumed_host]))
             run_solve = whole_game.oracle.run_solve
             def interrupt_child(*args, **kwargs):
                 if kwargs["child_query"]:
@@ -607,6 +617,46 @@ class OracleCheckpointTests(unittest.TestCase):
                 progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
             self.assertEqual(calls, [False, True, True])
             self.assertEqual(len(evidence["positions"]), 1)
+            hosts = [query["execution_host"] for query in evidence["positions"][0]["queries"]]
+            self.assertEqual(hosts, [original_host, resumed_host])
+
+    def test_v3_checkpoints_migrate_with_saved_host_without_repeating_queries(self):
+        calls = []
+        original_host = {"node": "xps", "machine": "x86_64",
+                         "system": "Linux-6.18.40.1-microsoft-standard-WSL2-x86_64-with-glibc2.35"}
+        resumed_host = {"node": "xps", "machine": "x86_64",
+                        "system": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.35"}
+        with contextlib.ExitStack() as stack:
+            for context in self.patch_oracle(calls):
+                stack.enter_context(context)
+            stack.enter_context(patch.object(whole_game, "execution_host_identity", return_value=original_host))
+            evidence = whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
+                progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
+            checkpoint = next(self.checkpoint_dir.glob("position-*.json"))
+            saved = whole_game.read_canonical(checkpoint)
+            legacy_identity = {key: evidence[key] for key in
+                ("score_contract", "cli_report_digest", "oracle_binary_sha256", "oracle_runtime",
+                 "oracle_profile", "settings")}
+            legacy_identity["schema_version"] = 3
+            legacy_digest = hashlib.sha256(whole_game.canonical(legacy_identity)).hexdigest()
+            old_queries = [{key: value for key, value in query.items() if key != "execution_host"}
+                           for query in saved["queries"]]
+            legacy = {"schema_version": 1, "identity_digest": legacy_digest,
+                      "position": saved["position"], "settings": saved["settings"],
+                      "queries": old_queries}
+            whole_game.atomic_write(checkpoint, whole_game.sealed(legacy, "checkpoint_digest"))
+            calls.clear()
+            stack.enter_context(patch.object(whole_game, "execution_host_identity", return_value=resumed_host))
+            migrated = whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
+                progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir,
+                legacy_execution_host=original_host)
+            whole_game.verify_oracle_checkpoints(self.report, migrated, self.binary, self.cwd,
+                self.checkpoint_dir, timeout_seconds=600, max_rss_kib=100)
+        self.assertEqual(calls, [])
+        self.assertEqual([query["execution_host"] for query in migrated["positions"][0]["queries"]],
+                         [original_host, original_host])
+        saved = whole_game.read_canonical(checkpoint)
+        self.assertEqual(saved["schema_version"], 2)
 
     def test_resource_limit_change_or_corrupt_checkpoint_fails_before_query(self):
         calls = []
@@ -620,6 +670,10 @@ class OracleCheckpointTests(unittest.TestCase):
             saved["settings"]["max_rss_kib"] = 99
             whole_game.atomic_write(path, whole_game.sealed(saved, "checkpoint_digest"))
             calls.clear()
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "identity or digest mismatch"):
+                whole_game.preflight_oracle_checkpoints(self.report, self.binary, self.cwd, 600, 100,
+                    self.checkpoint_dir, whole_game.execution_host_identity())
+            self.assertEqual(calls, [])
             with self.assertRaisesRegex(whole_game.BenchmarkError, "identity or digest mismatch"):
                 whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
                     progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
@@ -755,6 +809,21 @@ class ResumableTests(unittest.TestCase):
                 whole_game.measure_resumable(self.args, "a" * 64, "fixture", self.checkpoints)
             seat.assert_not_called()
             self.assertEqual(len(self.calls), 1)
+
+    def test_closeout_preflight_rejects_corrupt_game_checkpoint_offline(self):
+        self.interrupt_after = 1
+        with self.assertRaises(KeyboardInterrupt):
+            self.measure()
+        path = next(self.checkpoints.glob("game-*.json"))
+        saved = whole_game.read_canonical(path)
+        saved["game_id"] = "opening-4-seat1"
+        whole_game.atomic_write(path, saved)
+        manifest_digest = "a" * 64
+        with patch.object(whole_game, "Seat") as seat, self.assertRaisesRegex(
+                whole_game.BenchmarkError, "checkpoint digest mismatch"):
+            whole_game.preflight_measurement_checkpoints(self.args, manifest_digest,
+                                                         "fixture", self.checkpoints)
+        seat.assert_not_called()
 
     def test_genuine_v1_reports_without_decision_resources_remain_valid(self):
         report = synthetic_report(8)
