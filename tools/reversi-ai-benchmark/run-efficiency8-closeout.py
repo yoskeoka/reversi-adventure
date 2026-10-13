@@ -27,7 +27,9 @@ from pathlib import Path
 import whole_game as wg
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNNER_VERSION = "reversi-ai-efficiency8-closeout-v1"
+RUNNER_VERSION = "reversi-ai-efficiency8-closeout-v2"
+LEGACY_RUNNER_VERSION = "reversi-ai-efficiency8-closeout-v1"
+LEGACY_SOURCE_REVISION = "b82b04d691bffd1866cc02e28416eaebaf2b4680"
 GAME_TIMEOUT_SECONDS = 600
 ORACLE_TIMEOUT_SECONDS = 600
 SAMPLE_GAMES = 8
@@ -108,7 +110,7 @@ def prepare_output_directory(path: Path, root: Path) -> Path:
     return path
 
 
-def build_release(root: Path, output_dir: Path, revision: str) -> tuple[dict, int]:
+def build_release(root: Path, output_dir: Path, revision: str, *, allow_build: bool = True) -> tuple[dict, int]:
     target_dir = output_dir / "build" / "target"
     binary = target_dir / "release" / BUILD_TARGET
     receipt_path = output_dir / "build-receipt.json"
@@ -127,6 +129,7 @@ def build_release(root: Path, output_dir: Path, revision: str) -> tuple[dict, in
                 "release CLI does not match its build receipt")
         return receipt, time.monotonic_ns() - started
 
+    require(allow_build, "compatible saved build receipt is required to resume this run")
     target_dir.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(command, cwd=root, check=True)
     require(binary.is_file() and os.access(binary, os.X_OK), "release CLI binary was not produced")
@@ -163,10 +166,91 @@ def run_identity(root: Path, output_dir: Path, revision: str, build: dict,
                               "oracle_timeout_seconds": ORACLE_TIMEOUT_SECONDS,
                               "max_rss_kib_per_process": max_rss_kib,
                               "progress_every": progress_every},
-                 "host": {"node": platform.node(), "system": platform.platform(),
-                          "machine": platform.machine()},
+                 "host": wg.execution_host_identity(),
                  "openings_sha256": wg.digest(openings), "harness": harness,
                  "output_directory": str(output_dir)}, "identity_digest")
+
+
+def same_linux_host_except_kernel(saved: dict, current: dict) -> bool:
+    try:
+        wg.verify_execution_host(saved)
+        wg.verify_execution_host(current)
+    except wg.BenchmarkError:
+        return False
+    if saved["node"] != current["node"] or saved["machine"] != current["machine"]:
+        return False
+    kernel = re.compile(r"^Linux-([0-9]+(?:\.[0-9]+)*)(-.+)$")
+    saved_match, current_match = kernel.fullmatch(saved["system"]), kernel.fullmatch(current["system"])
+    return (saved_match is not None and current_match is not None
+            and saved_match.group(2) == current_match.group(2))
+
+
+def git_blob_sha256(root: Path, revision: str, relative_path: str) -> str:
+    result = subprocess.run(["rtk", "git", "-C", str(root), "show", f"{revision}:{relative_path}"],
+                            check=True, capture_output=True)
+    return sha256_bytes(result.stdout)
+
+
+def validate_saved_identity(identity: dict, *, root: Path, output_dir: Path, current_revision: str,
+                            runtime: dict, max_rss_kib: int, progress_every: int) -> str:
+    require(identity.get("identity_digest") == seal(identity, "identity_digest")["identity_digest"],
+            "saved closeout identity digest mismatch")
+    require(identity.get("schema_version") == 1, "unsupported closeout identity schema")
+    saved_revision = identity.get("source_revision")
+    require(isinstance(saved_revision, str) and re.fullmatch(r"[0-9a-f]{40}", saved_revision) is not None,
+            "saved closeout source revision invalid")
+    runner = identity.get("runner_version")
+    if runner == LEGACY_RUNNER_VERSION:
+        require(saved_revision == LEGACY_SOURCE_REVISION,
+                "unsupported legacy closeout source revision")
+    else:
+        require(runner == RUNNER_VERSION and saved_revision == current_revision,
+                "unsupported closeout runner or source revision")
+    require(set(identity) == {"schema_version", "runner_version", "score_contract", "source_revision",
+            "cli", "oracle", "settings", "host", "openings_sha256", "harness", "output_directory",
+            "identity_digest"}, "saved closeout identity fields invalid")
+    ancestor = subprocess.run(["rtk", "git", "-C", str(root), "merge-base", "--is-ancestor",
+                               saved_revision, current_revision], check=False, capture_output=True)
+    require(ancestor.returncode == 0, "saved closeout source is not an ancestor of the current revision")
+    expected_settings = {"sample": "efficiency8", "games": SAMPLE_GAMES, "evaluator": "strategic",
+        "opening_depth": 8, "midgame_depth": 8, "endgame_depth": 8, "exact_empty": 16,
+        "cache_scope": "turn", "search_time_limit_ms": None, "node_limit": None,
+        "game_timeout_seconds": GAME_TIMEOUT_SECONDS, "oracle_timeout_seconds": ORACLE_TIMEOUT_SECONDS,
+        "max_rss_kib_per_process": max_rss_kib, "progress_every": progress_every}
+    require(identity.get("score_contract") == wg.SCORE_CONTRACT
+            and identity.get("settings") == expected_settings
+            and identity.get("oracle") == runtime
+            and identity.get("output_directory") == str(output_dir),
+            "saved closeout input identity changed")
+    require(same_linux_host_except_kernel(identity.get("host"), wg.execution_host_identity()),
+            "saved closeout host differs beyond Linux kernel release")
+    openings_relative = "tools/reversi-ai-benchmark/whole-game-openings-v1.json"
+    require(identity.get("openings_sha256") == wg.digest(Path(__file__).with_name("whole-game-openings-v1.json"))
+            and identity["openings_sha256"] == git_blob_sha256(root, saved_revision, openings_relative),
+            "saved closeout openings changed")
+    harness_paths = {
+        "run-efficiency8-closeout.py": "tools/reversi-ai-benchmark/run-efficiency8-closeout.py",
+        "whole_game.py": "tools/reversi-ai-benchmark/whole_game.py",
+        "exact_threshold.py": "tools/reversi-ai-benchmark/exact_threshold.py",
+        "prepare-whole-game-measurement.py": "tools/reversi-ai-benchmark/prepare-whole-game-measurement.py",
+        "oracle.py": "tools/reversi-ai-oracle/oracle.py"}
+    harness = identity.get("harness")
+    require(isinstance(harness, dict) and set(harness) == set(harness_paths),
+            "saved closeout harness identity invalid")
+    for name, relative_path in harness_paths.items():
+        item = harness[name]
+        current_path = (root / relative_path).resolve()
+        require(isinstance(item, dict) and set(item) == {"path", "sha256"}
+                and item.get("path") == str(current_path)
+                and item.get("sha256") == git_blob_sha256(root, saved_revision, relative_path),
+                f"saved closeout harness changed: {name}")
+    expected_cli = output_dir / "build" / "target" / "release" / BUILD_TARGET
+    cli = identity.get("cli")
+    require(isinstance(cli, dict) and set(cli) == {"path", "sha256"}
+            and cli.get("path") == str(expected_cli.resolve())
+            and re.fullmatch(r"[0-9a-f]{64}", str(cli.get("sha256", ""))) is not None,
+            "saved closeout CLI identity invalid")
+    return saved_revision
 
 
 def store_or_verify_identity(path: Path, identity: dict, output_dir: Path) -> None:
@@ -190,17 +274,46 @@ def validate_output_contents(output_dir: Path) -> None:
 
 
 class StageTracker:
-    def __init__(self, output_dir: Path, identity: dict, invocation_started: float):
+    def __init__(self, output_dir: Path, identity: dict, invocation_started: float, *,
+                 current_revision: str, record_invocation: bool = True):
         self.path = output_dir / "stage-state.json"
         self.identity = identity
         self.invocation_started = invocation_started
+        current_invocation = {"host": wg.execution_host_identity(), "source_revision": current_revision,
+                              "started_at_unix_ns": time.time_ns()}
         if self.path.exists():
             self.state = read_object(self.path)
             require(self.state.get("state_digest") == seal(self.state, "state_digest")["state_digest"]
                     and self.state.get("identity_digest") == identity["identity_digest"],
                     "closeout stage state identity mismatch")
+            require(self.state.get("schema_version") in (1, 2)
+                    and isinstance(self.state.get("stages"), dict), "closeout stage state schema invalid")
+            if self.state["schema_version"] == 1:
+                self.state = {**self.state, "schema_version": 2,
+                    "invocations": [{"host": identity["host"],
+                                     "source_revision": identity["source_revision"],
+                                     "started_at_unix_ns": None}]}
+            else:
+                require(isinstance(self.state.get("invocations"), list),
+                        "closeout invocation history invalid")
+            for item in self.state["invocations"]:
+                require(isinstance(item, dict)
+                        and set(item) == {"host", "source_revision", "started_at_unix_ns"},
+                        "closeout invocation record invalid")
+                wg.verify_execution_host(item["host"])
+                require(item["source_revision"] is None
+                        or isinstance(item["source_revision"], str)
+                        and re.fullmatch(r"[0-9a-f]{40}", item["source_revision"]) is not None,
+                        "closeout invocation revision invalid")
+                require(item["started_at_unix_ns"] is None
+                        or type(item["started_at_unix_ns"]) is int and item["started_at_unix_ns"] > 0,
+                        "closeout invocation timestamp invalid")
+            if record_invocation:
+                self.state["invocations"].append(current_invocation)
+                self._save()
         else:
-            self.state = {"schema_version": 1, "identity_digest": identity["identity_digest"], "stages": {}}
+            self.state = {"schema_version": 2, "identity_digest": identity["identity_digest"],
+                          "stages": {}, "invocations": [current_invocation] if record_invocation else []}
             self._save()
 
     def _save(self) -> None:
@@ -331,7 +444,8 @@ def final_summary(report: dict, evidence: dict, report_path: Path, evidence_path
                 "process_wall_ns": process["wall_ns"],
                 "user_cpu_ns": process["resources"]["user_cpu_ns"],
                 "system_cpu_ns": process["resources"]["system_cpu_ns"],
-                "peak_rss_kib": process["resources"]["peak_rss_kib"]})
+                "peak_rss_kib": process["resources"]["peak_rss_kib"],
+                "execution_host": query["execution_host"]})
     require(flat_queries, "Oracle evidence contains no measured queries")
     stage_elapsed = {name: record["elapsed_ns"] for name, record in tracker.state["stages"].items()}
     oracle_aggregate = {
@@ -354,6 +468,7 @@ def final_summary(report: dict, evidence: dict, report_path: Path, evidence_path
             "nearest_rank_p95_seconds": p95, "mean_goal_seconds": 180,
             "p95_review_seconds": 300, "limits_are_non_cutoff_indicators": True},
         "oracle_aggregate": oracle_aggregate, "oracle_queries": flat_queries,
+        "host_invocations": tracker.state["invocations"],
         "stage_elapsed_ns": stage_elapsed, "active_stage_elapsed_ns": sum(stage_elapsed.values()),
         "invocation_elapsed_ns": invocation_elapsed_ns}, "summary_digest")
 
@@ -391,7 +506,8 @@ def verify_existing_summary(output_dir: Path, identity: dict, cli: Path, args) -
             "existing Oracle verification marker mismatch")
     state_path = output_dir / "stage-state.json"
     require(state_path.is_file(), "closeout stage state is missing")
-    tracker = StageTracker(output_dir, identity, time.monotonic())
+    tracker = StageTracker(output_dir, identity, time.monotonic(),
+                           current_revision=identity["source_revision"], record_invocation=False)
     expected_summary = final_summary(report, evidence, report_path, evidence_path, identity, tracker,
                                      summary.get("invocation_elapsed_ns", -1))
     require(summary == expected_summary, "existing closeout summary content mismatch")
@@ -420,12 +536,21 @@ def run_closeout(args, *, root: Path = ROOT) -> dict:
             raise wg.BenchmarkError("another efficiency8 closeout is using this output directory") from exc
         emit_stage("preflight", "completed", time.monotonic() - invocation_started)
         emit_stage("build", "started", time.monotonic() - invocation_started)
-        build, build_elapsed_ns = build_release(root, output_dir, revision)
-        emit_stage("build", "completed", time.monotonic() - invocation_started)
-        identity = run_identity(root, output_dir, revision, build, oracle,
-                                args.max_rss_kib, args.progress_every)
         identity_path = output_dir / "run-identity.json"
-        store_or_verify_identity(identity_path, identity, output_dir)
+        if identity_path.exists():
+            identity = read_object(identity_path)
+            saved_revision = validate_saved_identity(identity, root=root, output_dir=output_dir,
+                current_revision=revision, runtime=oracle, max_rss_kib=args.max_rss_kib,
+                progress_every=args.progress_every)
+            build, build_elapsed_ns = build_release(root, output_dir, saved_revision, allow_build=False)
+            require(build.get("cli") == identity["cli"],
+                    "saved closeout CLI differs from its build receipt")
+        else:
+            build, build_elapsed_ns = build_release(root, output_dir, revision)
+            identity = run_identity(root, output_dir, revision, build, oracle,
+                                    args.max_rss_kib, args.progress_every)
+            store_or_verify_identity(identity_path, identity, output_dir)
+        emit_stage("build", "completed", time.monotonic() - invocation_started)
         validate_output_contents(output_dir)
         cli = Path(identity["cli"]["path"])
         require_pinned_cli(cli, identity)
@@ -447,20 +572,44 @@ def run_closeout(args, *, root: Path = ROOT) -> dict:
             print(f"verified existing efficiency8 summary: {output_dir / 'summary.json'}")
             return summary
 
-        tracker = StageTracker(output_dir, identity, invocation_started)
+        tracker = StageTracker(output_dir, identity, invocation_started, current_revision=revision)
         tracker.add_bootstrap("preflight", preflight_elapsed_ns, "completed")
         tracker.add_bootstrap("build", build_elapsed_ns, "completed")
         report_path = output_dir / "whole-game-report.json"
         checkpoints = output_dir / "whole-game-checkpoints"
+        if report_path.exists():
+            existing_report = validate_measurement_report(read_object(report_path), report_path,
+                                                          identity, cli, args, output_dir)
+            marker_path = output_dir / "report-verification.json"
+            if marker_path.exists():
+                require(read_object(marker_path) == report_marker(existing_report, report_path, identity),
+                        "existing whole-game verification marker mismatch")
+            oracle_checkpoints = output_dir / "oracle-checkpoints"
+            oracle_binary = Path(oracle["binary"]["path"])
+            if oracle_checkpoints.exists():
+                wg.preflight_oracle_checkpoints(existing_report, oracle_binary,
+                    Path(oracle["working_directory"]), ORACLE_TIMEOUT_SECONDS, args.max_rss_kib,
+                    oracle_checkpoints, identity["host"])
+            existing_evidence_path = output_dir / "oracle-evidence.json"
+            if existing_evidence_path.exists():
+                existing_evidence = read_object(existing_evidence_path)
+                wg.verify_oracle_evidence(existing_report, existing_evidence, oracle_binary,
+                    oracle_cwd=Path(oracle["working_directory"]),
+                    timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)
+                wg.verify_oracle_checkpoints(existing_report, existing_evidence, oracle_binary,
+                    Path(oracle["working_directory"]), oracle_checkpoints,
+                    timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)
         expected_args = argparse.Namespace(kind="cli-persistent", binary=cli, artifact=None,
             evaluator="strategic", opening_depth=8, midgame_depth=8, endgame_depth=8,
             exact_empty=16, cache_scope="turn", timeout_seconds=GAME_TIMEOUT_SECONDS,
             search_time_limit_ms=None, node_limit=None, max_rss_kib=args.max_rss_kib,
             max_decisions=120, game_sample="efficiency8", output=report_path,
             checkpoint_dir=checkpoints, progress_every=args.progress_every,
-            source_revision=revision)
+            source_revision=identity["source_revision"])
         measurement_identity = wg.measurement_identity(expected_args)
         measurement_manifest_digest = sha256_bytes(wg.canonical(measurement_identity))
+        wg.preflight_measurement_checkpoints(expected_args, measurement_manifest_digest,
+                                             "efficiency8", checkpoints)
 
         tracker.run("cli-preflight", lambda: probe_cli(cli, args.max_rss_kib), success_status="verified")
         require_pinned_cli(cli, identity)
@@ -505,11 +654,17 @@ def run_closeout(args, *, root: Path = ROOT) -> dict:
                 wg.verify_oracle_checkpoints(report, evidence, oracle_binary,
                     Path(oracle["working_directory"]), oracle_checkpoints,
                     timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)
+                if evidence.get("schema_version") == 3:
+                    evidence = wg.oracle_evidence(report, oracle_binary, Path(oracle["working_directory"]),
+                        ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib,
+                        checkpoint_dir=oracle_checkpoints, progress_every=args.progress_every,
+                        progress_callback=oracle_progress, legacy_execution_host=identity["host"])
+                    wg.atomic_write(evidence_path, evidence)
             else:
                 evidence = wg.oracle_evidence(report, oracle_binary, Path(oracle["working_directory"]),
                     ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib,
                     checkpoint_dir=oracle_checkpoints, progress_every=args.progress_every,
-                    progress_callback=oracle_progress)
+                    progress_callback=oracle_progress, legacy_execution_host=identity["host"])
                 wg.verify_oracle_evidence(report, evidence, oracle_binary,
                     oracle_cwd=Path(oracle["working_directory"]),
                     timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)

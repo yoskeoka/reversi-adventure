@@ -866,12 +866,35 @@ it. Whole-game progress reuses the verified per-game checkpoints. Oracle
 root/selected-child evidence is checkpointed by exact decision and can resume
 only after validating each saved query and its identities. Each Oracle query
 records search elapsed time and nodes plus process wall time, user/system CPU,
-and peak RSS. Oracle evidence schema 3 checkpoints pin the 600-second query
-watchdog and shared RSS cap; offline verification checks these settings,
-resource observations, limits, and the score evidence. A changed input,
-corrupt checkpoint, failed exact solve, resource-limit breach, or score
-disagreement fails closed; the runner does not
-replace prior evidence or publish a completion summary.
+peak RSS, and the execution host (node, machine, and Linux kernel/platform).
+Before the CLI preflight process starts, the runner verifies any saved whole-game
+report, per-game/segment checkpoint, Oracle evidence, and every existing Oracle
+query checkpoint offline; malformed saved data cannot trigger a new CLI or Oracle
+process.
+Oracle evidence schema 4 checkpoints pin the 600-second query watchdog and
+shared RSS cap; offline verification checks these settings, resource
+observations, host provenance, limits, and score evidence. A checkpoint from
+the prior schema-3 Oracle evidence contract is upgraded only after its saved
+query data and old checkpoint digest verify; existing queries retain the host
+from the saved run identity, while new queries record the current host.
+If interruption occurs while checkpoint schemas are being upgraded, the next
+invocation accepts and completes the validated mixed-schema migration before
+it publishes schema-4 evidence.
+
+An interrupted efficiency8 run may resume from an explicitly supported prior
+runner version when the current source revision descends from the saved
+revision, the saved build/CLI and all workload inputs still match, and the
+current host has the same node, machine, and Linux platform except for a changed
+numeric kernel release. Compatibility for closeout runner v1 is restricted to
+source revision `b82b04d691bffd1866cc02e28416eaebaf2b4680`. The runner
+preserves the original run identity and build receipt, verifies the pinned CLI
+and Oracle runtime, and records each
+invocation host in stage state and the final summary. Unknown runner versions,
+unrelated source histories, node or machine changes, platform changes, changed
+settings/openings/CLI/Oracle resources, corrupt checkpoints, failed exact
+solves, resource-limit breaches, or score disagreements fail closed. No
+completed game or query is rerun merely because the process or Linux kernel
+changed, and prior score/resource observations are not replaced.
 All eight games must finish. The 180-second mean goal and 300-second
 nearest-rank P95 review point never stop a game. The final summary records all
 game times, mean, P95, exact Oracle positions and subprocess queries checked,

@@ -26,7 +26,7 @@ import oracle  # noqa: E402  (project-owned adapter; Egaroucid remains external)
 VERSION = "reversi-ai-whole-game-v4"
 SCORE_CONTRACT = "winner-empty-v1"
 DEFAULT_ORACLE_RSS_KIB = 1_572_864
-ORACLE_EVIDENCE_VERSION = 3
+ORACLE_EVIDENCE_VERSION = 4
 OPENINGS = Path(__file__).with_name("whole-game-openings-v1.json")
 DIAGNOSTIC = re.compile(
     r"search_diagnostic_v1\tposition_id=([^\t]+)\telapsed_us=(\d+)\tnodes=(\d+)"
@@ -72,6 +72,17 @@ def oracle_runtime_identity(binary: Path, cwd: Path) -> dict:
     return {"binary": {"path": str(binary), "sha256": digest(binary)},
             "working_directory": str(cwd), "resources": files,
             "resources_digest": hashlib.sha256(canonical(files)).hexdigest()}
+
+
+def execution_host_identity() -> dict:
+    require(platform.system() == "Linux", "Oracle execution host must be Linux")
+    return {"node": platform.node(), "system": platform.platform(), "machine": platform.machine()}
+
+
+def verify_execution_host(host: object) -> None:
+    require(isinstance(host, dict) and set(host) == {"node", "system", "machine"}
+            and all(isinstance(host.get(key), str) and host[key] for key in ("node", "system", "machine"))
+            and host["system"].startswith("Linux-"), "Oracle query execution host invalid")
 
 
 def opening_rows(path: Path = OPENINGS) -> list[dict]:
@@ -920,9 +931,11 @@ def _oracle_queries_for_step(step: dict) -> list[dict]:
 
 
 def _verify_oracle_query(query: dict, expected: dict, binary: Path, selected_profile,
-                         timeout: float, max_rss_kib: int) -> None:
+                         timeout: float, max_rss_kib: int, *, require_execution_host: bool = False) -> None:
     require(isinstance(query, dict) and all(query.get(key) == value for key, value in expected.items()),
             "Oracle query identity mismatch")
+    if require_execution_host or "execution_host" in query:
+        verify_execution_host(query.get("execution_host"))
     search, process = query.get("search"), query.get("process")
     require(isinstance(search, dict) and search.get("exact") is True
             and type(search.get("value")) is int
@@ -966,11 +979,13 @@ def _verify_oracle_query(query: dict, expected: dict, binary: Path, selected_pro
 
 
 def _position_evidence(step: dict, queries: list[dict], binary: Path,
-                       selected_profile, timeout: float, max_rss_kib: int) -> dict:
+                       selected_profile, timeout: float, max_rss_kib: int, *,
+                       require_execution_host: bool = False) -> dict:
     expected = _oracle_queries_for_step(step)
     require(len(queries) == len(expected), "Oracle exact-position query count mismatch")
     for query, identity in zip(queries, expected):
-        _verify_oracle_query(query, identity, binary, selected_profile, timeout, max_rss_kib)
+        _verify_oracle_query(query, identity, binary, selected_profile, timeout, max_rss_kib,
+                             require_execution_host=require_execution_host)
     root_score = expected[0]["sign"] * queries[0]["search"]["value"]
     if step["move"] == "pass":
         selected_score = root_score
@@ -988,10 +1003,79 @@ def _position_evidence(step: dict, queries: list[dict], binary: Path,
             "query_elapsed_ms": sum(query["search"]["elapsed_ms"] for query in queries)}
 
 
+def _load_oracle_checkpoint_state(report: dict, binary: Path, cwd: Path, timeout: float,
+                                 max_rss_kib: int, checkpoint_dir: Path,
+                                 legacy_execution_host: dict) -> dict[str, tuple[dict, list[dict], bool]]:
+    selected_profile = profile(report["settings"]["midgame_depth"], report["settings"]["exact_empty"])
+    runtime = oracle_runtime_identity(binary, cwd)
+    settings = {"timeout_seconds": timeout, "max_rss_kib": max_rss_kib}
+    identity = {"schema_version": ORACLE_EVIDENCE_VERSION, "score_contract": SCORE_CONTRACT,
+                "cli_report_digest": report["report_digest"], "oracle_binary_sha256": runtime["binary"]["sha256"],
+                "oracle_runtime": runtime, "oracle_profile": oracle.profile_metadata(selected_profile),
+                "settings": settings}
+    identity_digest = hashlib.sha256(canonical(identity)).hexdigest()
+    legacy_identity = {**identity, "schema_version": 3}
+    legacy_identity_digest = hashlib.sha256(canonical(legacy_identity)).hexdigest()
+    exact_steps = [step for game in report["games"] for step in game["steps"] if step["search"]["exact"]]
+    known_names = {f"position-{hashlib.sha256(step['id'].encode()).hexdigest()}.json" for step in exact_steps}
+    require(checkpoint_dir.is_dir(), "Oracle checkpoint directory is missing")
+    for path in checkpoint_dir.iterdir():
+        require(path.name in known_names or path.name in (".lock",) or path.name.startswith(".unfinished-"),
+                "unknown Oracle checkpoint file")
+    prepared = {}
+    for step in exact_steps:
+        checkpoint = checkpoint_dir / f"position-{hashlib.sha256(step['id'].encode()).hexdigest()}.json"
+        position_identity = {"id": step["id"], "board": step["board"], "side": step["side"],
+                             "move": step["move"], "cli_score": step["search"]["score"]}
+        if not checkpoint.exists():
+            prepared[step["id"]] = (position_identity, [], False)
+            continue
+        saved = read_canonical(checkpoint)
+        require(saved.get("checkpoint_digest") == sealed(saved, "checkpoint_digest")["checkpoint_digest"],
+                "Oracle checkpoint identity or digest mismatch")
+        legacy_checkpoint = (saved.get("schema_version") == 1
+            and saved.get("identity_digest") == legacy_identity_digest)
+        current_checkpoint = (saved.get("schema_version") == 2
+            and saved.get("identity_digest") == identity_digest)
+        require((legacy_checkpoint or current_checkpoint)
+                and saved.get("position") == position_identity
+                and saved.get("settings") == settings,
+                "Oracle checkpoint identity or digest mismatch")
+        queries = saved.get("queries")
+        expected_queries = _oracle_queries_for_step(step)
+        require(isinstance(queries, list) and len(queries) <= len(expected_queries),
+                "Oracle checkpoint query list invalid")
+        for query, query_identity in zip(queries, expected_queries):
+            if legacy_checkpoint:
+                require("execution_host" not in query,
+                        "legacy Oracle checkpoint contains unexpected host provenance")
+                _verify_oracle_query(query, query_identity, binary, selected_profile, timeout, max_rss_kib)
+            else:
+                _verify_oracle_query(query, query_identity, binary, selected_profile, timeout, max_rss_kib,
+                                     require_execution_host=True)
+        if legacy_checkpoint:
+            queries = [{**query, "execution_host": legacy_execution_host} for query in queries]
+        prepared[step["id"]] = (position_identity, queries, legacy_checkpoint)
+    return prepared
+
+
+def preflight_oracle_checkpoints(report: dict, binary: Path, cwd: Path, timeout: float,
+                                 max_rss_kib: int, checkpoint_dir: Path,
+                                 legacy_execution_host: dict) -> None:
+    """Validate every saved query offline before a caller starts CLI or Oracle processes."""
+    verify(report)
+    if not checkpoint_dir.exists():
+        return
+    verify_execution_host(legacy_execution_host)
+    with exclusive_lock(checkpoint_dir):
+        _load_oracle_checkpoint_state(report, binary, cwd, timeout, max_rss_kib,
+                                      checkpoint_dir, legacy_execution_host)
+
+
 def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float,
                     progress_enabled: bool = True, *, max_rss_kib: int = DEFAULT_ORACLE_RSS_KIB,
                     checkpoint_dir: Path | None = None, progress_every: int = 1,
-                    progress_callback=None) -> dict:
+                    progress_callback=None, legacy_execution_host: dict | None = None) -> dict:
     """Human-operated independent solve of each exact decision and selected move."""
     verify(report)
     require(report["kind"] in ("cli", "cli-persistent"), "oracle check requires a diagnostic CLI report")
@@ -1003,6 +1087,10 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float,
     runtime = oracle_runtime_identity(binary, cwd)
     binary_sha256 = runtime["binary"]["sha256"]
     settings = {"timeout_seconds": timeout, "max_rss_kib": max_rss_kib}
+    current_host = execution_host_identity()
+    verify_execution_host(current_host)
+    legacy_host = legacy_execution_host or current_host
+    verify_execution_host(legacy_host)
     identity = {"schema_version": ORACLE_EVIDENCE_VERSION, "score_contract": SCORE_CONTRACT,
                 "cli_report_digest": report["report_digest"], "oracle_binary_sha256": binary_sha256,
                 "oracle_runtime": runtime, "oracle_profile": oracle.profile_metadata(selected_profile),
@@ -1025,8 +1113,10 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float,
                             argv, observations=observations, max_rss_kib=max_rss_kib, **kw))[0]
                     require(raw["exact"], f"Oracle solve was incomplete at {step['id']}")
                     require(len(observations) == 1, "Oracle process observation count mismatch")
-                    queries.append({**query_identity, "search": raw, "process": observations[0]})
-                row = _position_evidence(step, queries, binary, selected_profile, timeout, max_rss_kib)
+                    queries.append({**query_identity, "search": raw, "process": observations[0],
+                                    "execution_host": current_host})
+                row = _position_evidence(step, queries, binary, selected_profile, timeout, max_rss_kib,
+                                         require_execution_host=True)
                 rows.append(row)
                 if progress_enabled and (index % progress_every == 0 or index == len(exact_steps)):
                     if progress_callback:
@@ -1039,30 +1129,22 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float,
             return
 
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        known_names = {f"position-{hashlib.sha256(step['id'].encode()).hexdigest()}.json" for step in exact_steps}
         with exclusive_lock(checkpoint_dir):
-            for path in checkpoint_dir.iterdir():
-                require(path.name in known_names or path.name in (".lock",) or path.name.startswith(".unfinished-"),
-                        "unknown Oracle checkpoint file")
+            prepared = _load_oracle_checkpoint_state(report, binary, cwd, timeout, max_rss_kib,
+                                                    checkpoint_dir, legacy_host)
+
+            # Apply checkpoint migrations only after every saved checkpoint passed validation.
+            for step in exact_steps:
+                checkpoint = checkpoint_dir / f"position-{hashlib.sha256(step['id'].encode()).hexdigest()}.json"
+                position_identity, queries, legacy_checkpoint = prepared[step["id"]]
+                if legacy_checkpoint:
+                    atomic_write(checkpoint, sealed({"schema_version": 2, "identity_digest": identity_digest,
+                        "position": position_identity, "settings": settings, "queries": queries},
+                        "checkpoint_digest"))
+
             for index, step in enumerate(exact_steps, 1):
                 checkpoint = checkpoint_dir / f"position-{hashlib.sha256(step['id'].encode()).hexdigest()}.json"
-                position_identity = {"id": step["id"], "board": step["board"], "side": step["side"],
-                                     "move": step["move"], "cli_score": step["search"]["score"]}
-                if checkpoint.exists():
-                    saved = read_canonical(checkpoint)
-                    require(saved.get("checkpoint_digest") == sealed(saved, "checkpoint_digest")["checkpoint_digest"]
-                            and saved.get("identity_digest") == identity_digest
-                            and saved.get("position") == position_identity
-                            and saved.get("settings") == settings,
-                            "Oracle checkpoint identity or digest mismatch")
-                    queries = saved.get("queries")
-                    expected_queries = _oracle_queries_for_step(step)
-                    require(isinstance(queries, list) and len(queries) <= len(expected_queries),
-                            "Oracle checkpoint query list invalid")
-                    for query, query_identity in zip(queries, expected_queries):
-                        _verify_oracle_query(query, query_identity, binary, selected_profile, timeout, max_rss_kib)
-                else:
-                    queries = []
+                position_identity, queries, _legacy_checkpoint = prepared[step["id"]]
                 for query_identity in _oracle_queries_for_step(step)[len(queries):]:
                     import exact_threshold
                     observations = []
@@ -1072,10 +1154,12 @@ def oracle_evidence(report: dict, binary: Path, cwd: Path, timeout: float,
                             argv, observations=observations, max_rss_kib=max_rss_kib, **kw))[0]
                     require(raw["exact"], f"Oracle solve was incomplete at {step['id']}")
                     require(len(observations) == 1, "Oracle process observation count mismatch")
-                    queries.append({**query_identity, "search": raw, "process": observations[0]})
-                    atomic_write(checkpoint, sealed({"schema_version": 1, "identity_digest": identity_digest,
+                    queries.append({**query_identity, "search": raw, "process": observations[0],
+                                    "execution_host": current_host})
+                    atomic_write(checkpoint, sealed({"schema_version": 2, "identity_digest": identity_digest,
                         "position": position_identity, "settings": settings, "queries": queries}, "checkpoint_digest"))
-                row = _position_evidence(step, queries, binary, selected_profile, timeout, max_rss_kib)
+                row = _position_evidence(step, queries, binary, selected_profile, timeout, max_rss_kib,
+                                         require_execution_host=True)
                 rows.append(row)
                 if progress_enabled and (index % progress_every == 0 or index == len(exact_steps)):
                     if progress_callback:
@@ -1105,7 +1189,7 @@ def verify_oracle_evidence(report: dict, evidence: dict, binary: Path | None = N
     require(report["kind"] in ("cli", "cli-persistent"), "oracle evidence requires diagnostic CLI report")
     if evidence.get("schema_version") == 2:
         # Keep historical schema-2 receipts verifiable without reinterpreting
-        # them as the resource-measured schema-3 contract.
+        # them as the resource-measured schema-3-or-later contract.
         require(evidence.get("score_contract") == SCORE_CONTRACT
                 and evidence.get("runner_version") == VERSION
                 and evidence.get("cli_report_digest") == report["report_digest"],
@@ -1133,10 +1217,11 @@ def verify_oracle_evidence(report: dict, evidence: dict, binary: Path | None = N
                             "selected_score": step["search"]["score"]},
                     "legacy Oracle evidence score or position mismatch")
         return
-    require(binary is not None, "schema-3 Oracle verification requires the pinned Oracle binary")
-    require(oracle_cwd is not None, "schema-3 Oracle verification requires the pinned Oracle working directory")
-    require(evidence.get("schema_version") == ORACLE_EVIDENCE_VERSION
-            and evidence.get("score_contract") == SCORE_CONTRACT
+    evidence_version = evidence.get("schema_version")
+    require(evidence_version in (3, ORACLE_EVIDENCE_VERSION), "Oracle evidence schema version unsupported")
+    require(binary is not None, "measured Oracle verification requires the pinned Oracle binary")
+    require(oracle_cwd is not None, "measured Oracle verification requires the pinned Oracle working directory")
+    require(evidence.get("score_contract") == SCORE_CONTRACT
             and evidence.get("runner_version") == VERSION
             and evidence.get("cli_report_digest") == report["report_digest"],
             "oracle evidence identity mismatch")
@@ -1173,7 +1258,8 @@ def verify_oracle_evidence(report: dict, evidence: dict, binary: Path | None = N
         require(isinstance(queries, list) and queries, "oracle evidence query list missing")
         recorded_binary = binary or Path(queries[0].get("process", {}).get("argv", [""])[0])
         expected = _position_evidence(step, queries, recorded_binary, selected_profile,
-                                      settings["timeout_seconds"], settings["max_rss_kib"])
+                                      settings["timeout_seconds"], settings["max_rss_kib"],
+                                      require_execution_host=evidence_version >= 4)
         require(row == expected, "oracle evidence score, resource or position mismatch")
 
 
@@ -1184,12 +1270,16 @@ def verify_oracle_checkpoints(report: dict, evidence: dict, binary: Path, cwd: P
                            timeout_seconds=timeout_seconds, max_rss_kib=max_rss_kib)
     selected_profile = profile(report["settings"]["midgame_depth"], report["settings"]["exact_empty"])
     runtime = oracle_runtime_identity(binary, cwd)
-    identity = {"schema_version": ORACLE_EVIDENCE_VERSION, "score_contract": SCORE_CONTRACT,
+    evidence_version = evidence["schema_version"]
+    identity_base = {"score_contract": SCORE_CONTRACT,
                 "cli_report_digest": report["report_digest"],
                 "oracle_binary_sha256": runtime["binary"]["sha256"], "oracle_runtime": runtime,
                 "oracle_profile": oracle.profile_metadata(selected_profile),
                 "settings": {"timeout_seconds": timeout_seconds, "max_rss_kib": max_rss_kib}}
-    identity_digest = hashlib.sha256(canonical(identity)).hexdigest()
+    identity_v3 = {"schema_version": 3, **identity_base}
+    identity_v4 = {"schema_version": 4, **identity_base}
+    identity_digest_v3 = hashlib.sha256(canonical(identity_v3)).hexdigest()
+    identity_digest_v4 = hashlib.sha256(canonical(identity_v4)).hexdigest()
     steps = [step for game in report["games"] for step in game["steps"] if step["search"]["exact"]]
     known = {f"position-{hashlib.sha256(step['id'].encode()).hexdigest()}.json" for step in steps}
     require(checkpoint_dir.is_dir(), "Oracle checkpoint directory is missing")
@@ -1204,13 +1294,34 @@ def verify_oracle_checkpoints(report: dict, evidence: dict, binary: Path, cwd: P
         saved = read_canonical(path)
         position = {"id": step["id"], "board": step["board"], "side": step["side"],
                     "move": step["move"], "cli_score": step["search"]["score"]}
+        schema = saved.get("schema_version")
         require(saved.get("checkpoint_digest") == sealed(saved, "checkpoint_digest")["checkpoint_digest"]
-                and saved.get("schema_version") == 1
-                and saved.get("identity_digest") == identity_digest
                 and saved.get("position") == position
-                and saved.get("settings") == identity["settings"]
-                and saved.get("queries") == rows[step["id"]]["queries"],
+                and saved.get("settings") == identity_base["settings"],
                 f"Oracle checkpoint differs from verified evidence: {step['id']}")
+        saved_queries = saved.get("queries")
+        evidence_queries = rows[step["id"]]["queries"]
+        if evidence_version == 3 and schema == 1:
+            require(saved.get("identity_digest") == identity_digest_v3
+                    and saved_queries == evidence_queries,
+                    f"Oracle checkpoint differs from verified evidence: {step['id']}")
+        elif evidence_version == 3 and schema == 2:
+            require(saved.get("identity_digest") == identity_digest_v4
+                    and isinstance(saved_queries, list)
+                    and [{key: value for key, value in query.items() if key != "execution_host"}
+                         for query in saved_queries] == evidence_queries,
+                    f"Oracle checkpoint differs from verified evidence: {step['id']}")
+            expected_queries = _oracle_queries_for_step(step)
+            require(len(saved_queries) == len(expected_queries),
+                    f"Oracle checkpoint differs from verified evidence: {step['id']}")
+            for query, query_identity in zip(saved_queries, expected_queries):
+                _verify_oracle_query(query, query_identity, binary, selected_profile,
+                                     timeout_seconds, max_rss_kib, require_execution_host=True)
+        else:
+            require(evidence_version == 4 and schema == 2
+                    and saved.get("identity_digest") == identity_digest_v4
+                    and saved_queries == evidence_queries,
+                    f"Oracle checkpoint differs from verified evidence: {step['id']}")
 
 
 RESUMABLE_VERSION = VERSION
@@ -1463,6 +1574,63 @@ def measurement_identity(args) -> dict:
                          "max_rss_kib": args.max_rss_kib,
                          "process_lifetime": "segments-per-seat" if args.kind == "cli-persistent" else "one-game-per-seat",
                          "game_sample": game_sample}}
+
+
+def preflight_measurement_checkpoints(args, manifest_digest: str, condition_id: str,
+                                      checkpoint_dir: Path) -> None:
+    """Validate saved self-play receipts offline before the closeout CLI probe starts."""
+    if not checkpoint_dir.exists():
+        return
+    require_execution_scope(args.kind, args.cache_scope)
+    identity = measurement_identity(args)
+    condition_digest = hashlib.sha256(canonical(identity)).hexdigest()
+    rows = measurement_rows(identity["settings"]["game_sample"])
+    known = {f"{row['id']}-seat{assignment}" for row, assignment in rows}
+    with exclusive_lock(checkpoint_dir):
+        if args.output.exists():
+            report = read_canonical(args.output)
+            verify(report, args.binary, args.artifact)
+            require(report.get("identity") == identity and report.get("manifest_digest") == manifest_digest
+                    and report.get("condition_id") == condition_id,
+                    "completed report manifest identity mismatch")
+        for path in checkpoint_dir.iterdir():
+            require(path.name == ".lock" or path.name.startswith(".unfinished-")
+                    or path.name.startswith("game-") and path.suffix == ".json"
+                    or path.name.startswith("segment-") and path.suffix == ".json",
+                    "unknown checkpoint file")
+        prior_segments = {}
+        for path in checkpoint_dir.glob("segment-*.json"):
+            segment = read_canonical(path)
+            verify_segment_receipt(segment, args.max_rss_kib)
+            require(segment.get("report_digest") == sealed(segment)["report_digest"]
+                    and segment.get("condition_digest") == condition_digest
+                    and segment.get("manifest_digest") == manifest_digest, "segment identity mismatch")
+            require(path.name == f"segment-{segment['segment_id']}.json"
+                    and segment["segment_id"] not in prior_segments, "duplicate segment identity")
+            prior_segments[segment["segment_id"]] = segment
+        games = {}
+        for path in checkpoint_dir.glob("game-*.json"):
+            item = read_canonical(path)
+            require(item.get("report_digest") == sealed(item)["report_digest"], "checkpoint digest mismatch")
+            key = item.get("game_id")
+            require(key in known and key not in games and path.name == f"game-{key}.json",
+                    "duplicate/unknown checkpoint game")
+            require(item.get("condition_digest") == condition_digest
+                    and item.get("manifest_digest") == manifest_digest,
+                    "checkpoint measurement identity mismatch")
+            row, assignment = next(pair for pair in rows if f"{pair[0]['id']}-seat{pair[1]}" == key)
+            record = item["game"]
+            verify_game(record, row, assignment, args.kind, identity["settings"], require_decision_resources=True)
+            verify_boundary(record, args.kind)
+            require(record.get("condition_digest") == condition_digest
+                    and record.get("manifest_digest") == manifest_digest
+                    and isinstance(record.get("session_id"), str)
+                    and isinstance(record.get("segment_id"), str), "checkpoint lifecycle identity mismatch")
+            if args.kind == "cli-persistent":
+                require(record["segment_id"] in prior_segments, "checkpoint segment missing")
+                require(prior_segments[record["segment_id"]].get("session_id") == record["session_id"],
+                        "checkpoint segment session mismatch")
+            games[key] = record
 
 
 def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_dir: Path,
