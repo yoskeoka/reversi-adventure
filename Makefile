@@ -132,6 +132,37 @@ pattern-reinforcement-verify:
 pattern-reinforcement-regret: pattern-reinforcement-verify
 	@candidate_command="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-command --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; regret_timeout="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-timeout --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; $(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output "$(REINFORCEMENT_REGRET_REPORT)" --profile strong-engine-hcap-v1 --timeout "$$regret_timeout" --candidate-command "$$candidate_command"
 
+PILOT_TOOL := tools/reversi-ai-training/pilot.py
+PILOT_MANIFEST ?= /tmp/reversi-ai-training-pilot/manifest.json
+PILOT_OUTPUT_DIR ?= /tmp/reversi-ai-training-pilot/output
+PILOT_BASELINE_ARTIFACT ?=
+PILOT_BASELINE_MANIFEST ?=
+PILOT_CANDIDATE_EXECUTABLE ?=
+PILOT_VALIDATION_INPUT ?=
+PILOT_HELD_OUT_INPUT ?=
+PILOT_RESERVED_OPENINGS ?=
+PILOT_CORPUS ?=
+PILOT_GOLDEN ?=
+PILOT_INPUT_KIND ?= production
+PILOT_SEED ?= 20261014
+PILOT_OPENING_PLIES ?= 6
+PILOT_TIME_LIMIT_MS ?= 300000
+PILOT_NODE_LIMIT ?= 10000000
+PILOT_DECISION_TIMEOUT_SECONDS ?= 310
+PILOT_PROGRESS_EVERY ?= 1
+
+.PHONY: pattern-pilot-prepare pattern-pilot-run pattern-pilot-verify
+pattern-pilot-prepare:
+	@test -n "$(PILOT_BASELINE_ARTIFACT)" && test -n "$(PILOT_BASELINE_MANIFEST)" && test -n "$(PILOT_CANDIDATE_EXECUTABLE)" && test -n "$(PILOT_VALIDATION_INPUT)" && test -n "$(PILOT_HELD_OUT_INPUT)" && test -n "$(PILOT_RESERVED_OPENINGS)" && test -n "$(PILOT_CORPUS)" && test -n "$(PILOT_GOLDEN)" || (echo "Set all PILOT baseline, executable, split, reserved-opening, corpus and golden input paths; see tools/reversi-ai-training/README.md" >&2; exit 2)
+	$(PYTHON) $(PILOT_TOOL) prepare --manifest "$(PILOT_MANIFEST)" --baseline-artifact "$(PILOT_BASELINE_ARTIFACT)" --baseline-manifest "$(PILOT_BASELINE_MANIFEST)" --candidate-executable "$(PILOT_CANDIDATE_EXECUTABLE)" --validation-input "$(PILOT_VALIDATION_INPUT)" --held-out-input "$(PILOT_HELD_OUT_INPUT)" --reserved-openings "$(PILOT_RESERVED_OPENINGS)" --corpus "$(PILOT_CORPUS)" --golden "$(PILOT_GOLDEN)" --input-kind $(PILOT_INPUT_KIND) --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS)
+
+# Human starts the real batch; fixtures are exercised only by unit tests.
+pattern-pilot-run:
+	$(PYTHON) $(PILOT_TOOL) run --manifest "$(PILOT_MANIFEST)" --output-dir "$(PILOT_OUTPUT_DIR)" --progress-every $(PILOT_PROGRESS_EVERY)
+
+pattern-pilot-verify:
+	$(PYTHON) $(PILOT_TOOL) verify --manifest "$(PILOT_MANIFEST)" --output-dir "$(PILOT_OUTPUT_DIR)"
+
 WHOLE_GAME_PREPARE_TOOL := tools/reversi-ai-benchmark/prepare-whole-game-measurement.py
 WHOLE_GAME_PREPARE_ARGS ?=
 WHOLE_GAME_MANIFEST ?=

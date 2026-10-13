@@ -220,6 +220,100 @@ search controls and protocol timeout under oracle profile
 existing oracle corpus only; the 0018 held-out openings stay unopened until
 their separate acceptance run.
 
+## Training method pilot (0037)
+
+`pilot.py` provides a separate one-stage pilot. Its immutable manifest fixes
+production denominators 64/7,680/200 and floor-by-ten caps 6/768/20. Six legal
+Black-start self-play continuations yield terminal winner-empty teachers;
+deduplicated rows actually used by one bounded update are counted. Ten legal
+openings are played twice with the players exchanging Black/White seats.
+The production reinforcement 50/200 checkpoint is not used.
+
+Self-play uses 8/8/8, exact16, turn. Comparison and corpus decisions use
+12/12/12, exact16, turn. The teacher is the completed project-AI game's outcome;
+it is not a random-rollout outcome or a separate per-position exact score.
+Read the [method review](../../docs/references/reversi-ai-training-method-review.md)
+for pinned upstream sources and the reason for this choice.
+
+Prepare requires a current-format baseline artifact and its original trainer
+manifest, independent schema2 validation/held-out JSONL, a reserved-opening key
+file, and a current-score Oracle corpus with saved golden values. The reserved
+file has `{"schema_version":1,"position_keys":["<canonical-board>:B", ...]}`;
+keys are produced by `training.canonical_position_key`. Supply the independently
+reserved 0018 keys without playing its suite. Pin all inputs and the accepted
+CLI before running. Keep production inputs outside the checkout and generate
+new winner-empty inputs under a separate human-operated plan. Old format1
+baselines and raw-disc labels are rejected.
+
+```sh
+make pattern-pilot-prepare \
+  PILOT_MANIFEST=/absolute/path/pilot/manifest.json \
+  PILOT_BASELINE_ARTIFACT=/absolute/path/baseline.json \
+  PILOT_BASELINE_MANIFEST=/absolute/path/inputs/trainer-manifest.json \
+  PILOT_CANDIDATE_EXECUTABLE=/absolute/path/reversi-ai-cli \
+  PILOT_VALIDATION_INPUT=/absolute/path/inputs/validation.jsonl \
+  PILOT_HELD_OUT_INPUT=/absolute/path/inputs/held_out.jsonl \
+  PILOT_RESERVED_OPENINGS=/absolute/path/reserved-0018-keys.json \
+  PILOT_CORPUS=/absolute/path/winner-empty-corpus.jsonl \
+  PILOT_GOLDEN=/absolute/path/strong-profile-golden.jsonl
+```
+
+Defaults freeze seed 20261014, six opening plies, 300000 ms and 10000000 nodes
+per decision, and a 310-second protocol watchdog. These caps are search limits,
+not a whole-batch completion guarantee. Overrides use `PILOT_SEED`,
+`PILOT_OPENING_PLIES`, `PILOT_TIME_LIMIT_MS`, `PILOT_NODE_LIMIT` and
+`PILOT_DECISION_TIMEOUT_SECONDS`. A changed configuration requires a fresh
+manifest and directory. Prepare verifies reset acknowledgement and does not
+play the batch.
+
+A human starts the real run in another terminal:
+
+```sh
+make pattern-pilot-run PILOT_MANIFEST=/absolute/path/pilot/manifest.json \
+  PILOT_OUTPUT_DIR=/absolute/path/pilot/output PILOT_PROGRESS_EVERY=1
+```
+
+Stop by terminating that process. A failed or interrupted directory is retained
+for diagnosis; it is not evidence and cannot be resumed. Start a new run in a
+fresh directory. The final report is published last after all six self-play
+and twenty comparison games and all independent measurements finish.
+Agents do not start, wait for or monitor the real batch.
+
+After the human supplies completed immutable output:
+
+```sh
+make pattern-pilot-verify PILOT_MANIFEST=/absolute/path/pilot/manifest.json \
+  PILOT_OUTPUT_DIR=/absolute/path/pilot/output
+```
+
+Verification starts no subprocess. It replays every opening and decision,
+checks the 10 complete seat-exchange pairs, recomputes unique teacher rows,
+artifact update, validation/held-out MSE, corpus regret and match points, and
+checks input/output identities. Corpus values are already saved Oracle values;
+the runner records project CLI choices rather than issuing new Oracle solves.
+Corpus positions overlapping baseline training, reserved openings or played
+positions are excluded with IDs, and an independent legal decision root must
+remain. Validation and held-out exclusions include the random opening prefixes.
+Use the manifest's pinned producer checkout for verification. Source changes
+fail the digest check; do not rewrite an old manifest with current hashes.
+Progress uses the existing stderr stage and completed-game format. Default
+interval one emits every game; positive `PILOT_PROGRESS_EVERY=N` reduces normal
+updates and always emits the final unit.
+
+The primary improvement metric is lower held-out MSE. Validation MSE and mean
+corpus regret must remain within 10% of baseline (zero must stay zero), and
+the candidate must earn at least 10/20 match points. Both successful and failed
+comparisons retain the candidate and raw evidence. Fixtures use
+`PILOT_INPUT_KIND=fixture` and always report tooling evidence; smoke corpora
+cannot establish strength. Real evidence requires the strong-engine Oracle
+profile and production inputs. A verified complete pilot with a failed
+improvement gate does not authorize 0019.
+
+The [tooling verification record](../../docs/references/reversi-ai-training-pilot-tooling.md)
+tracks implementation evidence. With no new-contract production inputs as of
+2026-10-14, plan0037 stays active until the human run and independent result
+verification are complete.
+
 ## Winner-empty migration and preserved evidence
 
 New trainer manifests and records use schema 2, training-v2, explicit

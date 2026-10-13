@@ -116,6 +116,12 @@ them, and then decides whether 0018 may freeze the candidate.
 
 ## Dependencies and sequencing
 
+- 0037の実pilotを、新契約の独立入力と単段階6局/768教師行以下/20比較局で完成させる。
+  `pattern-pilot-verify`がraw dataからheld-out誤差改善と他指標の悪化上限を確認した場合だけ、
+  0019の新規本番manifestを別directoryで凍結する。
+  [ツール実装・fixture検証](../../references/reversi-ai-training-pilot-tooling.md)だけではこの依存を満たさない。
+  不成立時はcandidate artifactと結果を保存して方法を再計画する。
+
 - 0032 is completed in [PR #223](https://github.com/yoskeoka/reversi-adventure/pull/223),
   and its plan was deleted. Revalidation before this freeze belongs to 0019:
   use its frozen producer and original source contract, not current-source
