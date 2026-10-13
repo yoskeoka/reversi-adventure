@@ -60,7 +60,8 @@ stage別wall上限の合計10870秒（181分10秒）をmanifestへ記録する�
 1. **準備（agent可）**: PR #266と0050実装のmerged commitを確認する。最新mainから新しい
    `ww` worktreeを作り、clean producer commit/source SHAをpinする。release CLIの
    source/Cargo.lock/build command/binary SHAを保存する。Oracle v7.8.1のbinary、resources、
-   cwd、source identityを確認する。0018の開局keysだけを保存し、suiteをプレイ・解析しない。
+   cwd、source identityを確認する。0018のsuiteは未作成なので予約状態を`not-yet-selected`に
+   固定し、架空の開局keysを作らない。既存suiteが将来存在する場合のみ実artifactをpinする。
    checkout外の新しいrun rootへ実パス・seed・上限入りmanifestと各stageコマンドを用意する。
    generatorの出力directoryには既存6ファイルのみ置き、manifest/logs、baseline、Oracleは
    兄弟directoryへ分離する。追加ファイルで既存verifierを失敗させない。
@@ -75,7 +76,7 @@ stage別wall上限の合計10870秒（181分10秒）をmanifestへ記録する�
    実行前にsplit game ID、CC0-1.0、8 placements開始、128 turn上限、producerをfreezeする。
    生成→verify→trainを別コマンドで行う。次stageは直前の完成・検証後にだけ開始する。
    random完成局のwinner-empty値をbootstrap教師とし、AI/exact教師だとは記載しない。
-4. **Oracle（人間起動）**: 三splitと0018予約keysを除外した独立corpusを、値を観測する前に
+4. **Oracle（人間起動）**: 三split（既存予約artifactがある場合はそのkeysも）を除外した独立corpusを、値を観測する前に
    12 rootへ固定する。全合法手のchildをstrong profileで解析し、0050の原本を保存する。
    missing/timeout/root失敗の結果を完成goldenへ混ぜず、rootを都合よく差し替えない。
 5. **完成原本のoffline検証（後続agent可）**: 人間からimmutable paths/digestsを受け取り、
@@ -83,6 +84,7 @@ stage別wall上限の合計10870秒（181分10秒）をmanifestへ記録する�
    再構成、CLIとsource identity、D4分離を検証する。live再solveを呼ばない。
 6. **記録/PR（agent）**: 新契約bundleの全identity、件数・三phase・target範囲・失敗、
    時間/CPU/RSS、baseline held-out/zero-weight診断と非zero重み数を記録する。
+   学習/評価の露出keysを保存し、後で0018が開局rootを選ぶ際の衝突検査へ渡す。
    診断MSEを強さ改善と呼ばない。0037へ渡す具体的path/sha一覧とprepareコマンドを記載する。
    本計画を削除し、review-taskでPR handoffする。0037は実pilot終了まで残す。
 
@@ -110,7 +112,7 @@ freeze済みproducerからCLIをbuildする準備とfixture検証は並行でき
 - 全stageの完成・合法終局、source/score identity、三split独立、全出力digest一致。
 - Oracle全childとraw応答、profile/resources、offline再構成、独立legal rootの存在。
 - 実baselineをCLIが受理する。validationの元の行順で最初の、石数20以下・合法手あり・
-  0018予約keys外の局面を事前pinして一度だけprobeする。1/1/1・exact16・turn、
+  既存の予約artifactがある場合はそのkeys外の局面を事前pinして一度だけprobeする。1/1/1・exact16・turn、
   100ms/1000nodes、応答watchdog2秒、stage wall10秒でreset ackと合法手を確認する。
   board/side、argv、raw応答とbinary/artifact SHAを兄弟directoryの`cli-probe.json`へ保存する。
 - 数値reportの記録とdoc links、workflow lint、diff check。

@@ -28,7 +28,7 @@ Copilotの旧headの指摘に対して、現在のpilotは全入力の改善認�
 | train / validation / held_out JSONL、全対局ログ、generator manifest/report | `random_inputs` v2。黒先手の合法random完成局のwinner-empty終局値。schema2 |
 | baseline artifact、trainer manifest/report | 上記trainだけから`training` v2で再学習。format2。validationとheld_outは更新に使わない |
 | Oracle corpus / schema2 golden / 実行原本 | 学習と独立した合法局面の全合法手childをstrong-engine-hcap-v1で解析。random終局教師や局面exact値とは別の比較基準 |
-| reserved opening keys | 0018の既定開局から得るcanonical D4 board/side keys。suiteの対局・解析はしない |
+| acceptance reservation状態 / exposure keys | 0018のsuiteは候補選定後に作成するため現時点は`not-yet-selected`。学習/評価で使ったcanonical D4 keysを保存し、0018の後段で開局rootとの衝突を検査する |
 | project CLI | マージ済みsource・Cargo.lock・build recipeから生成したbinary identity |
 | pilot教師・candidate・比較結果 | 上記入力が揃った後の0037。baseline AI継続局の終局値。6局/768採用行/20比較局 |
 
@@ -69,6 +69,8 @@ Copilotの旧headの指摘に対して、現在のpilotは全入力の改善認�
 - (MODIFY) Makefile、`tools/reversi-ai-training/README.md`、Oracle README — stage別コマンド、
   正確な上限・進捗・人間起動・offline入口を記載する。
 - (MODIFY) 0037、0019の依存段落 — 0051の入力完成後にpilotをprepareする順序を記載する。
+- (MODIFY) `docs/exec-plan/todo/0018-reversi-ai-strong-engine-acceptance.md` — suiteは後でfreezeする
+  順序を維持し、0051/0037/0019の露出keysとの開局root衝突検査へ接続する。
 - (NEW) `docs/references/reversi-ai-training-input-bundle.md` — tooling検証、生成経路の信頼範囲、
   実run前の手順。0051の結果を捏造・先取りしない。
 
@@ -99,7 +101,8 @@ bootstrapの全train行数を768へ切り詰めるものではない。
 ### 2. Oracle保存値の生成経路
 
 独立seed/domainの黒先手random完全対局から石数20/40/48の局面を各4個、計12 root採る。
-各rootは合法手2..16、非終局childが1個以上。D4重複、三split、0018予約keysを除外する。
+各rootは合法手2..16、非終局childが1個以上。D4重複、三splitを除外する。
+既にfreezeされた0018予約artifactが将来存在する場合のみ、そのkeysも除外する。
 最大256候補ゲームをgame ID/turn順に調べ、12個を得られなければ失敗にする。
 採用はscoreを観測する前に行う。全候補game logと選定/除外ID、seed、条件を保存する。
 0037比較openingは後からこのcorpusを除外して生成する。
@@ -139,6 +142,13 @@ trainerは入力検証済みrecord数をtotalにする。stage開始/完了と5�
 ### 4. pilotへの接続
 
 新しいpilot producer/schemaでbundle manifestと全出力のidentityをpinする。
+0018の開局suiteはまだ存在しないため、新schemaには`not-yet-selected`と空の予約keysを
+明示できる契約を追加する。架空の既定開局やinitial-board sentinelを予約suiteと呼ばない。
+`reserved`状態は具体的なversioned suite artifact/path/digestとnonempty keysを要求する。
+bundleは三splitで学習/評価したkeysとOracle root/child keys、pilot reportはopening/decision/
+terminalの露出keysを、kind別に原本から再構成して保存する。0019のkeysも合わせ、0018が
+候補選定後にsuiteをfreezeする際、採用開局rootとの衝突を検査する。未来のsuiteを
+入力生成の前提にして循環依存を作らない。
 旧PR #266 manifest/reportは凍結producerで従来どおりtoolingとして検証できるように残す。
 新schemaはproduction bundleの完全再検証とCLI build identityを通した場合だけ
 `strength_inputs=true`にできる。CLIはsource commit、Cargo.lock、build recipe、binary SHAを
@@ -166,7 +176,8 @@ goldenのshapeチェックだけ、文字列labelだけ、bundle内の自己申�
 - 正しい小fixtureはrepeatで同じbytes、offline検証でCLI/Oracleを一切起動しない。
 - 全child mapping、pass/terminal、空き加点、raw parser、missing query、binary/resource変更を検査する。
 - process group停止、wall/RSS/metrics取得失敗、未完成出力拒否、新stage再実行、診断頻度をfakeで検証する。
-- 0018予約keysの除外と三split/Oracle/pilotのD4独立性を確認する。
+- `not-yet-selected`と実際の`reserved`状態、露出keys再構成、後段0018のroot衝突検査、
+  三split/Oracle/pilotのD4独立性を確認する。架空の予約artifactを生成しない。
 - 該当Python tests、Rust engine/AI tests、fmt/Clippy、GDExtension build、workflow lint、diff check。
   実2560局・実Oracle・実pilotはtests/CI/agent作業から起動しない。
 
