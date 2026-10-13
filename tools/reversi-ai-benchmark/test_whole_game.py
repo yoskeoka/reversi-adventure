@@ -7,6 +7,8 @@ import unittest
 import tempfile
 import contextlib
 import io
+import os
+import sys
 from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
@@ -497,6 +499,138 @@ class WholeGameTests(unittest.TestCase):
             {key: value for key, value in broken.items() if key != "report_digest"})).hexdigest()
         with self.assertRaisesRegex(whole_game.BenchmarkError, "position count mismatch"):
             whole_game.verify_oracle_evidence(report, broken)
+
+
+class OracleCheckpointTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.binary = self.root / "oracle"
+        self.binary.write_bytes(b"fake external Oracle")
+        self.binary.chmod(0o755)
+        self.cwd = self.root / "oracle-data"
+        (self.cwd / "resources").mkdir(parents=True)
+        (self.cwd / "resources" / "eval.egev2").write_bytes(b"fixture evaluator")
+        board, side = whole_game.oracle.initial_board(), "B"
+        while board.count(".") > 16:
+            moves = whole_game.oracle.legal_moves(board, side)
+            if moves:
+                board = whole_game.oracle.apply_move(board, side, moves[0])
+            side = whole_game.oracle.other(side)
+        moves = whole_game.oracle.legal_moves(board, side)
+        self.move = next(move for move in moves
+                         if (lambda child: whole_game.oracle.legal_moves(child, whole_game.oracle.other(side))
+                             or whole_game.oracle.legal_moves(child, side))(
+                                 whole_game.oracle.apply_move(board, side, move)))
+        self.step = {"id": "fixture-exact", "board": board, "side": side, "move": self.move,
+                     "search": {"exact": True, "score": 0}}
+        self.report = {"kind": "cli", "report_digest": "a" * 64,
+                       "settings": {"midgame_depth": 8, "exact_empty": 16},
+                       "games": [{"steps": [self.step]}]}
+        self.checkpoint_dir = self.root / "oracle-checkpoints"
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def fake_solve(self, queries, binary, cwd, profile, timeout, *, child_query, runner):
+        board, _side = queries[0]
+        occupied = board.count("B") + board.count("W")
+        required_depth = min(board.count("."), whole_game.oracle.profile_depth_at(
+            profile, occupied - (1 if child_query else 0)))
+        result = {"move": "a1", "value": 0, "completed_depth": required_depth,
+                  "nodes": 7, "elapsed_ms": 11, "exact": True}
+        argv = whole_game.oracle.oracle_argv(binary, profile,
+            solve_path=Path("/tmp/reversi-ai-oracle-fixture.txt"), child_query=child_query)
+        runner(argv, cwd=cwd, timeout=timeout)
+        return [result]
+
+    def patch_oracle(self, calls):
+        def solve(*args, **kwargs):
+            calls.append(kwargs["child_query"])
+            return self.fake_solve(*args, **kwargs)
+
+        def measure(argv, *, cwd, timeout, observations, max_rss_kib):
+            observations.append({"argv": [str(part) for part in argv], "wall_ns": 1_000_000,
+                "last_observation": {"user_cpu_ns": 100, "system_cpu_ns": 50, "peak_rss_kib": 50},
+                "resources": {"user_cpu_ns": 100, "system_cpu_ns": 50, "peak_rss_kib": 50},
+                "exit_status": 0, "returncode": 0, "stdout": "oracle fixture output", "stderr": ""})
+            return SimpleNamespace(returncode=0, stdout="oracle fixture output", stderr="")
+
+        import exact_threshold
+        return (patch.object(whole_game, "verify"),
+                patch.object(whole_game.oracle, "run_solve", side_effect=solve),
+                patch.object(whole_game.oracle, "parse_solve_output",
+                    side_effect=lambda _out, depths, _profile: [{"move": "a1", "value": 0,
+                        "completed_depth": depths[0], "nodes": 7, "elapsed_ms": 11, "exact": True}]),
+                patch.object(exact_threshold, "measured_oracle", side_effect=measure))
+
+    def test_oracle_queries_checkpoint_resume_and_pin_runtime(self):
+        calls = []
+        with contextlib.ExitStack() as stack:
+            for context in self.patch_oracle(calls):
+                stack.enter_context(context)
+            evidence = whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
+                progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
+            self.assertEqual(calls, [False, True])
+            self.assertEqual(evidence["schema_version"], 3)
+            self.assertEqual(evidence["positions"][0]["query_count"], 2)
+            self.assertEqual(evidence["oracle_runtime"]["resources_digest"],
+                             whole_game.oracle_runtime_identity(self.binary, self.cwd)["resources_digest"])
+            whole_game.verify_oracle_checkpoints(self.report, evidence, self.binary, self.cwd,
+                self.checkpoint_dir, timeout_seconds=600, max_rss_kib=100)
+            whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
+                progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
+            self.assertEqual(calls, [False, True])
+
+    def test_interrupted_selected_child_resumes_without_repeating_root(self):
+        calls = []
+        with contextlib.ExitStack() as stack:
+            for context in self.patch_oracle(calls):
+                stack.enter_context(context)
+            run_solve = whole_game.oracle.run_solve
+            def interrupt_child(*args, **kwargs):
+                if kwargs["child_query"]:
+                    calls.append(True)
+                    raise whole_game.BenchmarkError("simulated interruption")
+                calls.append(False)
+                return self.fake_solve(*args, **kwargs)
+            stack.enter_context(patch.object(whole_game.oracle, "run_solve", side_effect=interrupt_child))
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "simulated interruption"):
+                whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
+                    progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
+            self.assertEqual(calls, [False, True])
+            def resume_child_only(*args, **kwargs):
+                calls.append(kwargs["child_query"])
+                return self.fake_solve(*args, **kwargs)
+            stack.enter_context(patch.object(whole_game.oracle, "run_solve", side_effect=resume_child_only))
+            evidence = whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
+                progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
+            self.assertEqual(calls, [False, True, True])
+            self.assertEqual(len(evidence["positions"]), 1)
+
+    def test_resource_limit_change_or_corrupt_checkpoint_fails_before_query(self):
+        calls = []
+        with contextlib.ExitStack() as stack:
+            for context in self.patch_oracle(calls):
+                stack.enter_context(context)
+            evidence = whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
+                progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
+            path = next(self.checkpoint_dir.glob("position-*.json"))
+            saved = whole_game.read_canonical(path)
+            saved["settings"]["max_rss_kib"] = 99
+            whole_game.atomic_write(path, whole_game.sealed(saved, "checkpoint_digest"))
+            calls.clear()
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "identity or digest mismatch"):
+                whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
+                    progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
+            self.assertEqual(calls, [])
+            changed = copy.deepcopy(evidence)
+            changed["positions"][0]["queries"][0]["process"]["resources"]["peak_rss_kib"] = 101
+            changed["report_digest"] = hashlib.sha256(whole_game.canonical(
+                {key: value for key, value in changed.items() if key != "report_digest"})).hexdigest()
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "resource observation invalid"):
+                whole_game.verify_oracle_evidence(self.report, changed, self.binary, oracle_cwd=self.cwd,
+                    timeout_seconds=600, max_rss_kib=100)
 
 
 class FakeSeat:

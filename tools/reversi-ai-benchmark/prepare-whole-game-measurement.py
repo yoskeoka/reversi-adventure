@@ -40,7 +40,8 @@ def revision() -> str:
 
 
 def harness_paths() -> list[Path]:
-    return [*sorted((ROOT / "tools/reversi-ai-oracle").glob("*.py")), Path(__file__).resolve(), Path(wg.__file__).resolve()]
+    return [*sorted((ROOT / "tools/reversi-ai-oracle").glob("*.py")), Path(__file__).resolve(),
+            Path(wg.__file__).resolve(), Path(__file__).with_name("exact_threshold.py")]
 
 
 def probe_reset(binary: Path, artifact: Path, timeout: float) -> None:
@@ -281,7 +282,8 @@ def execute(path: Path, verify_only: bool, progress_every: int) -> None:
             if oracle_path.exists():
                 wg.require(f"game-{depth}" in existing, "oracle evidence has missing completed input")
                 wg.verify_oracle_evidence(existing[f"game-{depth}"], load(oracle_path),
-                                         Path(manifest["inputs"]["oracle"]["path"]))
+                                         Path(manifest["inputs"]["oracle"]["path"]),
+                                         oracle_cwd=Path(manifest["oracle_cwd"]))
         for item in manifest["legacy"]:
             progress("verify", item["id"], total=total, status="skipped")
         reports = {}
@@ -304,13 +306,17 @@ def execute(path: Path, verify_only: bool, progress_every: int) -> None:
             oracle_path = directory / f"exact-check-{depth}.json"
             progress("oracle", f"exact-check-{depth}", total, total)
             if oracle_path.exists():
-                wg.verify_oracle_evidence(game, load(oracle_path), Path(manifest["inputs"]["oracle"]["path"]))
+                wg.verify_oracle_evidence(game, load(oracle_path),
+                    Path(manifest["inputs"]["oracle"]["path"]),
+                    oracle_cwd=Path(manifest["oracle_cwd"]))
             else:
                 wg.require(not verify_only, f"missing oracle evidence: {oracle_path}")
                 result = wg.oracle_evidence(game, Path(manifest["inputs"]["oracle"]["path"]),
                                             Path(manifest["oracle_cwd"]), manifest["settings"]["timeout_seconds"],
-                                            progress_enabled=False)
-                wg.verify_oracle_evidence(game, result, Path(manifest["inputs"]["oracle"]["path"]))
+                                            progress_enabled=False,
+                                            max_rss_kib=manifest["settings"]["max_rss_kib"])
+                wg.verify_oracle_evidence(game, result, Path(manifest["inputs"]["oracle"]["path"]),
+                                          oracle_cwd=Path(manifest["oracle_cwd"]))
                 atomic(oracle_path, wg.canonical(result))
 
 

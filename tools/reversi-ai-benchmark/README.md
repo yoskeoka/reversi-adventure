@@ -58,16 +58,39 @@ TrainedEvaluator weights JSON or `--trained-artifact` argument. The canonical
 report identity records this evaluator. This measures the shared search engine
 and game harness, not trained-evaluator loading cost or playing strength.
 
-Run `whole_game.py measure` with `--game-sample efficiency8`, the release
-binary, `--source-revision`, and the chosen host RSS cap. Keep the per-decision
-search limit, node cap, and protocol watchdog fixed across baseline and any
-candidate. The report records all eight completed game times, their mean, and
-nearest-rank P95; 180 and 300 seconds are references only, never game cutoffs.
+Run the complete 0040 closeout from a clean Linux checkout with one command:
+
+```sh
+rtk python3 tools/reversi-ai-benchmark/run-efficiency8-closeout.py \
+  --oracle-binary /absolute/path/to/Egaroucid_for_Console \
+  --oracle-cwd /absolute/path/to/egaroucid-data \
+  --output-dir /absolute/path/to/reversi-ai-efficiency8-run \
+  --max-rss-kib 1572864 \
+  --progress-every 1
+```
+
+The runner builds the release CLI, completes and verifies all eight games,
+checks each exact root and selected child with the external Oracle, verifies
+the query receipts, and writes `summary.json` only after every stage passes.
+The Oracle working directory must contain its `resources/` files. The runner
+pins their digests along with the source, CLI, Oracle binary, settings, and
+reports. A rerun with the same inputs validates and resumes canonical game and
+per-position Oracle checkpoints; changed or corrupt evidence fails without
+being replaced. Progress is flushed to stderr, and `--progress-every` controls
+game and Oracle position records while stage boundaries always print.
+
+The search has no time or node budget. A 600-second per-move watchdog detects a
+stalled CLI response; each Oracle root/child solve has its own 600-second
+watchdog. The explicit RSS cap applies to each CLI seat process and each Oracle
+solve process. All eight games finish even if they exceed the 180-second mean
+goal or 300-second nearest-rank P95 review point; those values inform whether
+to improve search speed and never cut off a game. The runner does not start
+training or decide acceptance.
 
 ## winner-empty-v1 移行と保存証拠
 
 新規 whole-game は producer `reversi-ai-whole-game-v4`、manifest schema2、
-report schema4、Oracle evidence schema2 と `score_contract="winner-empty-v1"`
+report schema4、Oracle evidence schema3 と `score_contract="winner-empty-v1"`
 を記録する。threshold/cache assessment はそれぞれ v2。CLI query ごとの
 `score_contract_v1` と search semantics 2 の生出力を照合し、旧 binary の応答を
 新しい receipt として扱わない。`score_black` は盤上の実石数差を維持する。

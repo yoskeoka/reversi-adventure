@@ -1063,7 +1063,7 @@ class ExactThresholdTests(unittest.TestCase):
 
 
 class OracleExitRaceTests(unittest.TestCase):
-    def run_mocked(self, *, still_alive=False, status=0, rss=100):
+    def run_mocked(self, *, still_alive=False, status=0, rss=100, max_rss_kib=None):
         killed, observations = [], []
         process = SimpleNamespace(pid=42, returncode=None, kill=lambda: killed.append(True))
         usage = SimpleNamespace(ru_utime=0.1, ru_stime=0.2, ru_maxrss=rss)
@@ -1083,7 +1083,7 @@ class OracleExitRaceTests(unittest.TestCase):
              patch.object(et.time, "sleep"):
             try:
                 result = et.measured_oracle(["fake-oracle"], cwd=Path("/tmp"), timeout=2,
-                                           observations=observations)
+                                           observations=observations, max_rss_kib=max_rss_kib)
             except et.wg.BenchmarkError as exc:
                 result = exc
         self.assertEqual(len(observations), 1)
@@ -1140,6 +1140,13 @@ class OracleExitRaceTests(unittest.TestCase):
         self.assertEqual(receipt["returncode"], 0)
         self.assertEqual(receipt["exit_status"], 0)
         self.assertIn("peak RSS", receipt["sampling_failure"])
+        self.assertFalse(killed)
+
+    def test_explicit_rss_cap_overrides_assessment_default(self):
+        rss = et.CAPS["max_rss_kib"] + 1
+        result, receipt, killed = self.run_mocked(rss=rss, max_rss_kib=rss + 1)
+        self.assertIsInstance(result, subprocess.CompletedProcess)
+        self.assertEqual(receipt["resources"]["peak_rss_kib"], rss)
         self.assertFalse(killed)
 
     def test_missing_rss_for_still_running_child_fails_closed(self):

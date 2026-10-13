@@ -455,8 +455,10 @@ def proc_exit_observation(pid):
             "exiting": bool(flags & 0x4) or state in ("X", "Z")}
 
 
-def measured_oracle(argv, *, cwd, timeout, observations):
+def measured_oracle(argv, *, cwd, timeout, observations, max_rss_kib=None):
     """Bound an independent solve and retain CPU/RSS plus raw console output."""
+    rss_limit = CAPS["max_rss_kib"] if max_rss_kib is None else max_rss_kib
+    wg.require(type(rss_limit) is int and rss_limit > 0, "Oracle RSS cap must be positive")
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         process = subprocess.Popen(argv, cwd=cwd, stdout=out, stderr=err)
         started, deadline = time.monotonic_ns(), time.monotonic()+timeout
@@ -490,10 +492,10 @@ def measured_oracle(argv, *, cwd, timeout, observations):
                     record_exit(status, usage)
                     wg.require(time.monotonic() < deadline, "Oracle decision timeout")
                     wg.require(process.returncode == 0, "Oracle process failed")
-                    wg.require(usage.ru_maxrss <= CAPS["max_rss_kib"], "Oracle peak RSS cap exceeded")
+                    wg.require(usage.ru_maxrss <= rss_limit, "Oracle peak RSS cap exceeded")
                     break
                 if receipt["last_observation"] is not None:
-                    wg.require(receipt["last_observation"]["peak_rss_kib"] <= CAPS["max_rss_kib"], "Oracle peak RSS cap exceeded")
+                    wg.require(receipt["last_observation"]["peak_rss_kib"] <= rss_limit, "Oracle peak RSS cap exceeded")
                 wg.require(time.monotonic() < deadline, "Oracle decision timeout")
                 time.sleep(0.02)
         finally:
