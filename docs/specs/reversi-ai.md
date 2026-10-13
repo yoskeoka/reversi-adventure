@@ -877,6 +877,9 @@ observations, host provenance, limits, and score evidence. A checkpoint from
 the prior schema-3 Oracle evidence contract is upgraded only after its saved
 query data and old checkpoint digest verify; existing queries retain the host
 from the saved run identity, while new queries record the current host.
+If interruption occurs while checkpoint schemas are being upgraded, the next
+invocation accepts and completes the validated mixed-schema migration before
+it publishes schema-4 evidence.
 
 An interrupted efficiency8 run may resume from an explicitly supported prior
 runner version when the current source revision descends from the saved

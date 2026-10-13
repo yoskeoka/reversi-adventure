@@ -1271,13 +1271,15 @@ def verify_oracle_checkpoints(report: dict, evidence: dict, binary: Path, cwd: P
     selected_profile = profile(report["settings"]["midgame_depth"], report["settings"]["exact_empty"])
     runtime = oracle_runtime_identity(binary, cwd)
     evidence_version = evidence["schema_version"]
-    identity = {"schema_version": evidence_version, "score_contract": SCORE_CONTRACT,
+    identity_base = {"score_contract": SCORE_CONTRACT,
                 "cli_report_digest": report["report_digest"],
                 "oracle_binary_sha256": runtime["binary"]["sha256"], "oracle_runtime": runtime,
                 "oracle_profile": oracle.profile_metadata(selected_profile),
                 "settings": {"timeout_seconds": timeout_seconds, "max_rss_kib": max_rss_kib}}
-    identity_digest = hashlib.sha256(canonical(identity)).hexdigest()
-    checkpoint_schema = 2 if evidence_version >= 4 else 1
+    identity_v3 = {"schema_version": 3, **identity_base}
+    identity_v4 = {"schema_version": 4, **identity_base}
+    identity_digest_v3 = hashlib.sha256(canonical(identity_v3)).hexdigest()
+    identity_digest_v4 = hashlib.sha256(canonical(identity_v4)).hexdigest()
     steps = [step for game in report["games"] for step in game["steps"] if step["search"]["exact"]]
     known = {f"position-{hashlib.sha256(step['id'].encode()).hexdigest()}.json" for step in steps}
     require(checkpoint_dir.is_dir(), "Oracle checkpoint directory is missing")
@@ -1292,13 +1294,34 @@ def verify_oracle_checkpoints(report: dict, evidence: dict, binary: Path, cwd: P
         saved = read_canonical(path)
         position = {"id": step["id"], "board": step["board"], "side": step["side"],
                     "move": step["move"], "cli_score": step["search"]["score"]}
+        schema = saved.get("schema_version")
         require(saved.get("checkpoint_digest") == sealed(saved, "checkpoint_digest")["checkpoint_digest"]
-                and saved.get("schema_version") == checkpoint_schema
-                and saved.get("identity_digest") == identity_digest
                 and saved.get("position") == position
-                and saved.get("settings") == identity["settings"]
-                and saved.get("queries") == rows[step["id"]]["queries"],
+                and saved.get("settings") == identity_base["settings"],
                 f"Oracle checkpoint differs from verified evidence: {step['id']}")
+        saved_queries = saved.get("queries")
+        evidence_queries = rows[step["id"]]["queries"]
+        if evidence_version == 3 and schema == 1:
+            require(saved.get("identity_digest") == identity_digest_v3
+                    and saved_queries == evidence_queries,
+                    f"Oracle checkpoint differs from verified evidence: {step['id']}")
+        elif evidence_version == 3 and schema == 2:
+            require(saved.get("identity_digest") == identity_digest_v4
+                    and isinstance(saved_queries, list)
+                    and [{key: value for key, value in query.items() if key != "execution_host"}
+                         for query in saved_queries] == evidence_queries,
+                    f"Oracle checkpoint differs from verified evidence: {step['id']}")
+            expected_queries = _oracle_queries_for_step(step)
+            require(len(saved_queries) == len(expected_queries),
+                    f"Oracle checkpoint differs from verified evidence: {step['id']}")
+            for query, query_identity in zip(saved_queries, expected_queries):
+                _verify_oracle_query(query, query_identity, binary, selected_profile,
+                                     timeout_seconds, max_rss_kib, require_execution_host=True)
+        else:
+            require(evidence_version == 4 and schema == 2
+                    and saved.get("identity_digest") == identity_digest_v4
+                    and saved_queries == evidence_queries,
+                    f"Oracle checkpoint differs from verified evidence: {step['id']}")
 
 
 RESUMABLE_VERSION = VERSION
@@ -1570,7 +1593,6 @@ def preflight_measurement_checkpoints(args, manifest_digest: str, condition_id: 
             require(report.get("identity") == identity and report.get("manifest_digest") == manifest_digest
                     and report.get("condition_id") == condition_id,
                     "completed report manifest identity mismatch")
-            return
         for path in checkpoint_dir.iterdir():
             require(path.name == ".lock" or path.name.startswith(".unfinished-")
                     or path.name.startswith("game-") and path.suffix == ".json"

@@ -645,6 +645,22 @@ class OracleCheckpointTests(unittest.TestCase):
                       "position": saved["position"], "settings": saved["settings"],
                       "queries": old_queries}
             whole_game.atomic_write(checkpoint, whole_game.sealed(legacy, "checkpoint_digest"))
+            legacy_evidence = copy.deepcopy(evidence)
+            legacy_evidence["schema_version"] = 3
+            legacy_evidence["positions"][0]["queries"] = old_queries
+            legacy_evidence["report_digest"] = hashlib.sha256(whole_game.canonical(
+                {key: value for key, value in legacy_evidence.items() if key != "report_digest"})).hexdigest()
+            migrated_identity = {key: evidence[key] for key in
+                ("score_contract", "cli_report_digest", "oracle_binary_sha256", "oracle_runtime",
+                 "oracle_profile", "settings")}
+            migrated_identity["schema_version"] = 4
+            migrated_checkpoint = {"schema_version": 2,
+                "identity_digest": hashlib.sha256(whole_game.canonical(migrated_identity)).hexdigest(),
+                "position": saved["position"], "settings": saved["settings"], "queries": saved["queries"]}
+            whole_game.atomic_write(checkpoint,
+                whole_game.sealed(migrated_checkpoint, "checkpoint_digest"))
+            whole_game.verify_oracle_checkpoints(self.report, legacy_evidence, self.binary, self.cwd,
+                self.checkpoint_dir, timeout_seconds=600, max_rss_kib=100)
             calls.clear()
             stack.enter_context(patch.object(whole_game, "execution_host_identity", return_value=resumed_host))
             migrated = whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
@@ -814,6 +830,9 @@ class ResumableTests(unittest.TestCase):
         self.interrupt_after = 1
         with self.assertRaises(KeyboardInterrupt):
             self.measure()
+        self.interrupt_after = None
+        completed_report = self.measure()
+        self.assertEqual(len(completed_report["games"]), 8)
         path = next(self.checkpoints.glob("game-*.json"))
         saved = whole_game.read_canonical(path)
         saved["game_id"] = "opening-4-seat1"

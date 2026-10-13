@@ -57,7 +57,8 @@ class Efficiency8CloseoutTests(unittest.TestCase):
         report = {"schema_version": 4, "score_contract": wg.SCORE_CONTRACT,
                   "condition_id": "efficiency8", "identity": measurement_identity,
                   "binary": self.identity["cli"],
-                  "settings": {"max_rss_kib": args.max_rss_kib}, "games": games,
+                  "settings": {"max_rss_kib": args.max_rss_kib,
+                               "midgame_depth": 8, "exact_empty": 16}, "games": games,
                   "performance_summary": {"game_count": 8}}
         report["report_digest"] = hashlib.sha256(wg.canonical(report)).hexdigest()
         self.report = report
@@ -238,7 +239,7 @@ class Efficiency8CloseoutTests(unittest.TestCase):
                     max_rss_kib=1000, progress_every=2)
 
     def test_invalid_saved_runner_is_rejected_before_build_or_cli(self):
-        self.output.mkdir(parents=True)
+        self.output.mkdir(parents=True, exist_ok=True)
         identity = closeout.seal({"schema_version": 1, "runner_version": "unrecognized-runner",
                                   "source_revision": closeout.LEGACY_SOURCE_REVISION},
                                  "identity_digest")
@@ -272,6 +273,107 @@ class Efficiency8CloseoutTests(unittest.TestCase):
         self.assertEqual(tracker.state["stages"]["self-play"]["elapsed_ns"], 12)
         self.assertEqual([item["host"] for item in tracker.state["invocations"]],
                          [original_host, resumed_host])
+
+    def test_legacy_saved_run_resumes_through_closeout_without_replaying_games_or_queries(self):
+        identity, _runtime, harness_paths = self.legacy_identity()
+        self.cli.parent.mkdir(parents=True, exist_ok=True)
+        self.cli.write_bytes(b"fake cli")
+        self.cli.chmod(0o755)
+        identity["cli"]["sha256"] = wg.digest(self.cli)
+        identity["oracle"] = closeout.oracle_runtime(self.oracle_binary, self.oracle_cwd)
+        identity = closeout.seal(identity, "identity_digest")
+        self.identity = identity
+        self.output.mkdir(parents=True, exist_ok=True)
+        wg.atomic_write(self.output / "run-identity.json", identity)
+        wg.atomic_write(self.output / "build-receipt.json", {"fixture": True})
+        wg.atomic_write(self.output / "build/receipt-placeholder.json", {"fixture": True})
+        report = self.make_report(self.args())
+        measurement_identity = {"source_revision": identity["source_revision"],
+                                "settings": {"max_rss_kib": 1000}}
+        report["identity"] = measurement_identity
+        report["binary"] = identity["cli"]
+        report["settings"] = {"max_rss_kib": 1000, "midgame_depth": 8, "exact_empty": 16}
+        report["manifest_digest"] = hashlib.sha256(wg.canonical(measurement_identity)).hexdigest()
+        report["report_digest"] = hashlib.sha256(wg.canonical(
+            {key: value for key, value in report.items() if key != "report_digest"})).hexdigest()
+        report_path = self.output / "whole-game-report.json"
+        wg.atomic_write(report_path, report)
+        wg.atomic_write(self.output / "report-verification.json",
+                        closeout.report_marker(report, report_path, identity))
+
+        legacy_evidence = self.make_evidence()
+        legacy_query = legacy_evidence["positions"][0]["queries"][0]
+        legacy_query.pop("execution_host")
+        legacy_evidence.update({"runner_version": wg.VERSION, "score_contract": wg.SCORE_CONTRACT,
+                                "cli_report_digest": report["report_digest"]})
+        legacy_evidence["report_digest"] = hashlib.sha256(wg.canonical(legacy_evidence)).hexdigest()
+        evidence_path = self.output / "oracle-evidence.json"
+        wg.atomic_write(evidence_path, legacy_evidence)
+        (self.output / "oracle-checkpoints").mkdir()
+        old_state = closeout.seal({"schema_version": 1, "identity_digest": identity["identity_digest"],
+                                   "stages": {"self-play": {"elapsed_ns": 5, "attempts": 1,
+                                                              "failures": 0, "status": "completed"}}},
+                                  "state_digest")
+        wg.atomic_write(self.output / "stage-state.json", old_state)
+
+        current_host = {"node": "xps", "machine": "x86_64",
+                        "system": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.35"}
+        blob_hashes = {relative: identity["harness"][name]["sha256"]
+                       for name, relative in harness_paths.items()}
+        openings_path = "tools/reversi-ai-benchmark/whole-game-openings-v1.json"
+        events = []
+        receipt = {"source_revision": identity["source_revision"], "cli": identity["cli"]}
+
+        def build_saved(_root, _output, _revision, **kwargs):
+            self.assertFalse(kwargs.get("allow_build", True))
+            events.append("reuse-build")
+            return receipt, 0
+
+        def migrate_evidence(*_args, **_kwargs):
+            events.append("migrate-oracle-evidence")
+            migrated = self.make_evidence()
+            migrated.update({"schema_version": 4, "runner_version": wg.VERSION,
+                             "score_contract": wg.SCORE_CONTRACT,
+                             "cli_report_digest": report["report_digest"]})
+            migrated["report_digest"] = hashlib.sha256(wg.canonical(
+                {key: value for key, value in migrated.items() if key != "report_digest"})).hexdigest()
+            return migrated
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(closeout, "source_revision", return_value="d" * 40))
+            stack.enter_context(patch.object(closeout, "require_clean_checkout"))
+            stack.enter_context(patch.object(closeout, "build_release", side_effect=build_saved))
+            stack.enter_context(patch.object(closeout, "git_blob_sha256", side_effect=lambda _root, _rev, path:
+                identity["openings_sha256"] if path == openings_path else blob_hashes[path]))
+            stack.enter_context(patch.object(closeout.subprocess, "run",
+                                             return_value=SimpleNamespace(returncode=0)))
+            stack.enter_context(patch.object(wg, "execution_host_identity", return_value=current_host))
+            stack.enter_context(patch.object(closeout, "probe_cli",
+                                             side_effect=lambda *_args: events.append("cli-preflight")))
+            stack.enter_context(patch.object(wg, "measurement_identity", side_effect=lambda args: {
+                "source_revision": args.source_revision, "settings": {"max_rss_kib": args.max_rss_kib}}))
+            stack.enter_context(patch.object(wg, "verify"))
+            stack.enter_context(patch.object(wg, "measure_resumable",
+                side_effect=lambda *_args, **_kwargs: (events.append("reuse-self-play-report") or report)))
+            stack.enter_context(patch.object(wg, "preflight_oracle_checkpoints"))
+            stack.enter_context(patch.object(wg, "verify_oracle_evidence"))
+            stack.enter_context(patch.object(wg, "verify_oracle_checkpoints"))
+            stack.enter_context(patch.object(wg, "oracle_evidence", side_effect=migrate_evidence))
+            with contextlib.redirect_stderr(io.StringIO()):
+                summary = closeout.run_closeout(self.args(), root=self.root)
+                first_events = list(events)
+                events.clear()
+                reused_summary = closeout.run_closeout(self.args(), root=self.root)
+
+        self.assertEqual(summary, reused_summary)
+        self.assertEqual(first_events, ["reuse-build", "cli-preflight", "reuse-self-play-report",
+                                        "migrate-oracle-evidence"])
+        self.assertEqual(events, ["reuse-build"])
+        self.assertEqual(summary["source_revision"], closeout.LEGACY_SOURCE_REVISION)
+        self.assertEqual(summary["run_identity_digest"], identity["identity_digest"])
+        self.assertEqual(summary["oracle_queries"][0]["execution_host"], current_host)
+        self.assertEqual([item["host"] for item in summary["host_invocations"]],
+                         [identity["host"], current_host])
 
     def test_report_rejects_cli_binary_different_from_pinned_identity(self):
         self.cli.parent.mkdir(parents=True, exist_ok=True)
