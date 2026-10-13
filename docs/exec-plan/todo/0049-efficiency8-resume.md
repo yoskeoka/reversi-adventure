@@ -36,7 +36,7 @@ Oracle checkpoint と最終evidenceにはqueryごとの実行hostを残す。旧
 1. 仕様にresume境界を記録する。kernel release以外のhost identityの差、CLI/Oracle/openings/settings/report/checkpointの差、壊れたdigestは再開を拒否する。過去の対応runner formatはバージョンを明示した互換migrationだけを許可し、保存済みのproducer identityを維持する。
 2. runnerのidentity/build処理を改め、既存の対応済みrunでは保存済みrevisionとbuild receiptを再利用する。新しいrunは現行revisionで通常どおりpinする。source revision lineageと対応runner formatを検証し、任意の古い/別系統のrunへの一般的な緩和にはしない。
 3. Oracle checkpointの保存形式をversionし、各queryに実行host/kernel情報を付与する。旧形式のqueryは保存済みrun identityのhostを割り当てた上で再利用し、新規queryは現在のhostで記録する。生成evidence/summaryのdigestとoffline verifierも更新する。
-4. stub/fixture testsで、保存済みゲームと85件相当の完了queryを再実行しないこと、未完了queryのみを続行すること、異なるbinary/resource/profile/machineや破損証拠を拒否することを確認する。
+4. stub/fixture testsで、保存済みゲームと85件相当の完了queryを再実行しないこと、未完了queryのみを続行すること、異なるbinary/resource/profile/node/machineや破損証拠を拒否することを確認する。未対応runner formatとcurrent revisionの非祖先であるsaved revisionも、測定process起動前に拒否する。
 5. 適用可能なPython test、benchmark workflow/lint、diff checkを実行する。実Oracleや実測は起動しない。計画ファイルをimplementation PRから削除し、`review-task`で最新headを確認する。
 
 ## 依存と並列性
@@ -48,7 +48,8 @@ Oracle checkpoint と最終evidenceにはqueryごとの実行hostを残す。旧
 - 同じhostのkernel releaseだけ異なるpartial-run fixtureから再開し、completed workをOracle/self-play stubが再実行しない。
 - 旧producer revision/build receiptを維持して既存whole-game reportを検証でき、final summaryが元reportとrun identity digestを保持する。
 - 旧Oracle checkpointの既存queryに元host、新しく実行したqueryに現在hostが割り当てられ、生成evidence/checkpointがoffline verifierを通る。
-- machine、Linux platform suffix、Oracle binary/resource、CLI digest、settings、opening corpus、report digestの差、または不正なcheckpoint digestではfail closedする。
+- node、machine、Linux platform suffix、Oracle binary/resource、CLI digest、settings、opening corpus、report digestの差ではfail closedする。
+- 未対応runner format、current revisionの非祖先であるsaved revision、または不正なrun/checkpoint digestは、Oracle/CLI process起動前にfail closedする。
 - repositoryの該当Python test、適用可能なlint/workflow gate、`git diff --check` を通す。長時間の自己対局/Oracle計測を実行しない。
 
 ## Addresses
