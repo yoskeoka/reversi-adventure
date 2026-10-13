@@ -56,6 +56,7 @@ class Efficiency8CloseoutTests(unittest.TestCase):
                   "wall_ns": (100 + index) * 1_000_000_000} for index in range(8)]
         report = {"schema_version": 4, "score_contract": wg.SCORE_CONTRACT,
                   "condition_id": "efficiency8", "identity": measurement_identity,
+                  "binary": self.identity["cli"],
                   "settings": {"max_rss_kib": args.max_rss_kib}, "games": games,
                   "performance_summary": {"game_count": 8}}
         report["report_digest"] = hashlib.sha256(wg.canonical(report)).hexdigest()
@@ -162,6 +163,24 @@ class Efficiency8CloseoutTests(unittest.TestCase):
                 closeout.run_closeout(self.args(max_rss_kib=0), root=self.root)
         build.assert_not_called()
         self.assertFalse(self.output.exists())
+
+    def test_report_rejects_cli_binary_different_from_pinned_identity(self):
+        self.cli.parent.mkdir(parents=True, exist_ok=True)
+        self.cli.write_bytes(b"fixture cli")
+        cli_identity = {"path": str(self.cli.resolve()), "sha256": "a" * 64}
+        report = {"binary": {"path": str(self.cli.resolve()), "sha256": "b" * 64}}
+        identity = {"cli": cli_identity}
+        with patch.object(wg, "verify"), \
+             self.assertRaisesRegex(wg.BenchmarkError, "differs from the pinned release CLI"):
+            closeout.validate_measurement_report(report, self.output / "report.json", identity,
+                                                 self.cli, self.args(), self.output)
+
+    def test_oracle_runtime_change_after_preflight_is_rejected(self):
+        pinned = {"binary": {"path": str(self.oracle_binary)},
+                  "working_directory": str(self.oracle_cwd), "resources_digest": "a" * 64}
+        with patch.object(wg, "oracle_runtime_identity", return_value={"resources_digest": "b" * 64}), \
+             self.assertRaisesRegex(wg.BenchmarkError, "Oracle runtime changed after closeout preflight"):
+            closeout.require_pinned_oracle_runtime(pinned)
 
     def test_failed_oracle_stage_does_not_publish_success_summary(self):
         with contextlib.ExitStack() as stack:

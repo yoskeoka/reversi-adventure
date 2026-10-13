@@ -599,12 +599,13 @@ class OracleCheckpointTests(unittest.TestCase):
                 whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
                     progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
             self.assertEqual(calls, [False, True])
-            run_solve = self.fake_solve
-            stack.enter_context(patch.object(whole_game.oracle, "run_solve", side_effect=lambda *args, **kwargs:
-                self.fake_solve(*args, **kwargs)))
+            def resume_child_only(*args, **kwargs):
+                calls.append(kwargs["child_query"])
+                return self.fake_solve(*args, **kwargs)
+            stack.enter_context(patch.object(whole_game.oracle, "run_solve", side_effect=resume_child_only))
             evidence = whole_game.oracle_evidence(self.report, self.binary, self.cwd, 600,
                 progress_enabled=False, max_rss_kib=100, checkpoint_dir=self.checkpoint_dir)
-            self.assertEqual(calls, [False, True])
+            self.assertEqual(calls, [False, True, True])
             self.assertEqual(len(evidence["positions"]), 1)
 
     def test_resource_limit_change_or_corrupt_checkpoint_fails_before_query(self):

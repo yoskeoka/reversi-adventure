@@ -306,7 +306,9 @@ def execute(path: Path, verify_only: bool, progress_every: int) -> None:
             oracle_path = directory / f"exact-check-{depth}.json"
             progress("oracle", f"exact-check-{depth}", total, total)
             if oracle_path.exists():
-                wg.verify_oracle_evidence(game, load(oracle_path), Path(manifest["inputs"]["oracle"]["path"]))
+                wg.verify_oracle_evidence(game, load(oracle_path),
+                    Path(manifest["inputs"]["oracle"]["path"]),
+                    oracle_cwd=Path(manifest["oracle_cwd"]))
             else:
                 wg.require(not verify_only, f"missing oracle evidence: {oracle_path}")
                 result = wg.oracle_evidence(game, Path(manifest["inputs"]["oracle"]["path"]),

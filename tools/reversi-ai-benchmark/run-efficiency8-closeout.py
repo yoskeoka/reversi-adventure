@@ -244,6 +244,8 @@ class StageTracker:
 def validate_measurement_report(report: dict, report_path: Path, identity: dict,
                                 cli: Path, args, output_dir: Path) -> dict:
     wg.verify(report, cli)
+    require(report.get("binary") == identity["cli"],
+            "whole-game report binary differs from the pinned release CLI")
     expected_args = argparse.Namespace(kind="cli-persistent", binary=cli, artifact=None,
         evaluator="strategic", opening_depth=8, midgame_depth=8, endgame_depth=8,
         exact_empty=16, cache_scope="turn", timeout_seconds=GAME_TIMEOUT_SECONDS,
@@ -279,6 +281,18 @@ def probe_cli(cli: Path, max_rss_kib: int) -> None:
         if seat.process is not None:
             seat.abort()
     require(usage["peak_rss_kib"] <= max_rss_kib, "CLI preflight exceeded the configured RSS cap")
+
+
+def require_pinned_oracle_runtime(oracle: dict) -> None:
+    current = wg.oracle_runtime_identity(Path(oracle["binary"]["path"]),
+                                         Path(oracle["working_directory"]))
+    require(current == oracle, "Oracle runtime changed after closeout preflight")
+
+
+def require_pinned_cli(cli: Path, identity: dict) -> None:
+    require(str(cli.resolve()) == identity["cli"]["path"]
+            and wg.digest(cli) == identity["cli"]["sha256"],
+            "release CLI changed after closeout build")
 
 
 def oracle_marker(report: dict, evidence: dict, evidence_path: Path, identity: dict) -> dict:
@@ -414,6 +428,7 @@ def run_closeout(args, *, root: Path = ROOT) -> dict:
         store_or_verify_identity(identity_path, identity, output_dir)
         validate_output_contents(output_dir)
         cli = Path(identity["cli"]["path"])
+        require_pinned_cli(cli, identity)
         if (output_dir / "summary.json").exists():
             emit_stage("report-verification", "started", time.monotonic() - invocation_started,
                        identity=identity["identity_digest"])
@@ -448,6 +463,7 @@ def run_closeout(args, *, root: Path = ROOT) -> dict:
         measurement_manifest_digest = sha256_bytes(wg.canonical(measurement_identity))
 
         tracker.run("cli-preflight", lambda: probe_cli(cli, args.max_rss_kib), success_status="verified")
+        require_pinned_cli(cli, identity)
 
         def game_progress(game_id: str, done: int, total: int, game_s: float, elapsed_s: float) -> None:
             if done % args.progress_every and done != total:
@@ -480,6 +496,7 @@ def run_closeout(args, *, root: Path = ROOT) -> dict:
                   file=sys.stderr, flush=True)
 
         def run_oracle_stage():
+            require_pinned_oracle_runtime(oracle)
             if evidence_path.exists():
                 evidence = read_object(evidence_path)
                 wg.verify_oracle_evidence(report, evidence, oracle_binary,
@@ -488,18 +505,19 @@ def run_closeout(args, *, root: Path = ROOT) -> dict:
                 wg.verify_oracle_checkpoints(report, evidence, oracle_binary,
                     Path(oracle["working_directory"]), oracle_checkpoints,
                     timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)
-                return evidence
-            evidence = wg.oracle_evidence(report, oracle_binary, Path(oracle["working_directory"]),
-                ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib,
-                checkpoint_dir=oracle_checkpoints, progress_every=args.progress_every,
-                progress_callback=oracle_progress)
-            wg.verify_oracle_evidence(report, evidence, oracle_binary,
-                oracle_cwd=Path(oracle["working_directory"]),
-                timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)
-            wg.verify_oracle_checkpoints(report, evidence, oracle_binary,
-                Path(oracle["working_directory"]), oracle_checkpoints,
-                timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)
-            wg.atomic_write(evidence_path, evidence)
+            else:
+                evidence = wg.oracle_evidence(report, oracle_binary, Path(oracle["working_directory"]),
+                    ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib,
+                    checkpoint_dir=oracle_checkpoints, progress_every=args.progress_every,
+                    progress_callback=oracle_progress)
+                wg.verify_oracle_evidence(report, evidence, oracle_binary,
+                    oracle_cwd=Path(oracle["working_directory"]),
+                    timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)
+                wg.verify_oracle_checkpoints(report, evidence, oracle_binary,
+                    Path(oracle["working_directory"]), oracle_checkpoints,
+                    timeout_seconds=ORACLE_TIMEOUT_SECONDS, max_rss_kib=args.max_rss_kib)
+                wg.atomic_write(evidence_path, evidence)
+            require_pinned_oracle_runtime(oracle)
             return evidence
 
         evidence = tracker.run("oracle-check", run_oracle_stage)
