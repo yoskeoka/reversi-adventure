@@ -855,19 +855,27 @@ verification of the Oracle evidence; and publication of a canonical completion
 summary. It accepts the Oracle binary and working directory, output directory,
 host RSS cap, and progress interval as explicit inputs. It uses StrategicEvaluator,
 8/8/8, exact16, `turn`, no search-time or node budget, and a 600-second
-per-decision CLI response watchdog. It never starts a training batch or makes
-an adoption decision.
+per-decision CLI response watchdog. Each external Oracle root/child solve has a
+separate 600-second query watchdog. The same RSS cap applies to each CLI seat
+process and each external Oracle solve process. It never starts a training
+batch or makes an adoption decision.
 
 Every stage validates existing artifacts against source, CLI and Oracle binary
 digests, settings, score contract, and upstream report digests before skipping
 it. Whole-game progress reuses the verified per-game checkpoints. Oracle
 root/selected-child evidence is checkpointed by exact decision and can resume
-only after validating each saved query and its identities. A changed input,
-corrupt checkpoint, failed exact solve, or score disagreement fails closed;
-the runner does not replace prior evidence or publish a completion summary.
+only after validating each saved query and its identities. Each Oracle query
+records search elapsed time and nodes plus process wall time, user/system CPU,
+and peak RSS. Oracle evidence schema 3 checkpoints pin the 600-second query
+watchdog and shared RSS cap; offline verification checks these settings,
+resource observations, limits, and the score evidence. A changed input,
+corrupt checkpoint, failed exact solve, resource-limit breach, or score
+disagreement fails closed; the runner does not
+replace prior evidence or publish a completion summary.
 All eight games must finish. The 180-second mean goal and 300-second
 nearest-rank P95 review point never stop a game. The final summary records all
-game times, mean, P95, exact Oracle positions checked, evidence digests, and
+game times, mean, P95, exact Oracle positions and subprocess queries checked,
+per-query and aggregate Oracle search/process resources, evidence digests, and
 elapsed time for each stage and for the full invocation.
 
 The runner writes flushed stderr progress with these stable forms:
@@ -875,7 +883,7 @@ The runner writes flushed stderr progress with these stable forms:
 ```text
 progress efficiency8 stage=<stage> status=<started|verified|completed|failed> elapsed_s=<seconds> [identity=<digest>]
 progress efficiency8 stage=self-play game=<game-id> done=<n> total=8 game_s=<seconds> elapsed_s=<seconds>
-progress efficiency8 stage=oracle-check position=<position-id> done=<n> total=<exact-position-count> elapsed_s=<seconds>
+progress efficiency8 stage=oracle-check position=<position-id> done=<n> total=<exact-position-count> query_elapsed_ms=<milliseconds> elapsed_s=<seconds>
 progress efficiency8 stage=complete games=8 mean_s=<seconds> nearest_rank_p95_s=<seconds> oracle_positions=<n> elapsed_s=<seconds>
 ```
 

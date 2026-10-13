@@ -19,11 +19,12 @@ diagnostic only. The runner does not train a `TrainedEvaluator`, tune a profile,
 or decide whether the result is acceptable. 0040 remains open until the saved
 results and human performance judgment close its gates.
 
-The external Oracle stage means the existing independent exact root and
-selected-child score comparison for each exact CLI decision, under the current
-`winner-empty-v1` contract. It is correctness evidence, not an Oracle-vs-Oracle
-match or a claim about Oracle throughput. Keep source, CLI, Oracle, settings,
-and report identities attached to the combined result.
+The external Oracle stage means the independent exact root and selected-child
+solve for each exact CLI decision, under the current `winner-empty-v1` contract.
+Record both score agreement and each Oracle solve's elapsed time, nodes, process
+wall time, CPU, and RSS. These are per-query diagnostics, not an Oracle-vs-
+Oracle match or a claim about Oracle throughput. Keep source, CLI, Oracle,
+settings, and report identities attached to the combined result.
 
 ## References
 
@@ -31,6 +32,7 @@ and report identities attached to the combined result.
 - `docs/specs/reversi-ai.md`, “Whole-game self-play performance”, “Durable whole-game measurement and game boundaries”, and “0040 one-command efficiency closeout” — report, timeout, checkpoint, and progress contracts.
 - `tools/reversi-ai-benchmark/whole_game.py:1300-1430` — `measure_resumable`, per-game checkpoints, report verification, and summary generation.
 - `tools/reversi-ai-benchmark/whole_game.py:885-956` — `oracle_evidence` and `verify_oracle_evidence` exact root/selected-child checks.
+- `tools/reversi-ai-benchmark/exact_threshold.py:460-515` — existing wait4 Oracle query runner, per-query timeout, and RSS observation/enforcement.
 - `tools/reversi-ai-benchmark/whole_game.py:1430-1515` — `main` measurement, verification, and Oracle-check CLI dispatch.
 - `tools/reversi-ai-benchmark/prepare-whole-game-measurement.py:230-305` — existing pinned-input and resumable-run conventions.
 - `tools/reversi-ai-benchmark/test_whole_game.py` — existing report and Oracle-evidence fixtures.
@@ -53,17 +55,24 @@ contract and these requirements:
 3. Verify the canonical whole-game report offline against the built CLI and
    pinned identity before using it for Oracle queries.
 4. Run the external Oracle root and selected-child solve for every exact search
-   decision in the report, then verify the resulting canonical evidence against
-   the game report and Oracle binary identity.
+   decision in the report. Each individual Oracle solve has a fixed 600-second
+   watchdog; the same explicit `--max-rss-kib` cap applies per CLI seat process
+   and per Oracle solve process. Advance Oracle evidence to schema 3. Record
+   the Oracle search elapsed time/nodes and
+   process wall time/user CPU/system CPU/peak RSS for every query. Version the
+   evidence schema and verify its settings, resource observations, limits,
+   report digest, and Oracle binary digest offline.
 5. Atomically publish a final summary only after all prior stages pass. Include
-   all eight wall times, mean, nearest-rank P95, Oracle position count, full
-   source/CLI/Oracle identities, report and evidence digests, and stage/total
-   elapsed times. A failed or partial run has no success summary.
+   all eight wall times, mean, nearest-rank P95, Oracle exact-position and query
+   counts, per-query Oracle data and aggregates, full source/CLI/Oracle
+   identities, report and evidence digests, and stage/total elapsed times. A
+   failed or partial run has no success summary.
 6. Reuse only canonical, digest-valid, identity-matching outputs. Resume the
    existing per-game checkpoints; add identity-pinned per-exact-decision Oracle
-   checkpoints so a restart does not repeat completed Oracle work. Reject
-   corrupt or mismatched saved data without overwriting it. A run lock prevents
-   concurrent writers to one output directory.
+   checkpoints, including timeout/RSS settings and resource observations, so a
+   restart does not repeat completed Oracle work. Reject corrupt or mismatched
+   saved data without overwriting it. A run lock prevents concurrent writers
+   to one output directory.
 7. Emit flushed stderr progress with stable `progress efficiency8` records for
    stage boundaries, completed games, completed Oracle positions, and final
    completion. Include completed/known-total counts and elapsed seconds; include
@@ -82,11 +91,17 @@ must be corrected; the current runner requires those limits to be absent.
   release build, ordered subprocess stages, progress forwarding, resume and
   final summary.
 - (MODIFY) `tools/reversi-ai-benchmark/whole_game.py` — add resumable,
-  identity-pinned Oracle exact-position checkpoints and rate-controlled
-  `oracle-check` progress; preserve existing CLI contracts and canonical
-  verifier behavior.
+  identity-pinned Oracle exact-position checkpoints; record and verify each
+  root/child solve's score, elapsed time, nodes, process CPU/RSS and pinned
+  limits; add rate-controlled `oracle-check` progress while preserving existing
+  CLI contracts and canonical verifier behavior.
+- (MODIFY) `tools/reversi-ai-benchmark/exact_threshold.py` — make its existing
+  wait4-measured Oracle subprocess helper accept explicit timeout/RSS limits so
+  whole-game Oracle checks can reuse the same enforcement and resource format.
 - (MODIFY) `tools/reversi-ai-benchmark/test_whole_game.py` — test Oracle
   checkpoint validation, resume, progress interval, and mismatch rejection.
+- (MODIFY) `tools/reversi-ai-benchmark/test_exact_threshold.py` — cover explicit
+  Oracle timeout/RSS arguments while preserving current threshold-run defaults.
 - (NEW) `tools/reversi-ai-benchmark/test_efficiency8_closeout.py` — exercise
   stage ordering, required preflight, reuse of verified stages, failure
   propagation, and completion-summary publication with stub commands only.
