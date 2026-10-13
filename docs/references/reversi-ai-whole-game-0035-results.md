@@ -70,9 +70,9 @@ exact=trueを先に分類し、それ以外をdecision盤面のoccupied<=20がop
 
 ## 完了済みと残作業
 
-0035の実装/既存条件の全局測定/turn-game比較/独立Oracle照合は完了。速度目安は未達で、Oracle測定後の正式閾値、cacheの採用理由、自己対局の設定選択が残る。変更前CLIのscore/exactnessと、通常TT/完全読み表を局開始時にresetする常駐条件を補完する。
+これは2026-10-02時点の状態である。0035の実装/既存条件の全局測定/turn-game比較/独立Oracle照合は完了していたが、速度目安、正式閾値、cache採否、自己対局設定は未確定だった。後日実施した8/8/8 profileのcloseout結果は[2026-10-13の記録](reversi-ai-efficiency8-closeout-2026-10-13.md)を参照する。
 
-局単位保存/再開/scriptの[0039計画](https://github.com/yoskeoka/reversi-adventure/blob/8bc7f009f645da0b5277cb83794c17b3e56afe1d/docs/exec-plan/todo/0039-reversi-ai-whole-game-resumable-measurement.md)は実装し、起動手順は[計測handoff](reversi-ai-whole-game-0035.md)へ記録した。残る[0040](../exec-plan/todo/0040-reversi-ai-self-play-performance-closeout.md)は意味証拠/序盤コスト/設定判断を扱う。0035はその判断までactive。新本番manifestは0037 pilot成功と0032の完全game/provenance検証後に0019で凍結する。
+局単位保存/再開/scriptの[0039計画](https://github.com/yoskeoka/reversi-adventure/blob/8bc7f009f645da0b5277cb83794c17b3e56afe1d/docs/exec-plan/todo/0039-reversi-ai-whole-game-resumable-measurement.md)は実装し、起動手順は[計測handoff](reversi-ai-whole-game-0035.md)へ記録した。後続0040の計測・設定判断は[完了記録](reversi-ai-efficiency8-closeout-2026-10-13.md)に移した。0035は学習方法が選ぶexact閾値でのgame-scope再利用評価の要否を残す。新本番manifestは0037 pilot成功と0032の完全game/provenance検証後に0019で凍結する。
 
 試遊で中盤深度8/12が遅く空き16の完全読みは速かったという人間の観察に基づき、
 [0041の評価記録](reversi-ai-exact-threshold-reuse-assessment.md)で空き20/24も測定した。
@@ -150,4 +150,4 @@ PY
 14件（whole-game report 10件、comparison 2件、独立Oracle照合2件）が終了code 0で通った。
 これは元のscore契約とidentityに固定された既存証拠の検証であり、新しい対局や探索は実行していない。
 0035/0041/0045の時間・Oracle receiptはwinner-empty-v1の性能やOracle一致を示さない。
-その境界と人間判断の残件は[0040](../exec-plan/todo/0040-reversi-ai-self-play-performance-closeout.md)に記録する。
+その時点の境界と人間判断の残件は、後日更新された[0040完了記録](reversi-ai-efficiency8-closeout-2026-10-13.md)に引き継いだ。

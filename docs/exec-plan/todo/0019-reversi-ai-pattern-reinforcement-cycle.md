@@ -7,30 +7,39 @@
 > raw差baseline/validationは明示legacy offline検証だけに保持し、新runへ読み替えない。
 > 本番入力の再生成・再学習は件数/上限/進捗/再開を固定した別の人間操作計画で行う。
 > [移行記録](../../references/reversi-ai-winner-empty-migration.md)を参照する。
-> 0040の最新producerでの独立root/選択child一致・資源制限応答・人間の設定/性能判断、
-> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは未達として残す。
+> 0040のreport-pinned producerでの独立root/選択child照合（132 exact positions、252 Oracle queries）・資源観測・
+> 人間の性能判断は2026-10-13に完了した（[結果](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md)）。
+> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは別の未達gateとして残す。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
-> TrainedEvaluator学習前の探索器/対局ハーネス測定profileはStrategicEvaluator・8/8/8・exact16・turn。固定8局を完了まで実行し、平均180秒を目標、
-> P95 300秒を探索改善の検討目安として記録する。候補match/0018用12/12/12や学習batch全体の所要時間は変更しない。
+> TrainedEvaluator学習前の探索器/対局ハーネスprofileはStrategicEvaluator・8/8/8・exact16・turnで計測済み。
+> 平均3.77秒、nearest-rank P95 8.08秒で、当該profileに広い探索最適化を加える根拠はない。
+> これはTrainedEvaluator自体や学習batch総時間の測定ではない。candidate match/0018用12/12/12は変更しない。
+> higher exact thresholdでのgame-scope採否は0035に残り、学習方法が必要とした場合に判断する。
 
 > **Superseded selection contract**: 0034 implements version-2 method/config recording and baseline-versus-candidate matches. Do not freeze another production run from this version-1 contract. The failed version-1 run is not candidate evidence.
 
-> **New production freeze prerequisite**: 0035 records whole-game oracle and
-> project CLI timing before a new version-2 manifest is frozen. Select and pin
-> the self-play-only midgame depth (12 or 8), exact threshold, and accepted CLI
-> digest from that evidence. Candidate matches and 0018 retain their separate
-> 12/12/12 search settings. The stopped version-2 run's partial files are not
-> candidate or timing evidence; use a fresh manifest and output directory.
+> **New production freeze prerequisite**: 0040's 8/8/8, exact16, `turn`
+> whole-game sample and Oracle/resource verification completed; see the
+> [closeout record](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md).
+> Select and pin the self-play-only midgame depth (12 or 8), exact threshold,
+> and accepted CLI digest for the new version-2 manifest. If the selected
+> training method requires a higher exact threshold or game-scope reuse, resolve
+> that bounded question under 0035 before freezing. Candidate matches and 0018
+> retain their separate 12/12/12 search settings. The stopped version-2 run's
+> partial files are not candidate or timing evidence; use a fresh manifest and
+> output directory.
 
-> **2026-10-02 prerequisite status**: 0035の14計測レポートは検証済みだが、設定選択と
-> 変更前後の点数/exactness確認は未完了。0039の局単位保存/再開と0040の補完/採否を経て、
-> 0037のpilot成功と0032入力の完全game/provenance検証も満たしてから本番を凍結する。
+> **2026-10-02 prerequisite status (historical)**: 当時は0035の14計測レポートは検証済みだが、
+> 設定選択と変更前後の点数/exactness確認は未完了だった。0040の補完/採否は上記のとおり完了。
+> 0037のpilot成功と0032入力の完全game/provenance検証は引き続き本番freezeの前提とする。
 > 詳細は `docs/references/reversi-ai-whole-game-0035-results.md` を参照。
 > プロセスが常駐しても、各局の開始前に通常TT/完全読み表を消去する。局内の読みだけを
 > 再利用し、局間cacheを残した旧persistent測定は本番性能の採用証拠にしない。
 
-> **2026-10-06 correctness prerequisite**: PR #251の終盤選択手反例を受け、
-> 0043の停止、0044の正確性修正、0045の縮小検証、0040の人間による採否判断を先に行う。
+> **2026-10-06 correctness prerequisite**: PR #251の終盤選択手反例を受けた0043の停止、
+> 0044の正確性修正、0045の縮小検証、0040の人間による設定/性能判断は完了した。
+> その[closeout記録](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md)はhigher thresholdでの
+> game-scope採用を決めていない。学習方法がそれを必要とする場合は0035の評価後にfreezeする。
 > 0043実装後の既定は手番ごとにexact tableを消去し、再利用の不一致が未解決のまま新本番runを凍結しない。
 > 0045の12/8/12・exact20・各3局は実験用検証であり、本番exact16や学習batch局数を変更しない。
 > 再利用や閾値20の本番採用は明示承認とproduction spec/manifest互換更新後にだけ行う。
@@ -41,7 +50,9 @@
 > exact0..30を独立指定できる。既定12/12/12・exact16、turn policy、候補比較の
 > strong-v1固定は維持する。旧schema3/4/5は完成reportの明示legacy offline検証だけに用いる。
 > 設定APIの完成から本番freezeを許可しない。[score調査](../../references/reversi-ai-exact-score-contract.md)
-> と0040の人間による設定/時間予算/採否、0037、凍結producerでの入力再検証が先決。
+> と0040の人間による設定/時間予算/性能判断は[完了済み](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md)。
+> 0037 pilotと凍結producerでの入力再検証は本番freezeの前提として残る。学習方法がexact16より高い閾値や
+> game-scope再利用を要求する場合は、0035でその条件を別途評価する。
 
 Produce exactly one reproducible, project-owned candidate pattern artifact by
 running bounded self-play and updating the existing sparse pattern tables from

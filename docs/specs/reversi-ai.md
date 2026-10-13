@@ -844,6 +844,17 @@ sample mean, and its P95 before the larger learning batch is started. A slow
 game completes and remains in those statistics; a per-decision watchdog may
 end a game only when an individual search response stalls.
 
+The first fixed `efficiency8` sample completed on 2026-10-13: its eight
+StrategicEvaluator games averaged 3.7699 seconds, with nearest-rank P95 at
+8.0750 seconds. The 132 exact positions were checked by 252 exact Oracle root
+and selected-child queries, and the saved report and Oracle evidence were verified.
+This is well below the 180-second mean goal and 300-second P95 review point, so
+it gives no reason to optimize this search profile before training. It does not
+measure TrainedEvaluator evaluation cost, total learning-batch duration, or
+Egaroucid full-game self-play speed. See
+[`reversi-ai-efficiency8-closeout-2026-10-13.md`](../references/reversi-ai-efficiency8-closeout-2026-10-13.md)
+for the pinned run and evidence digests.
+
 ### 0040 one-command efficiency closeout
 
 The human-operated 0040 efficiency run has one entrypoint. From a clean Linux
@@ -946,6 +957,14 @@ record the actual `gtp-clear-board` boundary; only project CLI workloads claim
 `new_game-v1`. Legacy CLI measurement is unavailable in the reset runner, while
 its completed v1 reports remain independently verifiable. Legacy persistent reports retain their
 original cross-game cache semantics and cannot represent reset conditions.
+
+Heuristic transposition-table reuse within one game is separate from the exact
+table's decision scope and remains enabled. Keep the exact-table `game` scope
+available for a future bounded diagnostic when a training method selects its
+exact threshold. The `efficiency8` result only covers exact16 with `turn`; it
+does not determine whether game-scope reuse helps at a higher threshold such as
+30 empties. Do not adopt it as the production policy or remove the capability
+based on this sample; the current production policy remains exact16/`turn`.
 
 Each completed game durably records its opening and assignment identity,
 positions, sides, moves, diagnostics, terminal result, wall and CPU time, RSS,
