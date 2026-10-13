@@ -75,12 +75,14 @@ def synthetic_report(midgame_depth: int = 12, target_prefix: bool = False,
                             opening_depth, endgame_depth)
              for row in whole_game.opening_rows()
              for assignment in (0, 1)]
-    report = {"schema_version": 3, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION, "kind": kind,
+    report = {"schema_version": 4, "score_contract": whole_game.SCORE_CONTRACT, "runner_version": whole_game.VERSION, "kind": kind,
               "openings_sha256": whole_game.digest(whole_game.OPENINGS),
               "binary": {"path": "/synthetic/cli", "sha256": "0" * 64},
-              "artifact": {"path": "/synthetic/artifact", "sha256": "1" * 64},
+              "artifact": (None if game_sample == "efficiency8" else
+                           {"path": "/synthetic/artifact", "sha256": "1" * 64}),
               "oracle_profile": None,
-              "settings": {"opening_depth": opening_depth, "midgame_depth": midgame_depth,
+              "settings": {"evaluator": "strategic" if game_sample == "efficiency8" else "trained",
+                           "opening_depth": opening_depth, "midgame_depth": midgame_depth,
                            "endgame_depth": endgame_depth,
                            "exact_empty": 16, "timeout_seconds": 310,
                            "search_time_limit_ms": 2500 if game_sample == "efficiency8" else None,
@@ -143,24 +145,52 @@ class WholeGameTests(unittest.TestCase):
         self.assertTrue(report["performance_summary"]["consider_search_optimization"])
         self.assertEqual(report["performance_summary"]["p95_wall_ns"], 301_000_000_000)
 
-    def test_efficiency_identity_requires_real_artifact_and_production_search_limits(self):
+    def test_efficiency_identity_uses_strategic_without_artifact_and_freezes_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "cli"
+            binary.write_bytes(b"cli")
+            args = SimpleNamespace(kind="cli-persistent", binary=binary, artifact=None,
+                evaluator="strategic",
+                exact_empty=16, node_limit=50_000, cache_scope="turn", opening_depth=8,
+                midgame_depth=8, endgame_depth=8, game_sample="efficiency8",
+                search_time_limit_ms=2_500,
+                timeout_seconds=310, max_decisions=120, max_rss_kib=1_000_000,
+                source_revision="a" * 40)
+            identity = whole_game.measurement_identity(args)
+            self.assertEqual(identity["settings"]["game_sample"], "efficiency8")
+            self.assertEqual(identity["settings"]["evaluator"], "strategic")
+            self.assertIsNone(identity["artifact"])
+            self.assertNotIn("game_time_limit_seconds", identity["settings"])
+            self.assertEqual(identity["settings"]["search_time_limit_ms"], 2_500)
+            args.endgame_depth = 12
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "StrategicEvaluator efficiency sample requires"):
+                whole_game.measurement_identity(args)
+
+    def test_efficiency_requires_strategic_evaluator_without_artifact(self):
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / "cli"
             artifact = Path(directory) / "artifact.json"
             binary.write_bytes(b"cli")
-            artifact.write_bytes(b"validated-artifact")
+            artifact.write_bytes(b"not-needed")
             args = SimpleNamespace(kind="cli-persistent", binary=binary, artifact=artifact,
-                exact_empty=16, node_limit=50_000, cache_scope="turn", opening_depth=8,
-                midgame_depth=8, endgame_depth=8, game_sample="efficiency8",
-                search_time_limit_ms=2_500,
-                timeout_seconds=310, max_decisions=120, max_rss_kib=1_000_000)
-            identity = whole_game.measurement_identity(args)
-            self.assertEqual(identity["settings"]["game_sample"], "efficiency8")
-            self.assertNotIn("game_time_limit_seconds", identity["settings"])
-            self.assertEqual(identity["settings"]["search_time_limit_ms"], 2_500)
-            args.endgame_depth = 12
-            with self.assertRaisesRegex(whole_game.BenchmarkError, "TrainedEvaluator efficiency sample requires"):
+                evaluator="trained", exact_empty=16, node_limit=50_000, cache_scope="turn",
+                opening_depth=8, midgame_depth=8, endgame_depth=8, game_sample="efficiency8",
+                search_time_limit_ms=2_500, timeout_seconds=310, max_decisions=120,
+                max_rss_kib=1_000_000, source_revision="a" * 40)
+            with self.assertRaisesRegex(whole_game.BenchmarkError, "StrategicEvaluator efficiency sample requires"):
                 whole_game.measurement_identity(args)
+
+    def test_strategic_seat_launches_without_trained_evaluator_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "cli"
+            binary.write_bytes(b"cli")
+            with patch.object(whole_game.subprocess, "Popen") as popen:
+                whole_game.Seat("cli", binary, None, 8, 310, "B", cache_scope="turn",
+                                opening_depth=8, endgame_depth=8,
+                                search_time_limit_ms=300_000, evaluator="strategic")
+            command = popen.call_args.args[0]
+            self.assertEqual(command[command.index("--evaluator") + 1], "strategic")
+            self.assertNotIn("--trained-artifact", command)
 
     def test_independent_replay_and_resource_verification(self):
         report = synthetic_report()
@@ -540,7 +570,7 @@ class ResumableTests(unittest.TestCase):
 
     def test_genuine_v1_reports_without_decision_resources_remain_valid(self):
         report = synthetic_report(8)
-        self.assertEqual(report["schema_version"], 3)
+        self.assertEqual(report["schema_version"], 4)
         whole_game.verify(report)
         changed = copy.deepcopy(report)
         changed["games"][0]["steps"][0]["resource_observations"] = {

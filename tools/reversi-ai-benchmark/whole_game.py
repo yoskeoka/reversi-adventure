@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "reversi-ai-oracle"))
 import oracle  # noqa: E402  (project-owned adapter; Egaroucid remains external)
 
-VERSION = "reversi-ai-whole-game-v3"
+VERSION = "reversi-ai-whole-game-v4"
 SCORE_CONTRACT = "winner-empty-v1"
 OPENINGS = Path(__file__).with_name("whole-game-openings-v1.json")
 DIAGNOSTIC = re.compile(
@@ -125,7 +125,8 @@ class Seat:
                  node_limit: int | None = None, max_rss_kib: int | None = None,
                  capture_cache_policy: bool = False,
                  opening_depth: int = 12, endgame_depth: int = 12,
-                 search_time_limit_ms: int | None = None):
+                 search_time_limit_ms: int | None = None,
+                 evaluator: str = "trained"):
         require(exact_empty in (16, 20, 24), "unsupported exact threshold")
         require(all(type(depth) is int and 1 <= depth <= 64
                     for depth in (opening_depth, depth, endgame_depth)), "invalid phase depth")
@@ -149,13 +150,18 @@ class Seat:
             self.process = self.gtp.process
             self.buffer = bytearray()
         else:
-            require(artifact is not None, "CLI requires a trained artifact")
+            require(evaluator in ("strategic", "trained"), "unsupported CLI evaluator")
+            require((artifact is not None) == (evaluator == "trained"),
+                    "trained evaluator/artifact identity mismatch")
             search_time_limit_ms = (search_time_limit_ms if search_time_limit_ms is not None
                                     else int(timeout * 1000) - 1000)
-            argv = [str(binary), "--evaluator", "trained", "--trained-artifact", str(artifact),
+            argv = [str(binary), "--evaluator", evaluator]
+            if evaluator == "trained":
+                argv.extend(["--trained-artifact", str(artifact)])
+            argv.extend([
                     "--opening-depth", str(opening_depth), "--midgame-depth", str(depth),
                     "--endgame-depth", str(endgame_depth), "--exact-solver-empty-squares", str(exact_empty),
-                    "--time-limit-ms", str(search_time_limit_ms)]
+                    "--time-limit-ms", str(search_time_limit_ms)])
             if node_limit is not None:
                 argv.extend(["--node-limit", str(node_limit)])
             if kind != "cli-legacy":
@@ -494,15 +500,21 @@ def attach_diagnostics(record: dict, seats: dict[str, Seat], kind: str) -> None:
     record["search_count"] = len(record["steps"])
 
 
-def persistent_games(rows: list[dict], binary: Path, artifact: Path, depth: int,
+def persistent_games(rows: list[dict], binary: Path, artifact: Path | None, depth: int,
                      timeout: float, max_decisions: int, max_rss_kib: int,
-                     cache_scope: str) -> tuple[list[dict], dict]:
+                     cache_scope: str, evaluator: str = "trained", opening_depth: int = 12,
+                     endgame_depth: int = 12, exact_empty: int = 16,
+                     node_limit: int | None = None,
+                     search_time_limit_ms: int | None = None) -> tuple[list[dict], dict]:
     seats: dict[str, Seat] = {}
     games = []
     try:
         for side in ("B", "W"):
             seats[side] = Seat("cli", binary, artifact, depth, timeout, side,
-                               cache_scope=cache_scope)
+                               cache_scope=cache_scope, exact_empty=exact_empty,
+                               node_limit=node_limit, max_rss_kib=max_rss_kib,
+                               opening_depth=opening_depth, endgame_depth=endgame_depth,
+                               search_time_limit_ms=search_time_limit_ms, evaluator=evaluator)
         for row in rows:
             for assignment in (0, 1):
                 before = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
@@ -534,12 +546,18 @@ def persistent_games(rows: list[dict], binary: Path, artifact: Path, depth: int,
 
 def measured_game(row: dict, assignment: int, kind: str, binary: Path, artifact: Path | None,
                   depth: int, timeout: float, max_decisions: int, max_rss_kib: int,
-                  cwd: Path | None, cache_scope: str) -> dict:
+                  cwd: Path | None, cache_scope: str, evaluator: str = "trained",
+                  opening_depth: int = 12, endgame_depth: int = 12,
+                  exact_empty: int = 16, node_limit: int | None = None,
+                  search_time_limit_ms: int | None = None) -> dict:
     seats = {}
     try:
         for side in ("B", "W"):
             seats[side] = Seat(kind, binary, artifact, depth, timeout, side, cwd,
-                               cache_scope)
+                               cache_scope, exact_empty=exact_empty, node_limit=node_limit,
+                               max_rss_kib=max_rss_kib, opening_depth=opening_depth,
+                               endgame_depth=endgame_depth, search_time_limit_ms=search_time_limit_ms,
+                               evaluator=evaluator)
         record = game(row, assignment, seats, kind, timeout, max_decisions)
         usages = {side: seat.close() for side, seat in seats.items()}
         attach_diagnostics(record, seats, kind)
@@ -557,14 +575,27 @@ def measured_game(row: dict, assignment: int, kind: str, binary: Path, artifact:
             seat.abort()
 
 
+def selected_evaluator(args: argparse.Namespace) -> str:
+    if args.kind == "oracle":
+        require(args.artifact is None, "Oracle workload does not use an evaluator artifact")
+        return "oracle"
+    evaluator = getattr(args, "evaluator", None)
+    if evaluator is None:
+        evaluator = "trained" if args.artifact is not None else "strategic"
+    require(evaluator in ("strategic", "trained"), "unsupported CLI evaluator")
+    require((args.artifact is not None) == (evaluator == "trained"),
+            "trained evaluator/artifact identity mismatch")
+    return evaluator
+
+
 def run(args: argparse.Namespace) -> dict:
     require(args.kind in ("oracle", "cli", "cli-persistent"), "legacy CLI measurement is offline-only")
     require(sys.platform == "linux", "CPU/RSS measurement requires Linux")
     require(args.timeout_seconds > 1 and args.max_rss_kib > 0 and args.max_decisions >= 120,
             "invalid resource caps")
-    require(args.binary.is_file() and (args.kind == "oracle" or args.artifact and args.artifact.is_file()),
+    evaluator = selected_evaluator(args)
+    require(args.binary.is_file() and (args.artifact is None or args.artifact.is_file()),
             "binary or trained artifact is missing")
-    require(args.kind != "oracle" or args.artifact is None, "oracle workload does not use a trained artifact")
     require(args.kind not in ("oracle", "cli-legacy") or args.cache_scope == "game",
             "legacy/oracle workload has no CLI cache scope")
     rows = opening_rows()
@@ -572,35 +603,51 @@ def run(args: argparse.Namespace) -> dict:
     started = time.monotonic()
     process_totals = None
     if args.kind == "cli-persistent":
-        assert args.artifact is not None
         games, process_totals = persistent_games(rows, args.binary, args.artifact,
                                                   args.midgame_depth, args.timeout_seconds,
-                                                  args.max_decisions, args.max_rss_kib, args.cache_scope)
+                                                  args.max_decisions, args.max_rss_kib, args.cache_scope,
+                                                  evaluator=evaluator,
+                                                  opening_depth=getattr(args, "opening_depth", 12),
+                                                  endgame_depth=getattr(args, "endgame_depth", 12),
+                                                  exact_empty=getattr(args, "exact_empty", 16),
+                                                  node_limit=getattr(args, "node_limit", None),
+                                                  search_time_limit_ms=getattr(args, "search_time_limit_ms", None))
     else:
         for row in rows:
             for assignment in (0, 1):
                 games.append(measured_game(row, assignment, args.kind, args.binary, args.artifact,
                                            args.midgame_depth, args.timeout_seconds,
                                            args.max_decisions, args.max_rss_kib, args.oracle_cwd,
-                                           args.cache_scope))
+                                           args.cache_scope, evaluator=evaluator,
+                                           opening_depth=getattr(args, "opening_depth", 12),
+                                           endgame_depth=getattr(args, "endgame_depth", 12),
+                                           exact_empty=getattr(args, "exact_empty", 16),
+                                           node_limit=getattr(args, "node_limit", None),
+                                           search_time_limit_ms=getattr(args, "search_time_limit_ms", None)))
                 print(f"progress whole-game {len(games)}/8 opening={row['id']} seat={assignment} "
                       f"game={games[-1]['wall_ns'] / 1e9:.1f}s elapsed={time.monotonic() - started:.1f}s",
                       file=sys.stderr, flush=True)
-    report = {"schema_version": 3, "score_contract": SCORE_CONTRACT, "runner_version": VERSION, "kind": args.kind,
+    report = {"schema_version": 4, "score_contract": SCORE_CONTRACT, "runner_version": VERSION, "kind": args.kind,
               "openings_sha256": digest(OPENINGS), "binary": {"path": str(args.binary.resolve()),
               "sha256": digest(args.binary)},
               "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)}
                            if args.artifact else None),
               "oracle_profile": oracle.profile_metadata(profile(args.midgame_depth)) if args.kind == "oracle" else None,
-              "settings": {"opening_depth": 12, "midgame_depth": args.midgame_depth,
-                           "endgame_depth": 12, "exact_empty": 16, "timeout_seconds": args.timeout_seconds,
+              "settings": {"evaluator": evaluator,
+                           "opening_depth": getattr(args, "opening_depth", 12),
+                           "midgame_depth": args.midgame_depth,
+                           "endgame_depth": getattr(args, "endgame_depth", 12),
+                           "exact_empty": getattr(args, "exact_empty", 16), "timeout_seconds": args.timeout_seconds,
                            "exact_cache_scope": args.cache_scope,
                            "max_decisions": args.max_decisions, "max_rss_kib": args.max_rss_kib,
                            "process_lifetime": ("all-games-per-seat" if args.kind == "cli-persistent"
-                                                else "one-game-per-seat")},
+                                                else "one-game-per-seat"),
+                           "game_sample": getattr(args, "game_sample", "full8")},
               "environment": {"host": platform.node(), "cpu_model": platform.processor(),
                               "os": platform.platform(), "measurement": "linux-wait4"},
-              "games": games, "aggregate": totals(games), "process_totals": process_totals}
+              "games": games, "aggregate": totals(games), "process_totals": process_totals,
+              "performance_summary": (efficiency_performance_summary(games)
+                                      if getattr(args, "game_sample", "full8") == "efficiency8" else None)}
     report["report_digest"] = hashlib.sha256(canonical(report)).hexdigest()
     return report
 
@@ -716,14 +763,17 @@ def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | 
     require(report.get("openings_sha256") == digest(OPENINGS), "opening corpus digest mismatch")
     kind = report.get("kind")
     require(kind in ("oracle", "cli", "cli-persistent", "cli-legacy"), "invalid workload kind")
-    require((report.get("artifact") is None if kind == "oracle" else report.get("artifact") is not None),
-            "artifact workload identity mismatch")
     if binary:
         require(digest(binary) == report["binary"]["sha256"], "binary digest mismatch")
     if artifact:
         require(report.get("artifact") is not None and digest(artifact) == report["artifact"]["sha256"],
                 "artifact digest mismatch")
     settings = report.get("settings")
+    evaluator = settings.get("evaluator", "oracle" if kind == "oracle" else "trained") if isinstance(settings, dict) else None
+    require(evaluator in ("oracle", "strategic", "trained")
+            and (evaluator == "oracle") == (kind == "oracle")
+            and (report.get("artifact") is not None) == (evaluator == "trained"),
+            "evaluator/artifact workload identity mismatch")
     require(isinstance(settings, dict)
             and all(type(settings.get(key, default)) is int and 1 <= settings.get(key, default) <= 64
                     for key, default in (("opening_depth", 12), ("midgame_depth", 12),
@@ -743,14 +793,15 @@ def _verify_complete(report: dict, binary: Path | None = None, artifact: Path | 
     sample = settings.get("game_sample", "full8")
     rows = measurement_rows(sample)
     if sample == "efficiency8":
-        require(kind == "cli-persistent" and settings.get("opening_depth") == 8
+        require(kind == "cli-persistent" and evaluator == "strategic"
+                and report.get("artifact") is None and settings.get("opening_depth") == 8
                 and settings.get("midgame_depth") == 8 and settings.get("endgame_depth") == 8
                 and settings.get("exact_empty") == 16 and settings.get("exact_cache_scope") == "turn"
                 and type(settings.get("search_time_limit_ms")) is int
                 and settings["search_time_limit_ms"] > 0
                 and type(settings.get("node_limit")) is int and settings["node_limit"] > 0
                 and settings.get("game_sample") == "efficiency8",
-                "invalid TrainedEvaluator efficiency sample settings")
+                "invalid StrategicEvaluator efficiency sample settings")
     expected_oracle_profile = (oracle.profile_metadata(profile(settings["midgame_depth"], settings["exact_empty"]))
                                if kind == "oracle" else None)
     require(report.get("oracle_profile") == expected_oracle_profile, "oracle profile mismatch")
@@ -961,13 +1012,13 @@ def verify(report: dict, binary: Path | None = None, artifact: Path | None = Non
         return
     require(report.get("score_contract") == SCORE_CONTRACT, "whole-game score contract mismatch; old reports require --legacy-offline")
     require(report.get("kind") in ("oracle", "cli", "cli-persistent"), "new whole-game report cannot claim legacy CLI semantics")
-    require(report.get("schema_version") == 3, "unsupported whole-game report")
+    require(report.get("schema_version") == 4, "unsupported whole-game report")
     if "identity" not in report:
         require(report == sealed(report), "report digest mismatch")
         compatible = sealed({**report, "schema_version": 1})
         _verify_complete(compatible, binary, artifact)
         return
-    require(report.get("schema_version") == 3 and report.get("runner_version") == RESUMABLE_VERSION,
+    require(report.get("schema_version") == 4 and report.get("runner_version") == RESUMABLE_VERSION,
             "unsupported whole-game report")
     require(report.get("report_digest") == sealed(report)["report_digest"], "report digest mismatch")
     require(report.get("resource_scopes") == {
@@ -1117,24 +1168,28 @@ def measurement_identity(args) -> dict:
     require(all(type(depth) is int and 1 <= depth <= 64
                 for depth in (opening_depth, args.midgame_depth, endgame_depth)), "invalid phase depth")
     game_sample = getattr(args, "game_sample", "full8")
+    evaluator = selected_evaluator(args)
     rows = measurement_rows(game_sample)
     if args.kind == "oracle":
         require(opening_depth == 12 and endgame_depth == 12, "unsupported Oracle phase profile")
     if game_sample == "efficiency8":
-        require(args.kind == "cli-persistent" and args.artifact is not None and args.artifact.is_file()
+        source_revision = getattr(args, "source_revision", None)
+        require(args.kind == "cli-persistent" and evaluator == "strategic" and args.artifact is None
                 and (opening_depth, args.midgame_depth, endgame_depth) == (8, 8, 8)
                 and getattr(args, "exact_empty", 16) == 16 and args.cache_scope == "turn"
                 and len(rows) == 8
                 and search_time_limit_ms is not None and node_limit is not None
-                and args.timeout_seconds > search_time_limit_ms / 1000,
-                "TrainedEvaluator efficiency sample requires 8/8/8 exact16 turn, fixed 8 games, "
-                "and explicit production search limits")
+                and args.timeout_seconds > search_time_limit_ms / 1000
+                and isinstance(source_revision, str) and re.fullmatch(r"[0-9a-f]{40}", source_revision),
+                "StrategicEvaluator efficiency sample requires 8/8/8 exact16 turn, fixed 8 games, "
+                "a source revision, and explicit search limits")
     return {"score_contract": SCORE_CONTRACT, "kind": args.kind, "binary": {"path": str(args.binary.resolve()), "sha256": digest(args.binary)},
             "artifact": ({"path": str(args.artifact.resolve()), "sha256": digest(args.artifact)} if args.artifact else None),
             "openings_sha256": digest(OPENINGS), "source_revision": getattr(args, "source_revision", None),
             "host": platform.node(), "cache_lifetime": "one-game",
             "reset_protocol": "gtp-clear-board" if args.kind == "oracle" else "new_game-v1",
-            "settings": {"opening_depth": opening_depth, "midgame_depth": args.midgame_depth,
+            "settings": {"evaluator": evaluator,
+                         "opening_depth": opening_depth, "midgame_depth": args.midgame_depth,
                          "endgame_depth": endgame_depth,
                          "exact_empty": getattr(args, "exact_empty", 16), "timeout_seconds": args.timeout_seconds,
                          "search_time_limit_ms": search_time_limit_ms, "node_limit": node_limit,
@@ -1233,7 +1288,8 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
                                            getattr(args, "exact_empty", 16), getattr(args, "node_limit", None),
                                            args.max_rss_kib, opening_depth=identity["settings"]["opening_depth"],
                                            endgame_depth=identity["settings"]["endgame_depth"],
-                                           search_time_limit_ms=identity["settings"]["search_time_limit_ms"])
+                                           search_time_limit_ms=identity["settings"]["search_time_limit_ms"],
+                                           evaluator=identity["settings"]["evaluator"])
                 game_started_at_ns = time.time_ns()
                 before = {side: proc_usage(seat.process.pid) for side, seat in seats.items()}
                 events = {side: seat.new_game(key) for side, seat in seats.items()}
@@ -1316,7 +1372,7 @@ def measure_resumable(args, manifest_digest: str, condition_id: str, checkpoint_
         progress("aggregate", condition_id, conditions_done, conditions_total, game_total,
                  "measuring", started, game_total=game_total)
         ordered = [games[f"{row['id']}-seat{assignment}"] for row, assignment in rows]
-        report = sealed({"schema_version": 3, "score_contract": SCORE_CONTRACT, "runner_version": RESUMABLE_VERSION,
+        report = sealed({"schema_version": 4, "score_contract": SCORE_CONTRACT, "runner_version": RESUMABLE_VERSION,
             "kind": args.kind, "binary": identity["binary"], "artifact": identity["artifact"],
             "openings_sha256": identity["openings_sha256"], "identity": identity,
             "condition_id": condition_id, "condition_digest": condition_digest, "manifest_digest": manifest_digest,
@@ -1343,6 +1399,7 @@ def main(argv: list[str] | None = None) -> int:
     measure.add_argument("--kind", choices=("oracle", "cli", "cli-persistent"), required=True)
     measure.add_argument("--binary", type=Path, required=True)
     measure.add_argument("--artifact", type=Path)
+    measure.add_argument("--evaluator", choices=("strategic", "trained"))
     measure.add_argument("--oracle-cwd", type=Path)
     measure.add_argument("--opening-depth", type=int, default=12)
     measure.add_argument("--midgame-depth", type=int, choices=(8, 12), required=True)

@@ -33,7 +33,7 @@ New identities are mandatory and inconsistent combinations fail closed:
 | Reinforcement | `reversi-ai-pattern-reinforcement-v4`, manifest6, game/report/checkpoint4 |
 | Random inputs | `reversi-ai-random-inputs-v2`, `project-owned-random-games-v2`, manifest/output/game/record2 |
 | Oracle | golden/analysis2 with score contract; corpus1 stays unchanged |
-| Whole game | `reversi-ai-whole-game-v3`, manifest2, report3, evidence2 |
+| Whole game | `reversi-ai-whole-game-v4`, manifest2, report4, evidence2 |
 | Threshold/cache | `exact-threshold-assessment-v2`, `exact-cache-verification-v2`, new query/receipt contract |
 
 New provenance validates the version-specific trainer/optimizer pair. Runtime
@@ -808,21 +808,24 @@ self-play depths, exact threshold, cache policy, and executable SHA-256.
 positions at different depths are different workloads.
 
 Before starting the larger TrainedEvaluator learning batch, measure the
-selected self-play profile with a validated, immutable TrainedEvaluator
-artifact and the current producer. The goal is to reduce the aggregate time of
-that later batch by improving the search engine first. Measure the fixed
-eight-game sample (four openings, both seat assignments) to completion and
-report its arithmetic mean and nearest-rank P95. The mean goal is 180 seconds;
-P95 reaching 300 seconds is a signal to consider search optimization. These
-are whole-game efficiency references, never game deadlines or acceptance
-cutoffs. With this eight-game sample, nearest-rank P95 is the slowest observed
-game and is only a rough tail signal. The runner's per-decision response timeout
-exists only to detect a stalled process; it is separate from performance
-targets and the total learning-batch duration. If the baseline is far from the
-mean goal or its P95 reaches the review threshold, try up to three bounded
-midgame-search improvements, verify each candidate's search results, then
-remeasure the same games and artifact. If those attempts still miss, record
-the best result and remaining tradeoff before choosing a compromise profile.
+selected search profile with `StrategicEvaluator` and the current whole-game
+producer. This measurement targets the shared search engine and game harness;
+it does not benchmark TrainedEvaluator artifact loading or claim a trained
+model's playing strength. StrategicEvaluator supplies a directional heuristic
+for search and has comparable per-position evaluation cost, so no separate
+TrainedEvaluator weight JSON passed with `--trained-artifact` is required.
+Measure the fixed eight-game sample (four openings, both seat assignments) to
+completion and report its arithmetic mean and nearest-rank P95. The mean goal is 180 seconds; P95 reaching 300 seconds is a signal to
+consider search optimization. These are whole-game efficiency references,
+never game deadlines or acceptance cutoffs. With this eight-game sample,
+nearest-rank P95 is the slowest observed game and is only a rough tail signal.
+The runner's per-decision response timeout exists only to detect a stalled
+process; it is separate from performance targets and the total learning-batch
+duration. If the baseline is far from the mean goal or its P95 reaches the
+review threshold, try up to three bounded midgame-search improvements, verify
+each candidate's search results, then remeasure the same games and evaluator.
+If those attempts still miss, record the best result and remaining tradeoff
+before choosing a compromise profile.
 
 Within one configuration, baseline and candidate must
 agree on move, score, and completed exactness for the same positions; exact

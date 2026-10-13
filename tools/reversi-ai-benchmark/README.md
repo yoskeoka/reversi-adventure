@@ -49,10 +49,25 @@ position-repetition pair, and stage boundaries for measurement, aggregation,
 and publication. Set the positive `BENCHMARK_PROGRESS_EVERY` interval to limit
 pair lines; diagnostics never change the JSON report.
 
+## Pre-training whole-game efficiency sample
+
+The `efficiency8` sample runs four fixed openings with both seat assignments,
+using a persistent CLI per color and the `8/8/8`, exact16, `turn` profile.
+Select `--evaluator strategic`; it is built into the CLI and needs no separate
+TrainedEvaluator weights JSON or `--trained-artifact` argument. The canonical
+report identity records this evaluator. This measures the shared search engine
+and game harness, not trained-evaluator loading cost or playing strength.
+
+Run `whole_game.py measure` with `--game-sample efficiency8`, the release
+binary, `--source-revision`, and the chosen host RSS cap. Keep the per-decision
+search limit, node cap, and protocol watchdog fixed across baseline and any
+candidate. The report records all eight completed game times, their mean, and
+nearest-rank P95; 180 and 300 seconds are references only, never game cutoffs.
+
 ## winner-empty-v1 移行と保存証拠
 
-新規 whole-game は producer `reversi-ai-whole-game-v3`、manifest schema2、
-report schema3、Oracle evidence schema2 と `score_contract="winner-empty-v1"`
+新規 whole-game は producer `reversi-ai-whole-game-v4`、manifest schema2、
+report schema4、Oracle evidence schema2 と `score_contract="winner-empty-v1"`
 を記録する。threshold/cache assessment はそれぞれ v2。CLI query ごとの
 `score_contract_v1` と search semantics 2 の生出力を照合し、旧 binary の応答を
 新しい receipt として扱わない。`score_black` は盤上の実石数差を維持する。

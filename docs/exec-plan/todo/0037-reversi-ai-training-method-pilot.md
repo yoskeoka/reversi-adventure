@@ -10,7 +10,7 @@
 > 0040の最新producerでの独立root/選択child一致・資源制限応答・人間の設定/性能判断、
 > 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは未達として残す。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
-> 0040ではTrainedEvaluator自己対局の事前性能測定を8/8/8・exact16・turnで行い、固定8局を完了まで実行する。
+> 0040では学習前の探索器/対局ハーネス性能をStrategicEvaluatorで8/8/8・exact16・turn計測し、固定8局を完了まで実行する。
 > 平均180秒を目標、P95 300秒を探索改善の検討目安として記録する。局のhard limitやpilot batchのwall上限ではなく、
 > candidate match/0018の12/12/12も変更しない。
 

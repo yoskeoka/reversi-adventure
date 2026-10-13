@@ -22,8 +22,9 @@
 設定可能であること、時間内に完了すること、正確性・強さの受け入れは別の条件。
 0046のscore調査・残条件は[score契約記録](reversi-ai-exact-score-contract.md)を参照する。
 schema3/4/5の完成reportは元契約で明示legacy offline検証できるが、新規runへ読み替えない。
-TrainedEvaluator自己対局前の性能測定は固定8局を完了まで実行し、平均180秒を目標、nearest-rank P95 300秒を
-探索改善の検討目安として記録する。これは後続の学習batch時間を短縮するための探索エンジン効率基準で、
+TrainedEvaluator学習前の探索器/対局ハーネス性能測定はStrategicEvaluatorで固定8局を完了まで実行し、平均180秒を目標、nearest-rank P95 300秒を
+探索改善の検討目安として記録する。TrainedEvaluatorの学習済み重みJSON（CLIの`--trained-artifact`引数）は不要。
+これは後続の学習batch時間を短縮するための探索エンジン効率基準で、
 局を打ち切るhard limitやbatch総時間ではない。ハング検出用の1手ごとの応答timeoutは別設定とする。
 
 ## 速度と正確性
@@ -44,7 +45,7 @@ TrainedEvaluator自己対局前の性能測定は固定8局を完了まで実行
 この目標を選択profileで測った結果はまだない。0045の12/8/12・exact20・旧score契約の平均519.254秒は
 過去の別profile/別契約の結果であり、新しい8/8/8設定の所要時間や合否を示さない。
 同じ旧平均を6局/64局に単純換算した約52分/約9時間14分も歴史的な参考値に限り、選択profileの予測には使わない。
-検証済みTrainedEvaluator artifactを固定した測定と、必要に応じた中盤探索改善を0040のgateに残す。
+StrategicEvaluatorを使った測定と、必要に応じた中盤探索改善を0040のgateに残す。
 旧8局と今回3局はbinary/棋譜が異なるため、直接の改善率にしない。
 詳細は[0041記録](reversi-ai-exact-threshold-reuse-assessment.md)とPR #255の正確性記録を参照する。
 

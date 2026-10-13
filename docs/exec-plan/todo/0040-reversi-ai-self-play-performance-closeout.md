@@ -10,7 +10,7 @@
 > 0040の最新producerでの独立root/選択child一致・資源制限応答・人間の設定/性能判断、
 > 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは未達として残す。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
-> TrainedEvaluator自己対局の事前性能測定には、明示設定8/8/8・exact16・turnを選択する。
+> TrainedEvaluator学習前の探索器/ハーネス性能測定には、StrategicEvaluatorと明示設定8/8/8・exact16・turnを選択する。
 > これは候補比較/0018の12/12/12を変更せず、学習batch総時間とも区別する。
 
 ## 目的と完了条件
@@ -33,11 +33,12 @@ Godotと新規自己対局schema6の明示設定は深度各1..64・exact0..30�
 再検証は12/8/12・exact20のturn/game各3局に固定した。Oracle同士と現行CLIの全局時間は
 既に測定済みなので、同じ基準値を取り直す作業は完了条件から外す。
 
-大規模な自己対局/学習batchは起動しない。ユーザーが選んだprofileで、代表的な検証済みTrainedEvaluator artifactを
-固定8局の性能測定を行う。現行の全局runnerが8/8/8を表現できないため、測定前にこのprofileを扱えるようにする。
+大規模な自己対局/学習batchは起動しない。学習前の探索器/対局ハーネス性能を測るため、ユーザーが選んだprofileで
+StrategicEvaluatorを使った固定8局の性能測定を行う。評価器の単局面あたり計算量と探索に必要な方向性は十分な代理となるため、
+`--trained-artifact`でCLIに渡すTrainedEvaluator重みJSONは不要とする。現行runnerが8/8/8とStrategicEvaluatorを表現できないため、測定前に対応する。
 平均が目標から大きく外れる、またはP95が300秒に達した場合は中盤探索の改善を最大3案まで試し、
-同じartifact/局面で再測定する。速度目安を超えた局も最後まで実行し、時間だけを理由に打ち切らない。
-現状artifactがない場合は、test fixtureで代用せず測定gateを残す。目標に届かない場合は最良の実測結果と
+同じ評価器/局面で再測定する。速度目安を超えた局も最後まで実行し、時間だけを理由に打ち切らない。
+後続のTrainedEvaluator学習batchそのものの速度や評価器load/evaluate時間はこの計測から主張しない。目標に届かない場合は最良の実測結果と
 残る差を記録して妥協点を選ぶ。閾値20の本番契約更新は別計画とし、0035を採用完了としない。
 
 ## 参照
@@ -73,8 +74,8 @@ Godotと新規自己対局schema6の明示設定は深度各1..64・exact0..30�
 4. 修正前後の性能/意味の主張を確認した範囲に限定する。3局の局別時間と平均、exact部分のnodes/時間、
    全局に占める割合を示す。反復なしの小さい時間差を有意な高速化としない。
    序盤コストが大きいことは既存phase証拠で示し、追加測定や最適化を必要以上に拡げない。
-5. TrainedEvaluator自己対局の設定を8/8/8・exact16・turnに固定し、候補比較/0018の12/12/12・exact16とは分離する。
-   検証済みartifactと固定8局を打ち切らずに測り、全局時間・平均・nearest-rank P95を記録する。
+5. 学習前性能計測の設定を8/8/8・exact16・turn・StrategicEvaluatorに固定し、候補比較/0018の12/12/12・exact16とは分離する。
+   固定8局を打ち切らずに測り、全局時間・平均・nearest-rank P95を記録する。
    平均180秒を目標とし、P95の300秒は改善検討の目安とする。超過局も完了まで実行する。
    目標から大きく外れる場合は中盤探索を最大3案まで改善し、各案で正確性と同じ局の経過時間を再確認する。
    per-game効率判断と学習batch総時間は別の値として記録する。後者は学習runの件数/上限を定める計画で決める。
@@ -151,10 +152,9 @@ winner-empty-v1のbounded Rust testは各1件成功した。
 専用Python test 7件と`make oracle-test`も成功した。これらはroot/選択child/PVの局所意味と
 未完了探索時の資源応答を確認するが、外部Oracleの新契約照合や性能証拠ではない。
 
-新契約での外部Oracle root/選択child照合と、検証済みTrainedEvaluator artifactによる8/8/8の性能測定は未実施。
-ユーザーは自己対局profileを8/8/8・exact16・turn、平均3分を目標、P95 5分を改善検討の目安に指定した。
+新契約での外部Oracle root/選択child照合と、StrategicEvaluatorによる8/8/8の性能測定は未実施。
+ユーザーは学習前の探索器/ハーネス効率測定profileを8/8/8・exact16・turn・StrategicEvaluator、平均3分を目標、P95 5分を改善検討の目安に指定した。
 この時間は探索エンジンの改善判断に使い、局のhard limitや学習batchの上限にはしない。
 runnerの1手ごとの応答timeoutはハング検出の別設定として維持する。
-測定に使える検証済みartifactがこのcheckoutにないため、test-only fixtureで時間を代用しない。
-全局runnerのphase深度拡張、artifact利用可能性、新契約Oracle照合、実測/必要な中盤改善をactive gateに残す。
+TrainedEvaluator重みJSONは測定要件ではない。全局runnerのphase深度・StrategicEvaluator対応、新契約Oracle照合、実測/必要な中盤改善をactive gateに残す。
 設定は0037/0019へ候補profileと区別して同期するが、pilot/freezeの完了とは扱わない。
