@@ -156,6 +156,14 @@ winner-empty-v1のbounded Rust testは各1件成功した。
 新契約での外部Oracle root/選択child照合と、StrategicEvaluatorによる8/8/8の性能測定は未実施。
 ユーザーは学習前の探索器/ハーネス効率測定profileを8/8/8・exact16・turn・StrategicEvaluator、平均3分を目標、P95 5分を改善検討の目安に指定した。
 この時間は探索エンジンの改善判断に使い、局のhard limitや学習batchの上限にはしない。
-runnerの1手ごとの応答timeoutはハング検出の別設定として維持する。
-TrainedEvaluator重みJSONは測定要件ではない。全局runnerのphase深度・StrategicEvaluator対応、新契約Oracle照合、実測/必要な中盤改善をactive gateに残す。
+1手ごとの600秒response watchdogはハング検出専用で、8局やbatchを打ち切らない。
+
+PR #261で承認した0048に基づき、実測は
+`tools/reversi-ai-benchmark/run-efficiency8-closeout.py` の一括entrypointで実行する。
+release CLIをbuildし、8局のreport、各exact判断のOracle root/選択child、Oracleのwall/CPU/RSS観測、
+offline検証、digest付きsummaryまで逐次進める。game/Oracle queryのcheckpointから再開でき、
+stage境界と局/局面単位のprogressをstderrへflushする。人間がclean Linux checkoutで端末から起動し、
+`--oracle-binary`、`--oracle-cwd`、`--output-dir`、`--max-rss-kib`を指定する。
+TrainedEvaluator重みJSONは測定要件ではない。結果と改善判断は本計画のgateに残し、
+0040完了・学習batch開始・production adoptionとは扱わない。
 設定は0037/0019へ候補profileと区別して同期するが、pilot/freezeの完了とは扱わない。
