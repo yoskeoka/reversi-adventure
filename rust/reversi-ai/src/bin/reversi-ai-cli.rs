@@ -193,6 +193,18 @@ fn match_config_for_board(args: &CliArgs, board: &Board) -> AiConfig {
     }
 }
 
+fn search_budget(args: &CliArgs) -> SearchBudget {
+    let mut budget = if args.unbounded_search {
+        SearchBudget::unbounded()
+    } else {
+        SearchBudget::with_time_limit(args.time_limit)
+    };
+    if let Some(limit) = args.node_limit {
+        budget = budget.with_node_limit(limit);
+    }
+    budget
+}
+
 fn parse_color(value: &str) -> Result<Color, String> {
     match value {
         "B" => Ok(Color::Black),
@@ -224,19 +236,9 @@ fn choose_move<E: BoardEvaluator + ?Sized>(
     board: &Board,
     color: Color,
     config: &AiConfig,
-    time_limit: Duration,
-    node_limit: Option<u64>,
-    unbounded_search: bool,
+    budget: &SearchBudget,
 ) -> (String, SearchResult) {
-    let mut budget = if unbounded_search {
-        SearchBudget::unbounded()
-    } else {
-        SearchBudget::with_time_limit(time_limit)
-    };
-    if let Some(limit) = node_limit {
-        budget = budget.with_node_limit(limit);
-    }
-    let result = engine.search_with_budget(board, color, evaluator, config, &budget);
+    let result = engine.search_with_budget(board, color, evaluator, config, budget);
     let selected = match result.outcome {
         SearchOutcome::Move(position) => move_name(position),
         SearchOutcome::Pass | SearchOutcome::GameOver => "pass".to_string(),
@@ -309,15 +311,8 @@ fn main() -> Result<(), String> {
         }
         let board = board_from_flat_string(fields[1])?;
         let color = parse_color(fields[2])?;
+        let budget = search_budget(&args);
         if let Some(config) = &args.advisor_config {
-            let mut budget = if args.unbounded_search {
-                SearchBudget::unbounded()
-            } else {
-                SearchBudget::with_time_limit(args.time_limit)
-            };
-            if let Some(limit) = args.node_limit {
-                budget = budget.with_node_limit(limit);
-            }
             let analysis =
                 engine.analyze_with_budget(&board, color, evaluator.as_ref(), config, &budget)?;
             let outcome = match analysis.outcome {
@@ -353,9 +348,7 @@ fn main() -> Result<(), String> {
             &board,
             color,
             &match_config,
-            args.time_limit,
-            args.node_limit,
-            args.unbounded_search,
+            &budget,
         );
         let outcome = match search_result.outcome {
             SearchOutcome::Move(_) => "move",
@@ -426,15 +419,14 @@ mod tests {
     fn unbounded_search_completes_the_configured_depth() {
         let evaluator = StrategicEvaluator::new();
         let config = AiConfig::new(2, 2, 2);
+        let budget = search_budget(&args(&["--unbounded-search"]).unwrap());
         let (_, result) = choose_move(
             &mut SearchEngine::new(),
             &evaluator,
             &Board::new(),
             Color::Black,
             &config,
-            Duration::ZERO,
-            None,
-            true,
+            &budget,
         );
         assert_eq!(result.completed_depth, 2);
     }
