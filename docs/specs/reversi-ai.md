@@ -1294,6 +1294,85 @@ enum SearchOutcome {
   the legal root fallback or the last wholly completed result, has `exact =
   false`, and exposes no partial PV or partial exact score.
 
+## Training method pilot (0037)
+
+The pilot has its own versioned prepare/run/verify manifest and single-stage
+comparison. It never uses the production reinforcement 50/200-game checkpoint.
+All new inputs and teachers use `winner-empty-v1` and artifact format 2.
+The frozen production denominators are 64 self-play games, 7,680 teacher rows,
+and 200 comparison games. Floor division by ten fixes pilot caps at 6, 768,
+and 20. Run and offline verification reject overages; teacher rows count the
+unique positions actually passed to the one `bounded_td_v1` update.
+
+Random opening collection is separate from teacher production. Every game
+starts from the standard board with Black to move and records a legally
+replayable opening. Self-play uses six independent legal continuations by the
+baseline project AI. Teachers are its completed terminal winner-empty score,
+signed for the recorded side, rather than random-rollout or per-position exact
+labels. Search depth/threshold, time/node caps, response timeout, turn cache,
+reset protocol, seed, input/CLI/source digests, optimizer and update count are
+frozen before execution. Timeouts, invalid moves and unfinished games fail
+closed. No 30-empty exact-label method is enabled without separate bounded
+feasibility evidence. The initial self-play profile is 8/8/8, exact16, turn;
+comparison and corpus decisions retain 12/12/12, exact16.
+
+Prepare pins the baseline's trainer manifest and verifies its input identity;
+its train position keys are reserved. Independent validation and held-out
+inputs have explicit schema2 provenance and split. Canonical D4 position keys
+are deduplicated and overlaps with training, tuning, corpus and comparison
+inputs are excluded with recorded IDs. Empty independent metrics fail closed.
+The 0018 opening suite is reserved by its independently pinned position keys;
+the runner rejects a prefix or continuation reaching a reserved root before
+requesting an AI decision, and offline verification rejects it too. The shared
+standard initial board is not an opening reservation. Independent metrics also
+exclude each game's terminal board from both color perspectives.
+Ten complete comparison pairs replay the
+same legal Black-start opening twice with candidate and baseline changing
+seats. Color-inverted intermediate boards are never treated as legal starts.
+
+Corpus regret uses a pinned Oracle position corpus and schema2 saved golden move values,
+validated offline with the existing Oracle validator. Corpus positions overlapping
+baseline training, reserved openings or played positions are excluded with IDs;
+at least one independent legal-move root must remain. No new Oracle teacher
+queries are made. Every baseline/candidate decision records its position and
+legal move so offline verification recomputes regret from the saved values.
+The manifest pins Oracle source/version/profile and score semantics. Fixture
+and smoke corpora establish tooling correctness only, not strength evidence.
+This tooling release never authenticates production evidence. Caller labels,
+profile metadata, and matching hashes cannot establish an independent producer.
+All reports therefore set `tooling_only=true`, `strength_inputs=false`, and
+`improvement_observed=false`, including inputs labeled `production`. A reviewed
+follow-up must authenticate producer manifests and saved Oracle output against
+independently approved input identities before enabling improvement recognition.
+
+The report records before/after validation and held-out sample counts and
+squared errors, corpus regret sum/count, match wins/draws/losses/points, actual
+counts, exclusions, all game/input/artifact digests and deterministic update
+identity. Its predeclared improvement rule is lower held-out MSE, with
+validation MSE and mean corpus regret no more than 10% worse (zero baselines
+require zero), and candidate points at least 10/20. Only complete production
+inputs and a strong-engine corpus with independently authenticated provenance
+can permit improvement recognition after the follow-up above. Failure preserves
+the candidate and all measurements;
+it never authorizes 0019 or claims the 0018 strength target.
+
+Run refuses nonempty output directories and publishes the report last. Verify
+replays openings and games, checks resets and full pair/count identities,
+deduplicates the same teacher rows, recomputes the artifact and every metric,
+and compares all output bytes/digests without starting a CLI or Oracle.
+Long real runs remain human-operated; agents prepare inputs/commands and
+verify completed immutable output only. Unit fixtures are bounded tooling
+checks and cannot satisfy the pilot's external completion boundary.
+
+Progress is flushed on stderr with `stage <name> start/done elapsed=<seconds>s`
+and `progress <kind> pair=<n> member=<n> <done>/<total> game=<seconds>s
+elapsed=<seconds>s`. Completed games are the work unit (6 self-play, 20 match);
+corpus queries count one player's completed decision, totaling twice the retained
+position count. Default interval is one;
+positive `--progress-every N` limits ordinary updates and always emits the last
+unit. Loading, teacher extraction, update, independent metrics, corpus,
+comparison and publication have explicit stage boundaries.
+
 ## Explanation
 
 ### ExplainTag

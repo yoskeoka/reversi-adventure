@@ -2,6 +2,14 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+> **2026-10-14実装境界**: 新契約の本番入力はまだないことをユーザーが確認した。
+> 今回はpilot専用prepare/run/verify、一次資料調査、fixtureでの検証を実装する。
+> 実入力の生成・baseline学習、人間操作の6局/20比較局、完成出力の独立検証は未完了。
+> 本計画はその完了条件まで残す。ツールPRの完了を「強化を観測」や0019 freezeの許可としない。
+> 既存production/legacy producerの意味を変更せず、`pilot.py`から共通helperを再利用する。
+> 学習方法と判定基準は[調査記録](../../references/reversi-ai-training-method-review.md)、
+> 起動と検証は[README](../../../tools/reversi-ai-training/README.md)を参照する。
+
 > **0047 score移行後の境界**: 新規AI/教師値は `winner-empty-v1`、artifact format2、
 > trainer/record schema2、reinforcement manifest6・report4を使用する。旧schema3/4/5完成証拠と
 > raw差baseline/validationは明示legacy offline検証だけに保持し、新runへ読み替えない。
@@ -55,6 +63,9 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 - (NEW) `docs/references/reversi-ai-training-method-review.md` — Edax/Egaroucid の確認できた公開学習方法、source version、未確認部分、今回の方法と教師値の理由。
 - (MODIFY) `docs/specs/reversi-ai.md` — 先に合法な黒先手入力、教師値の意味、色相対化、split、pilot と本番の証拠を定義する。
 - (MODIFY) `tools/reversi-ai-training/random_inputs.py`, `training.py`, `reinforcement.py` と関連 tests — 選んだ生成・ラベル・更新方式、独立検証、pilot 設定を実装する。
+- (NEW) `tools/reversi-ai-training/pilot.py` と関連 tests — 上記producerの既存helperを使う独立orchestration。
+  黒先手の合法opening、単段階10ペア、実更新行の上限、独立指標とoffline verifierはpilotで固定する。
+  `random_inputs.py`の新契約入力生成と`training.py`/`reinforcement.py`の教師式・更新helper自体は変更不要。
 - (MODIFY) Makefile と `tools/reversi-ai-training/README.md` — 小規模の prepare/run/verify と人間が起動する長時間処理を分ける。
 - (NEW) `docs/references/` の pilot report — 失敗例も含め、入力・artifact digest、比較方法、観測値を保存する。
 - (MODIFY) `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md` — pilot 成功後にのみ新たな本番 manifest を凍結する依存へ更新する。
@@ -79,6 +90,17 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 - pilot が manifest の 64/7,680/200 分母から切り捨てた 6/768/20 上限をすべて守り、単段階 10 ペアの対局数と同じ固定入力の再検証で artifact/report digest が一致する。
 - 更新前後の独立指標を raw data から再計算し、`TrainedEvaluator` が artifact を受理する。
 - 該当 Python/Rust テスト、Clippy、GDExtension build、workflow lint、`git diff --check`。
+
+## 実pilotの残作業
+
+- 件数/上限/進捗/再開と入力原本digestを固定する別の人間操作計画で、winner-empty-v1の
+  train/validation/held-outを生成し、baseline artifactとtrainer manifestを検証する。
+- 新契約のsaved Oracle corpus/golden（strong-engine profile）と0018の予約position keysを用意する。
+- 新しいimmutable manifestと空のoutput directoryをprepareし、人間がrunを起動する。
+- 全6自己対局・重複排除後768教師行以下・10完全ペア20比較局が完成した不変出力をoffline検証する。
+- 改善認定を有効にする前に、独立承認した入力identityに対してproducer manifest・CLI・saved Oracle outputを認証する仕組みを別のreview済み計画で実装する。このtooling releaseの全reportは改善認定を無効にする。
+- raw dataから改善/不成立を記録する。成功時だけ0019を別の新しいmanifestで準備する。
+- fixture結果は[ツール検証記録](../../references/reversi-ai-training-pilot-tooling.md)へ記録し、実pilot結果と区別する。
 
 ## Addresses
 
