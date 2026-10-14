@@ -31,6 +31,8 @@ Linux runnerはprocess group全体をwall/観測RSSで停止する。RSSは1秒s
 瞬間最大値の厳密な保証ではない。metric取得不能は失敗とする。CPU/wall/RSS、
 raw出力、失敗/中断原本を保持する。失敗stageは新しい出力先で最初からやり直す。
 完成検証済みの前stageは再利用できるが、途中game/trainer/Oracleのresumeはない。
+SIGTERMもgroup停止・回収と失敗記録を通す。pilotには最終`bundle-verify` stageの
+成功receiptをbundleとは別にpinし、bundle/CLI identityと固定資源予算を再検査する。
 実際の上限と進捗形式は[仕様](../specs/reversi-ai.md#training-input-bundle-0050)、
 予算と実run手順は[0051](../exec-plan/todo/0051-reversi-ai-winner-empty-input-run.md)を参照する。
 
@@ -63,4 +65,8 @@ training全79 testsのうち78件は全体実行で成功し、1件は改変fixt
 修正後の対象testは、small bundleからpilotへの接続、offline検証、任意verified flagの
 拒否まで成功した。本体sourceの修正は不要だった。
 関連するpilot全23 testsも修正後に再実行して成功した。
+PRレビューで指摘されたSIGTERMと最終資源gateの抜けを修正し、bundle全7 testsと
+監督全5 tests（実SIGTERMのgroup停止・回収・handler復元を含む）を再検証した。
+receiptを必須にしたpilot全24 testsも成功し、欠損・改変・失敗・別stage receiptの
+拒否と旧v1互換を確認した。
 これらは縮小入力とfake runtimeによるtooling証拠であり、本番入力や強さの証拠ではない。

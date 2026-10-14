@@ -2,7 +2,10 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -135,6 +138,66 @@ class InputSupervisionTests(unittest.TestCase):
             output, _, error = self.run_fake(Path(temporary), 'exit', 4, 256 * bundle.MIB)
             self.assertIsNotNone(error)
             self.assertEqual(self.assert_failed_originals(output, 'exit-failure')['exit_code'], 7)
+
+    def test_real_sigterm_cancels_group_and_preserves_failure_originals(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker = directory / 'tools/reversi-ai-training/input_bundle.py'
+            worker.parent.mkdir(parents=True)
+            worker.write_text(WORKER)
+            manifest = directory / 'frozen.json'
+            bundle.save(manifest, {'version': bundle.VERSION, 'stage': 'calibration-generate',
+                'producer': {}, 'cwd': str(directory), 'inputs': [],
+                'total_wall_budget_seconds': bundle.TOTAL_WALL_SECONDS,
+                'request': {'mode': 'sleep', 'pid_file': str(directory / 'child.pid')},
+                'bounds': {'wall_seconds': 120, 'rss_bytes': 256 * bundle.MIB, 'sample_seconds': 1}})
+            output = directory / 'originals'
+            script = f'''
+import signal, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, {str(Path(bundle.__file__).parent)!r})
+import input_bundle, training
+previous = signal.getsignal(signal.SIGTERM)
+with patch.object(input_bundle, 'verify_source'), patch.object(input_bundle, 'git', return_value=b''):
+    try:
+        input_bundle.supervise(Path({str(manifest)!r}), Path({str(output)!r}))
+    except training.TrainingError:
+        print('handler-restored=' + str(signal.getsignal(signal.SIGTERM) == previous), flush=True)
+        raise SystemExit(2)
+'''
+            supervisor = subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 5
+                def child_ready():
+                    path = directory / 'child.pid'
+                    return path.exists() and path.read_text().isdecimal()
+                while not child_ready() and time.monotonic() < deadline:
+                    if supervisor.poll() is not None:
+                        self.fail('supervisor exited before the worker descendant started')
+                    time.sleep(0.02)
+                self.assertTrue(child_ready())
+                child = int((directory / 'child.pid').read_text())
+                os.kill(supervisor.pid, signal.SIGTERM)
+                stdout, stderr = supervisor.communicate(timeout=10)
+                self.assertEqual(supervisor.returncode, 2, stderr.decode())
+                self.assertIn(b'handler-restored=True', stdout)
+                report = self.assert_failed_originals(output, 'interrupted')
+                self.assertIn('SIGTERM', report['error'])
+                self.assert_descendant_stopped(child)
+            finally:
+                if supervisor.poll() is None:
+                    supervisor.kill()
+                    supervisor.communicate()
+                pid_file = directory / 'child.pid'
+                if pid_file.exists():
+                    try:
+                        fields = Path(f'/proc/{pid_file.read_text()}/stat').read_text().split(') ', 1)[1].split()
+                        os.killpg(int(fields[2]), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except FileNotFoundError:
+                        pass
 
     def test_heartbeat_progress_and_completion_are_published_last(self):
         with tempfile.TemporaryDirectory() as temporary:

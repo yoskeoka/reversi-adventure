@@ -97,6 +97,7 @@ release build recipe/binary SHAをpinする。縮小入力は常にtoolingであ
 起動・監視しない。生成出力6ファイルは`generated/`だけへ置き、manifest、logs、baseline、
 corpus、Oracle原本、probeは兄弟directoryへ保存する。Linuxのprocess groupを1秒ごとに
 観測し、wall/RSS超過・metric取得不能で停止する。観測RSSは瞬間最大値ではない。
+SIGTERM中断もworker groupの停止・回収と失敗原本保存を行う。
 `--heartbeat-seconds`既定5、内部`--progress-every`既定1・正数のみ、最終単位を必ず表示する。
 
 | stage | wall秒 | 観測RSS |
@@ -183,8 +184,11 @@ rtk python3 tools/reversi-ai-training/input_bundle.py finalize \
 rtk make pattern-input-bundle-verify \
   INPUT_BUNDLE_MANIFEST=/absolute/run/bundle.json \
   INPUT_BUNDLE_CLI=/absolute/path/reversi-ai-cli
+# 最終bundle-verify requestをprepareして人間がrun-stageを起動し、
+# /absolute/run/stages/bundle-verify/report.jsonの成功を確認してからprepareする
 rtk make pattern-pilot-prepare \
   PILOT_INPUT_BUNDLE=/absolute/run/bundle.json \
+  PILOT_BUNDLE_VERIFICATION_RECEIPT=/absolute/run/stages/bundle-verify/report.json \
   PILOT_CANDIDATE_EXECUTABLE=/absolute/path/reversi-ai-cli \
   PILOT_MANIFEST=/absolute/pilot/manifest.json
 ```
@@ -195,6 +199,8 @@ bundle/pilot/0019の露出keysは後段0018の開局root衝突検査に渡す。
 旧pilot schemaは凍結producerでtoolingとして検証し、新schemaのproduction bundleだけが
 改善判定の入力gateを通せる。入力完成だけでは0037成功や0019 freezeを認めない。
 完成bundleの最終資源gateは`bundle-verify` requestをprepareし、そのstageを人間が起動する。
+pilotはこの成功receiptをbundleとは別にpinし、bundle/CLI identityと資源上限を再検査する。
+finalizeや直接verifyだけではpilot入力gateへ進めない。欠損・失敗・不一致receiptは拒否する。
 上の直接`verify`は既に完成した不変出力を受け取った後のoffline検証にも利用できる。
 
 ## One bounded reinforcement cycle
@@ -438,6 +444,7 @@ Fixtures use `PILOT_INPUT_KIND=fixture` to mark their results as tool checks.
 `strength_inputs=false`、`improvement_observed=false`を維持する。
 新schema2は`PILOT_INPUT_BUNDLE`を指定し、merged producerの全対局/学習再現と
 Oracle原本再解析・CLI build identityを通したproduction入力だけで入力gateを有効にする。
+`PILOT_BUNDLE_VERIFICATION_RECEIPT`も必須で、最終bounded検証の成功原本をpinする。
 ハッシュはbytesの照合であり生成者の暗号学的認証ではない。
 検証済み入力に加えて実pilotの全対局・独立指標・保存出力再構成が成功したときだけ
 次の0019 manifestを準備できる。`production_authorized=false`は維持する。

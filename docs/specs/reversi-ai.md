@@ -1424,6 +1424,8 @@ RSS ceilings stop the group; unavailable metrics fail closed. RSS is sampled
 each second and is an observed peak, not a guarantee about instantaneous peaks.
 Stage records preserve CPU, wall, peak observed RSS, exit/timeout, manifest and
 raw stdout/stderr. A completion report is published last after verification.
+SIGTERM cancellation terminates and reaps the worker process group and preserves
+a failure report, with the previous signal handler restored afterward.
 No generator, trainer or Oracle stage resumes partially completed work: retain
 failure originals and restart into a new directory. Completed verified previous
 stages may be reused. No failure automatically starts another stage.
@@ -1451,6 +1453,11 @@ games, 12 Oracle roots, and the verified trainer record count. Start/end and
 resource heartbeats appear with `--heartbeat-seconds` default 5; positive
 `--progress-every N` defaults to 1 and always emits the last internal unit.
 Diagnostics never enter canonical identities.
+Finalization produces a preliminary reconstructable bundle. Pilot preparation
+and replay additionally require a successful bounded `bundle-verify` completion
+receipt tied to the exact bundle and CLI identities. The pilot manifest pins
+that receipt separately from the bundle to avoid a circular hash. Missing,
+failed or mismatched final-stage receipts cannot enable input eligibility.
 
 Acceptance reservation is explicitly `not-yet-selected` with empty keys until
 0018 creates its suite after candidate selection. `reserved` requires a real

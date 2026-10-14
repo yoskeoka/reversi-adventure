@@ -133,6 +133,7 @@ pattern-reinforcement-regret: pattern-reinforcement-verify
 	@candidate_command="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-command --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; regret_timeout="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-timeout --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; $(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output "$(REINFORCEMENT_REGRET_REPORT)" --profile strong-engine-hcap-v1 --timeout "$$regret_timeout" --candidate-command "$$candidate_command"
 
 PILOT_TOOL := tools/reversi-ai-training/pilot.py
+PILOT_BUNDLE_VERIFICATION_RECEIPT ?=
 PILOT_INPUT_BUNDLE ?=
 PILOT_MANIFEST ?= /tmp/reversi-ai-training-pilot/manifest.json
 PILOT_OUTPUT_DIR ?= /tmp/reversi-ai-training-pilot/output
@@ -155,7 +156,8 @@ PILOT_PROGRESS_EVERY ?= 1
 .PHONY: pattern-pilot-prepare pattern-pilot-run pattern-pilot-verify
 pattern-pilot-prepare:
 ifneq ($(strip $(PILOT_INPUT_BUNDLE)),)
-	$(PYTHON) $(PILOT_TOOL) prepare --manifest "$(PILOT_MANIFEST)" --input-bundle "$(PILOT_INPUT_BUNDLE)" --candidate-executable "$(PILOT_CANDIDATE_EXECUTABLE)" --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS)
+	@test -n "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" || (echo "Set PILOT_BUNDLE_VERIFICATION_RECEIPT to the completed bounded bundle-verify stage report" >&2; exit 2)
+	$(PYTHON) $(PILOT_TOOL) prepare --manifest "$(PILOT_MANIFEST)" --input-bundle "$(PILOT_INPUT_BUNDLE)" --bundle-verification-receipt "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" --candidate-executable "$(PILOT_CANDIDATE_EXECUTABLE)" --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS)
 else
 	$(MAKE) pattern-pilot-prepare-legacy
 endif

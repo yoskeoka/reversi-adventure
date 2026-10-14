@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -199,6 +200,20 @@ def kill_group(group: int) -> None:
         pass
 
 
+@contextlib.contextmanager
+def termination_cancellation():
+    """Defer SIGTERM cleanup until Popen has returned its process handle."""
+    cancelled = [False]
+    previous = signal.getsignal(signal.SIGTERM)
+    def terminate(_signal, _frame):
+        cancelled[0] = True
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        yield cancelled
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def supervise(manifest_path: Path, output: Path, *, heartbeat_seconds: float = 5,
               metric_reader=process_metrics) -> dict:
     """Run exactly one immutable stage, leaving failure originals and never resuming."""
@@ -218,6 +233,13 @@ def supervise(manifest_path: Path, output: Path, *, heartbeat_seconds: float = 5
         checked_pin(identity, manifest_path.parent)
     output.mkdir(parents=True, exist_ok=False)
     (output / "manifest.json").write_bytes(manifest_path.read_bytes())
+    with termination_cancellation() as cancelled:
+        return _supervise_execution(manifest_path, output, manifest, heartbeat_seconds, metric_reader, cancelled)
+
+
+def _supervise_execution(manifest_path, output, manifest, heartbeat_seconds, metric_reader, cancelled):
+    stage = manifest["stage"]
+    wall, limit = BOUNDS[stage]
     started, next_heartbeat, peak, cpu = time.monotonic(), 0.0, 0, 0.0
     reason, code, process, error_text = "failed", None, None, None
     progress(stage, 0, "running", 0, 0)
@@ -228,6 +250,9 @@ def supervise(manifest_path: Path, output: Path, *, heartbeat_seconds: float = 5
             process = subprocess.Popen(argv, cwd=manifest["cwd"], stdout=stdout,
                                        stderr=stderr, start_new_session=True)
             while True:
+                if cancelled[0]:
+                    reason, error_text = "interrupted", "SIGTERM cancellation"
+                    break
                 elapsed = time.monotonic() - started
                 rss, observed_cpu, members = metric_reader(process.pid)
                 peak, cpu = max(peak, rss), max(cpu, observed_cpu)
@@ -257,6 +282,8 @@ def supervise(manifest_path: Path, output: Path, *, heartbeat_seconds: float = 5
         if process is not None:
             kill_group(process.pid)
             code = process.wait()
+        if cancelled[0]:
+            reason, error_text = "interrupted", "SIGTERM cancellation"
         elapsed = time.monotonic() - started
         report = {"version": VERSION, "stage": stage, "manifest_sha256": training.sha256_file(manifest_path),
                   "status": reason, "exit_code": code, "wall_seconds": elapsed, "cpu_seconds": cpu,
@@ -280,6 +307,8 @@ def supervise(manifest_path: Path, output: Path, *, heartbeat_seconds: float = 5
             except (training.TrainingError, OSError, ValueError, KeyError, TypeError) as error:
                 report["status"] = "identity-change"
                 report["error"] = str(error)
+        if cancelled[0]:
+            report["status"], report["error"] = "interrupted", "SIGTERM cancellation"
         save(output / ("report.json" if report["status"] == "completed" else "failure.json"), report)
         progress(stage, int(report["status"] == "completed"),
                  "saved" if report["status"] == "completed" else "failed", elapsed, peak)
@@ -795,6 +824,28 @@ def prepare_stage(path: Path, stage: str, request: dict, cwd: Path, inputs: list
                 "total_wall_budget_seconds": TOTAL_WALL_SECONDS,
                 "producer": identity, "inputs": [pin(p) for p in [*frozen_inputs, *inputs]],
                 "bounds": {"wall_seconds": wall, "rss_bytes": rss, "sample_seconds": 1}})
+
+
+def verify_for_pilot(bundle_path: Path, receipt_path: Path, candidate_executable: Path | None = None) -> dict:
+    """Require the external bounded final verification receipt before pilot use."""
+    bundle_path, receipt_path = Path(bundle_path).resolve(), Path(receipt_path).resolve()
+    verified = verify_bundle(bundle_path, candidate_executable)
+    original = training.read_json(bundle_path)
+    final = verify_stage(receipt_path, original["producer"])
+    request, outputs = final["request"], final["result"]["outputs"]
+    if final["stage"] != "bundle-verify" or request.get("bundle_manifest") != str(bundle_path):
+        fail("pilot requires the bounded final bundle-verify receipt")
+    if outputs.get("bundle_manifest") != pin(bundle_path):
+        fail("final verification receipt pins a different bundle")
+    if pin(Path(request["cli"])) != verified["cli"]["binary"]:
+        fail("final verification receipt pins a different CLI")
+    frozen_inputs = final["inputs"]
+    if pin(bundle_path) not in frozen_inputs or verified["cli"]["binary"] not in frozen_inputs:
+        fail("final verification inputs omit bundle or CLI identity")
+    reconstructed_report = checked_pin(outputs["report"], receipt_path.parent)
+    if reconstructed_report != Path(request["report"]).resolve() or reconstructed_report.read_bytes() != canonical(verified):
+        fail("final verification output differs from complete offline reconstruction")
+    return {**verified, "bundle_verification_receipt": pin(receipt_path)}
 
 
 def finalize(args) -> None:

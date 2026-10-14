@@ -182,7 +182,8 @@ def bundle_evidence(manifest: dict, parent: Path) -> dict | None:
     inputs = manifest["inputs"]
     bundle_path = rf.checked_file(parent, inputs["input_bundle"], "input bundle")
     executable = rf.checked_file(parent, inputs["candidate_executable"], "candidate executable")
-    verified = input_bundle.verify_bundle(bundle_path, candidate_executable=executable)
+    receipt_path = rf.checked_file(parent, inputs["bundle_verification_receipt"], "bundle verification receipt")
+    verified = input_bundle.verify_for_pilot(bundle_path, receipt_path, candidate_executable=executable)
     require(same(verified, manifest["bundle_verification"]), "pilot bundle verification differs from replay")
     for name in ("baseline_artifact", "baseline_manifest", "validation", "held_out", "corpus", "golden"):
         pinned = {field: inputs[name][field] for field in ("path", "sha256")}
@@ -248,8 +249,9 @@ def load_manifest(path: Path) -> dict:
     require(type(manifest["max_decisions"]) is int and manifest["max_decisions"] == 26 * 120,
             "pilot decision cap mismatch")
     reservation_input = "reserved_openings" if manifest["schema_version"] == 1 else "input_bundle"
+    receipt_inputs = {"bundle_verification_receipt"} if manifest["schema_version"] == 2 else set()
     inputs = rf.require_keys(manifest["inputs"], {"baseline_artifact", "baseline_manifest", "candidate_executable",
-                    "validation", "held_out", reservation_input, "corpus", "golden"}, "pilot inputs")
+                    "validation", "held_out", reservation_input, "corpus", "golden"} | receipt_inputs, "pilot inputs")
     paths = {}
     for name, item in inputs.items():
         if name in ("validation", "held_out"):
@@ -298,8 +300,11 @@ def prepare(args: argparse.Namespace) -> None:
     bundle_path = getattr(args, "input_bundle", None)
     verified = None
     if bundle_path is not None:
+        require(getattr(args, "bundle_verification_receipt", None) is not None,
+                "input bundle requires a completed bundle verification receipt")
         import input_bundle
-        verified = input_bundle.verify_bundle(bundle_path, candidate_executable=args.candidate_executable)
+        verified = input_bundle.verify_for_pilot(bundle_path, args.bundle_verification_receipt,
+                                                  candidate_executable=args.candidate_executable)
         for name in ("baseline_artifact", "baseline_manifest", "corpus", "golden"):
             setattr(args, name, Path(verified["inputs"][name]["path"]))
         args.validation_input = Path(verified["inputs"]["validation"]["path"])
@@ -313,6 +318,8 @@ def prepare(args: argparse.Namespace) -> None:
             "candidate_executable", "corpus", "golden")}
     inputs["reserved_openings" if verified is None else "input_bundle"] = entry(
         args.reserved_openings if verified is None else bundle_path)
+    if verified is not None:
+        inputs["bundle_verification_receipt"] = entry(args.bundle_verification_receipt)
     validation, vp = independent_rows(args.validation_input, "validation")
     held_out, hp = independent_rows(args.held_out_input, "held_out")
     inputs["validation"] = {**entry(args.validation_input), "provenance": vp}
@@ -613,7 +620,7 @@ def main(argv: list[str]) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     prep = commands.add_parser("prepare")
     for name in ("manifest", "baseline-artifact", "baseline-manifest", "candidate-executable", "validation-input",
-                 "held-out-input", "reserved-openings", "corpus", "golden", "input-bundle"):
+                 "held-out-input", "reserved-openings", "corpus", "golden", "input-bundle", "bundle-verification-receipt"):
         prep.add_argument("--" + name, type=Path, required=name in ("manifest", "candidate-executable"))
     prep.add_argument("--input-kind", choices=("fixture", "production"), default="production")
     prep.add_argument("--seed", type=int, default=20261014)

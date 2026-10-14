@@ -125,6 +125,13 @@ def build_small_bundle(directory, cli=None):
         "cli_probe": bundle.pin(probe_dir / "cli-probe.json"), "stages": {name: bundle.pin(path) for name,path in stage_paths.items()}}
     bundle_path = directory / "bundle.json"
     bundle.save(bundle_path, completion)
+    final_manifest = directory / "manifests/bundle-verify.json"
+    final_report = directory / "verified-bundle.json"
+    frozen_bundle.prepare_stage(final_manifest, "bundle-verify",
+                               {"bundle_manifest": str(bundle_path), "cli": str(cli), "report": str(final_report)},
+                               checkout, [stage_paths["oracle"], stage_paths["cli-probe"]])
+    # The final stage really runs under the process-group wall/RSS supervisor.
+    frozen_bundle.supervise(final_manifest, directory / "stages/bundle-verify")
     return bundle_path, completion
 
 
@@ -158,6 +165,28 @@ class InputBundleTests(unittest.TestCase):
         self.assertTrue(bundle.strength_eligible(generator, oracle_runtime_verified=True))
         generator["counts"] = {"train": 4, "validation": 2, "held_out": 2}
         self.assertFalse(bundle.strength_eligible(generator, oracle_runtime_verified=True))
+
+    def test_pilot_requires_exact_successful_bounded_final_receipt(self):
+        receipt = self.path.parent / "stages/bundle-verify/report.json"
+        verified = bundle.verify_for_pilot(self.path, receipt)
+        self.assertFalse(verified["strength_inputs"])
+        self.assertEqual(verified["bundle_verification_receipt"], bundle.pin(receipt))
+        with self.assertRaises(training.TrainingError):
+            bundle.verify_for_pilot(self.path, receipt.with_name("missing.json"))
+        original = receipt.read_bytes()
+        try:
+            failed = training.read_json(receipt)
+            failed["status"] = "wall-limit"
+            receipt.write_bytes(bundle.canonical(failed))
+            with self.assertRaises(training.TrainingError):
+                bundle.verify_for_pilot(self.path, receipt)
+            failed["status"] = "completed"
+            failed["wall_seconds"] = 2401
+            receipt.write_bytes(bundle.canonical(failed))
+            with self.assertRaises(training.TrainingError):
+                bundle.verify_for_pilot(self.path, receipt)
+        finally:
+            receipt.write_bytes(original)
 
     def test_resealed_baseline_report_and_added_verified_flag_rejected(self):
         report = Path(self.completion["baseline_report"]["path"])

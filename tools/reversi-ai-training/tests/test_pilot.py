@@ -117,6 +117,8 @@ class PilotTests(unittest.TestCase):
         """Unit-test the pilot adapter; producer verification has separate tests."""
         path = self.root / "input-bundle.json"
         path.write_bytes(pilot.blob({"fixture": "adapter-only"}))
+        receipt = self.root / "bundle-verification-receipt.json"
+        receipt.write_bytes(pilot.blob({"fixture": "adapter-only-receipt"}))
         original = training.read_json(self.args.manifest)
         verified = {"schema_version": 1, "bundle_sha256": training.sha256_file(path),
             "strength_inputs": production, "input_kind": "production" if production else "tooling",
@@ -125,12 +127,13 @@ class PilotTests(unittest.TestCase):
                        for name in ("baseline_artifact", "baseline_manifest", "validation", "held_out", "corpus", "golden")},
             "acceptance_reservation": {"state": "not-yet-selected", "artifact": None, "keys": []},
             "exposure_keys": {"train": [], "validation": [], "held_out": [], "oracle_root": [], "oracle_child": []},
-            "cli": {"adapter_test": True}}
+            "cli": {"adapter_test": True}, "bundle_verification_receipt": pilot.entry(receipt)}
         verifier = mock.Mock(return_value=verified)
         self.addCleanup(mock.patch.stopall)
-        mock.patch.dict(sys.modules, {"input_bundle": SimpleNamespace(verify_bundle=verifier)}).start()
+        mock.patch.dict(sys.modules, {"input_bundle": SimpleNamespace(verify_for_pilot=verifier)}).start()
         self.args.manifest.unlink()
         self.args.input_bundle = path
+        self.args.bundle_verification_receipt = receipt
         self.args.reserved_openings = None
         pilot.prepare(self.args)
         return verified, verifier
@@ -196,6 +199,7 @@ class PilotTests(unittest.TestCase):
             bundle_path, completion = build_small_bundle(directory)
         self.args.manifest.unlink()
         self.args.input_bundle = bundle_path
+        self.args.bundle_verification_receipt = directory / "stages/bundle-verify/report.json"
         self.args.candidate_executable = Path(completion["cli"]["binary"]["path"])
         self.args.reserved_openings = None
         with redirect_stderr(io.StringIO()):
@@ -214,11 +218,46 @@ class PilotTests(unittest.TestCase):
         self.assertFalse(report["improvement_checks"]["strength_inputs"])
         self.assertFalse(report["production_authorized"])
         self.assertEqual(len(report["bundle_verification"]["exposure_keys"]["oracle_root"]), 12)
+        original_manifest = self.args.manifest.read_bytes()
+        original_receipt = self.args.bundle_verification_receipt.read_bytes()
+        failed = training.read_json(self.args.bundle_verification_receipt)
+        failed["status"] = "failed"
+        self.args.bundle_verification_receipt.write_bytes(pilot.blob(failed))
+        self.mutate_manifest(lambda manifest: manifest["inputs"].update(
+            bundle_verification_receipt=pilot.entry(self.args.bundle_verification_receipt)))
+        with self.assertRaises(training.TrainingError), redirect_stderr(io.StringIO()):
+            pilot.verify(self.args.manifest, output)
+        self.args.bundle_verification_receipt.write_bytes(original_receipt)
+        self.args.manifest.write_bytes(original_manifest)
+        mismatched = directory / "stages/train/report.json"
+        self.mutate_manifest(lambda manifest: manifest["inputs"].update(
+            bundle_verification_receipt=pilot.entry(mismatched)))
+        with self.assertRaises(training.TrainingError), redirect_stderr(io.StringIO()):
+            pilot.verify(self.args.manifest, output)
+        self.args.manifest.write_bytes(original_manifest)
         forged_bundle = bundle_path.with_name("forged-bundle.json")
         input_bundle.save(forged_bundle, dict(completion, verified=True))
         self.mutate_manifest(lambda manifest: manifest["inputs"].update(input_bundle=pilot.entry(forged_bundle)))
         with self.assertRaisesRegex(training.TrainingError, "shape"), redirect_stderr(io.StringIO()):
             pilot.verify(self.args.manifest, output)
+
+    def test_bundle_receipt_is_required_and_pinned_even_with_eligibility_flags(self):
+        self.bundle_stub(production=True)
+        original = self.args.manifest.read_bytes()
+        manifest = training.read_json(self.args.manifest)
+        manifest["inputs"].pop("bundle_verification_receipt")
+        self.args.manifest.write_bytes(pilot.blob(manifest))
+        with self.assertRaisesRegex(training.TrainingError, "pilot inputs"):
+            pilot.load_manifest(self.args.manifest)
+        self.args.manifest.write_bytes(original)
+        self.args.bundle_verification_receipt.write_bytes(b"changed receipt")
+        with self.assertRaisesRegex(training.TrainingError, "receipt digest mismatch"):
+            pilot.load_manifest(self.args.manifest)
+        self.args.manifest.unlink()
+        self.args.bundle_verification_receipt = None
+        with self.assertRaisesRegex(training.TrainingError, "requires.*receipt"):
+            pilot.prepare(self.args)
+        self.assertFalse(self.args.manifest.exists())
 
     def test_caps_source_search_and_optimizer_tampering_rejected(self):
         original = training.read_json(self.args.manifest)
