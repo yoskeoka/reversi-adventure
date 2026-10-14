@@ -16,6 +16,7 @@ import pilot
 import random_inputs
 import reinforcement as rf
 import training
+from types import SimpleNamespace
 
 
 class PilotTests(unittest.TestCase):
@@ -111,6 +112,113 @@ class PilotTests(unittest.TestCase):
         self.assertFalse(report["improvement_checks"]["strength_inputs"])
         self.assertFalse(report["improvement_observed"])
         self.assertFalse(report["production_authorized"])
+
+    def bundle_stub(self, production=False):
+        """Unit-test the pilot adapter; producer verification has separate tests."""
+        path = self.root / "input-bundle.json"
+        path.write_bytes(pilot.blob({"fixture": "adapter-only"}))
+        original = training.read_json(self.args.manifest)
+        verified = {"schema_version": 1, "bundle_sha256": training.sha256_file(path),
+            "strength_inputs": production, "input_kind": "production" if production else "tooling",
+            "tooling_only": not production,
+            "inputs": {name: {field: original["inputs"][name][field] for field in ("path", "sha256")}
+                       for name in ("baseline_artifact", "baseline_manifest", "validation", "held_out", "corpus", "golden")},
+            "acceptance_reservation": {"state": "not-yet-selected", "artifact": None, "keys": []},
+            "exposure_keys": {"train": [], "validation": [], "held_out": [], "oracle_root": [], "oracle_child": []},
+            "cli": {"adapter_test": True}}
+        verifier = mock.Mock(return_value=verified)
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.dict(sys.modules, {"input_bundle": SimpleNamespace(verify_bundle=verifier)}).start()
+        self.args.manifest.unlink()
+        self.args.input_bundle = path
+        self.args.reserved_openings = None
+        pilot.prepare(self.args)
+        return verified, verifier
+
+    def test_bundle_schema_pins_verification_and_reconstructs_exposure_kinds(self):
+        _, verifier = self.bundle_stub()
+        output = self.complete()
+        with mock.patch.object(rf, "Candidate", side_effect=AssertionError("offline CLI")), \
+             mock.patch.object(pilot.oracle, "run_solve", side_effect=AssertionError("offline Oracle")), \
+             redirect_stderr(io.StringIO()):
+            report = pilot.verify(self.args.manifest, output)
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["acceptance_reservation"],
+                         {"state": "not-yet-selected", "artifact": None, "keys": []})
+        self.assertEqual(set(report["exposure_keys"]), {"opening", "decision", "terminal"})
+        games = training.read_jsonl(output / "games.jsonl")
+        self.assertIn(pilot.key(rf.INITIAL, "B"), report["exposure_keys"]["opening"])
+        for game in games:
+            self.assertIn(pilot.key(game["terminal_board"], "W"), report["exposure_keys"]["terminal"])
+            for row in game["decisions"]:
+                self.assertIn(pilot.key(row["board"], row["side"]), report["exposure_keys"]["decision"])
+        self.assertTrue(report["tooling_only"])
+        self.assertFalse(report["improvement_checks"]["strength_inputs"])
+        self.assertGreaterEqual(verifier.call_count, 5)
+
+    def test_bundle_gate_is_derived_again_not_taken_from_context(self):
+        verified, verifier = self.bundle_stub(production=True)
+        output = self.complete()
+        context = pilot.load_manifest(self.args.manifest)
+        context["tooling_only"] = True
+        context["strength_inputs"] = False
+        rebuilt = pilot.reconstruct(context, training.read_jsonl(output / "games.jsonl"),
+                                    training.read_jsonl(output / "corpus-decisions.jsonl"))
+        import json
+        report = json.loads(rebuilt["report.json"])
+        self.assertTrue(report["improvement_checks"]["strength_inputs"])
+        self.assertFalse(report["tooling_only"])
+        self.assertFalse(report["production_authorized"])
+        verifier.return_value = {**verified, "strength_inputs": False, "tooling_only": True}
+        context["strength_inputs"] = True
+        with self.assertRaisesRegex(training.TrainingError, "verification differs"):
+            pilot.reconstruct(context, training.read_jsonl(output / "games.jsonl"),
+                              training.read_jsonl(output / "corpus-decisions.jsonl"))
+
+    def test_bundle_split_and_binary_identity_are_pinned(self):
+        verified, _ = self.bundle_stub()
+        original = self.args.manifest.read_bytes()
+        self.mutate_manifest(lambda manifest: manifest["inputs"]["validation"].update(
+            path=verified["inputs"]["held_out"]["path"], sha256=verified["inputs"]["held_out"]["sha256"]))
+        with self.assertRaisesRegex(training.TrainingError, "validation differs"):
+            pilot.load_manifest(self.args.manifest)
+        self.args.manifest.write_bytes(original)
+        self.args.candidate_executable.write_text("changed binary")
+        with self.assertRaisesRegex(training.TrainingError, "digest mismatch"):
+            pilot.load_manifest(self.args.manifest)
+
+    def test_real_small_bundle_integrates_and_resealed_verified_flag_is_rejected(self):
+        import input_bundle
+        from test_input_bundle import build_small_bundle
+        directory = self.root / "real-bundle"
+        directory.mkdir()
+        with redirect_stderr(io.StringIO()):
+            bundle_path, completion = build_small_bundle(directory)
+        self.args.manifest.unlink()
+        self.args.input_bundle = bundle_path
+        self.args.candidate_executable = Path(completion["cli"]["binary"]["path"])
+        self.args.reserved_openings = None
+        with redirect_stderr(io.StringIO()):
+            pilot.prepare(self.args)
+            output = self.complete("real-bundle-pilot")
+        original_popen = input_bundle.subprocess.Popen
+        def offline_process(argv, *args, **kwargs):
+            self.assertEqual(argv[0], "git", "offline verification started a runtime")
+            return original_popen(argv, *args, **kwargs)
+        with mock.patch.object(input_bundle.subprocess, "Popen", side_effect=offline_process), \
+             mock.patch.object(rf, "Candidate", side_effect=AssertionError("offline CLI")), \
+             redirect_stderr(io.StringIO()):
+            report = pilot.verify(self.args.manifest, output)
+        self.assertEqual(report["schema_version"], 2)
+        self.assertTrue(report["tooling_only"])
+        self.assertFalse(report["improvement_checks"]["strength_inputs"])
+        self.assertFalse(report["production_authorized"])
+        self.assertEqual(len(report["bundle_verification"]["exposure_keys"]["oracle_root"]), 12)
+        forged_bundle = bundle_path.with_name("forged-bundle.json")
+        input_bundle.save(forged_bundle, dict(completion, verified=True))
+        self.mutate_manifest(lambda manifest: manifest["inputs"].update(input_bundle=pilot.entry(forged_bundle)))
+        with self.assertRaisesRegex(training.TrainingError, "shape"), redirect_stderr(io.StringIO()):
+            pilot.verify(self.args.manifest, output)
 
     def test_caps_source_search_and_optimizer_tampering_rejected(self):
         original = training.read_json(self.args.manifest)

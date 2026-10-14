@@ -116,6 +116,10 @@ them, and then decides whether 0018 may freeze the candidate.
 
 ## Dependencies and sequencing
 
+- 0050 toolingマージ → 0051のwinner-empty入力生成・baseline再学習・Oracle原本保存と
+  完成bundleのoffline検証 → 0037の実pilot成功の順で進む。旧0032 raw差入力の検証は
+  履歴であり、新契約入力完成の代わりにはしない。bundleとpilotの露出keysに0019の
+  学習/評価keysを加えて保存し、候補選定後の0018開局root衝突検査へ渡す。
 - 0037の実pilotを、新契約の独立入力と単段階6局/768教師行以下/20比較局で完成させる。
   `pattern-pilot-verify`がraw dataからheld-out誤差改善と他指標の悪化上限を確認した場合だけ、
   0019の新規本番manifestを別directoryで凍結する。

@@ -80,6 +80,11 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 
 ## 依存関係と順序
 
+- 0050の入力bundle toolingのマージ後、0051で人間が新契約の2560局・baseline・
+  独立Oracle原本を生成する。完成bundleのoffline再構成とCLI identity照合を通してから
+  bundleをpinした新schemaのpilotをprepareする。旧schemaはtoolingのまま保持する。
+- 0018 suiteは候補選定後にfreezeする。現時点は`not-yet-selected`と空keysを明示し、
+  架空の予約開局を作らない。bundle/pilotのkind別露出keysを後段0018へ渡す。
 - 0035 の全局速度基準と、必要なら 0036 の TT 採否を確定してから pilot の engine/config を凍結する。
 - 旧 version-1 run と停止済み version-2 run の部分出力を新 pilot の証拠に流用しない。人間が開始する長時間作業を agent は起動・待機・監視しない。完了した不変出力だけ後から検証する。
 - pilot が独立指標で成功した場合に限り、0019 の大規模 batch を別の新しい manifest で準備する。
@@ -95,10 +100,12 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 
 - 件数/上限/進捗/再開と入力原本digestを固定する別の人間操作計画で、winner-empty-v1の
   train/validation/held-outを生成し、baseline artifactとtrainer manifestを検証する。
-- 新契約のsaved Oracle corpus/golden（strong-engine profile）と0018の予約position keysを用意する。
+- 0051の新契約saved Oracle corpus/golden（strong-engine profile）とbundleを用意する。
+  0018の予約は未選定状態を明示し、既に実suiteが存在する場合のみartifactをpinする。
 - 新しいimmutable manifestと空のoutput directoryをprepareし、人間がrunを起動する。
 - 全6自己対局・重複排除後768教師行以下・10完全ペア20比較局が完成した不変出力をoffline検証する。
-- 改善認定を有効にする前に、独立承認した入力identityに対してproducer manifest・CLI・saved Oracle outputを認証する仕組みを別のreview済み計画で実装する。このtooling releaseの全reportは改善認定を無効にする。
+- 改善認定は0050のbundle再構成・producer ancestry/bytes・CLI build identity・Oracle raw
+  再解析を通した本番入力だけで有効にする。ラベル変更や任意boolで有効にしない。
 - raw dataから改善/不成立を記録する。成功時だけ0019を別の新しいmanifestで準備する。
 - fixture結果は[ツール検証記録](../../references/reversi-ai-training-pilot-tooling.md)へ記録し、実pilot結果と区別する。
 

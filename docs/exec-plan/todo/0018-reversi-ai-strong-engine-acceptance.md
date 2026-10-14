@@ -55,6 +55,11 @@ during the held-out run or claim parity with unrestricted world-class engines.
    self-play tuning or artifact selection may enter this suite; check its
    canonical board-and-side keys against the frozen 0019 report's validation
    keys and its replayed game positions before the first acceptance game.
+   0051の検証済みbundleに含まれるtrain/validation/held_outとOracle root/child、
+   0037 pilotのopening/decision/terminal、0019の学習/評価keysも原本から再構成して
+   開局rootとのD4衝突を検査する。`input_bundle.check_acceptance_roots`を利用する。
+   suiteは候補選定後に作り、version/path/digestとnonempty keysをfreezeする。
+   それ以前の`not-yet-selected`を架空の予約suiteで置き換えない。
 3. Define primary success as `candidate wins / all games >= 0.50`. Report draws
    and match points separately. Declare sample size and a one-sided confidence
    rule before execution; passing point estimate alone is insufficient.

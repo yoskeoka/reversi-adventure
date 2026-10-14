@@ -26,6 +26,7 @@ oracle = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(oracle)
 
 VERSION = "reversi-ai-training-method-pilot-v1"
+BUNDLE_VERSION = "reversi-ai-training-method-pilot-v2"
 DENOMINATORS = {"self_play_games": 64, "teacher_rows": 7680, "comparison_games": 200}
 CAPS = {key: value // 10 for key, value in DENOMINATORS.items()}
 UPDATE = {"name": "bounded_td_v1", "normalization_divisor": 64}
@@ -173,15 +174,53 @@ class GuardedCandidate(rf.Candidate):
         return super().choose(identifier, board, side)
 
 
+def bundle_evidence(manifest: dict, parent: Path) -> dict | None:
+    """Derive eligibility from saved producers again, never from caller context."""
+    if manifest["schema_version"] == 1:
+        return None
+    import input_bundle
+    inputs = manifest["inputs"]
+    bundle_path = rf.checked_file(parent, inputs["input_bundle"], "input bundle")
+    executable = rf.checked_file(parent, inputs["candidate_executable"], "candidate executable")
+    verified = input_bundle.verify_bundle(bundle_path, candidate_executable=executable)
+    require(same(verified, manifest["bundle_verification"]), "pilot bundle verification differs from replay")
+    for name in ("baseline_artifact", "baseline_manifest", "validation", "held_out", "corpus", "golden"):
+        pinned = {field: inputs[name][field] for field in ("path", "sha256")}
+        require(same(pinned, verified["inputs"][name]), f"pilot {name} differs from verified bundle")
+        rf.checked_file(parent, pinned, name)
+    require(same(manifest["acceptance_reservation"], verified["acceptance_reservation"]),
+            "pilot acceptance reservation differs from bundle")
+    require(manifest["input_kind"] == ("production" if verified["input_kind"] == "production" else "fixture"),
+            "pilot input kind differs from verified bundle")
+    require(type(verified["strength_inputs"]) is bool, "invalid bundle eligibility")
+    return verified
+
+
+def exposure_keys(manifest: dict, games: list[dict], decisions: list[dict]) -> dict:
+    kinds = {"opening": {key(rf.INITIAL, "B")}, "decision": set(), "terminal": set()}
+    for name in ("self_play_openings", "comparison_openings"):
+        for opening in manifest[name]:
+            for count in range(1, len(opening["moves"]) + 1):
+                board, side = replay_opening(opening["moves"][:count])
+                kinds["opening"].add(key(board, side))
+    for game in games:
+        kinds["decision"].update(key(row["board"], row["side"]) for row in game["decisions"])
+        kinds["terminal"].update(key(game["terminal_board"], side) for side in ("B", "W"))
+    kinds["decision"].update(key(row["board"], row["side"]) for row in decisions)
+    return {name: sorted(values) for name, values in kinds.items()}
+
+
 def load_manifest(path: Path) -> dict:
     manifest = training.read_json(path)
+    extra = {"bundle_verification", "acceptance_reservation"} if manifest.get("schema_version") == 2 else set()
     rf.require_keys(manifest, {"schema_version", "producer_version", "score_contract", "sources", "inputs",
                     "input_kind", "seed", "opening_plies", "denominators", "cap_rule", "caps", "actual_openings",
                     "self_play_search", "comparison_search", "decision_timeout_seconds", "max_decisions",
                     "exact_cache_policy", "reset_protocol", "teacher", "update_rule", "update_count",
                     "improvement_rule", "self_play_openings", "comparison_openings", "oracle_profile",
-                    "oracle_version", "oracle_source_sha256"}, "pilot manifest")
-    require(type(manifest["schema_version"]) is int and manifest["schema_version"] == 1 and manifest["producer_version"] == VERSION
+                    "oracle_version", "oracle_source_sha256"} | extra, "pilot manifest")
+    require(type(manifest["schema_version"]) is int and manifest["schema_version"] in (1, 2)
+            and manifest["producer_version"] == (VERSION if manifest["schema_version"] == 1 else BUNDLE_VERSION)
             and manifest["score_contract"] == training.SCORE_CONTRACT, "unsupported pilot manifest")
     require(manifest["sources"] == sources(), "pilot producer source digest mismatch")
     require(same(manifest["denominators"], DENOMINATORS) and manifest["cap_rule"] == "floor-divide-by-ten"
@@ -208,8 +247,9 @@ def load_manifest(path: Path) -> dict:
     require(timeout * 1000 > manifest["comparison_search"]["time_limit_ms"], "timeout must exceed search time limit")
     require(type(manifest["max_decisions"]) is int and manifest["max_decisions"] == 26 * 120,
             "pilot decision cap mismatch")
+    reservation_input = "reserved_openings" if manifest["schema_version"] == 1 else "input_bundle"
     inputs = rf.require_keys(manifest["inputs"], {"baseline_artifact", "baseline_manifest", "candidate_executable",
-                    "validation", "held_out", "reserved_openings", "corpus", "golden"}, "pilot inputs")
+                    "validation", "held_out", reservation_input, "corpus", "golden"}, "pilot inputs")
     paths = {}
     for name, item in inputs.items():
         if name in ("validation", "held_out"):
@@ -217,6 +257,7 @@ def load_manifest(path: Path) -> dict:
         else:
             rf.require_keys(item, {"path", "sha256"}, name)
         paths[name] = rf.checked_file(path.parent, {field: item[field] for field in ("path", "sha256")}, name)
+    verified = bundle_evidence(manifest, path.parent)
     base_manifest = training.read_json(paths["baseline_manifest"])
     loaded = training.validate_manifest(base_manifest, paths["baseline_manifest"].parent)
     base_records = training.validate_records(loaded)
@@ -229,40 +270,61 @@ def load_manifest(path: Path) -> dict:
     baseline_keys = {key(row["board"], row["side"]) for row in base_records if row["split"] == "train"}
     validation, _ = independent_rows(paths["validation"], "validation", inputs["validation"]["provenance"])
     held_out, _ = independent_rows(paths["held_out"], "held_out", inputs["held_out"]["provenance"])
-    reserved = reserved_keys(paths["reserved_openings"])
+    reserved = (reserved_keys(paths["reserved_openings"]) if verified is None
+                else set(verified["acceptance_reservation"]["keys"]))
     records, golden = corpus_inputs(paths["corpus"], paths["golden"])
     require(same(manifest["oracle_profile"], golden[0]["profile"]) and manifest["oracle_version"] == oracle.ORACLE_VERSION
             and manifest["oracle_source_sha256"] == oracle.SOURCE_SHA256, "pilot Oracle identity mismatch")
     corpus_keys = {key(row["board"], row["side_to_move"]) for row in records}
+    if verified is not None:
+        corpus_keys |= set(verified["exposure_keys"]["oracle_child"])
     forbidden = baseline_keys | reserved | corpus_keys | {key(row["board"], row["side"]) for row in validation + held_out}
     expected_self = opening_pool(manifest["seed"], manifest["opening_plies"], 6, forbidden, "self-play", reserved)
     expected_match = opening_pool(manifest["seed"], manifest["opening_plies"], 10,
             forbidden | {key(row["board"], row["side"]) for row in expected_self}, "comparison", reserved)
     require(same(manifest["self_play_openings"], expected_self) and same(manifest["comparison_openings"], expected_match),
             "frozen legal opening set mismatch")
-    # Hashes pin bytes; caller labels and saved values do not authenticate their
-    # producers. Production recognition needs independently approved identities
-    # in a reviewed follow-up, so this release only establishes tooling evidence.
+    # Eligibility is recomputed from producer evidence; labels cannot grant it.
     return {"manifest": manifest, "paths": paths, "baseline": baseline, "baseline_keys": baseline_keys,
             "validation": validation, "held_out": held_out, "reserved": reserved, "corpus": records,
-            "golden": golden, "corpus_keys": corpus_keys, "tooling_only": True}
+            "golden": golden, "corpus_keys": corpus_keys, "manifest_parent": path.parent,
+            "tooling_only": verified is None or not verified["strength_inputs"]}
 
 
 def prepare(args: argparse.Namespace) -> None:
     require(not args.manifest.exists(), "frozen pilot manifest already exists")
     training.require_int(args.seed, "seed", 0, 2**64 - 1)
     training.require_int(args.opening_plies, "opening plies", 4, 20)
+    bundle_path = getattr(args, "input_bundle", None)
+    verified = None
+    if bundle_path is not None:
+        import input_bundle
+        verified = input_bundle.verify_bundle(bundle_path, candidate_executable=args.candidate_executable)
+        for name in ("baseline_artifact", "baseline_manifest", "corpus", "golden"):
+            setattr(args, name, Path(verified["inputs"][name]["path"]))
+        args.validation_input = Path(verified["inputs"]["validation"]["path"])
+        args.held_out_input = Path(verified["inputs"]["held_out"]["path"])
+        args.input_kind = "production" if verified["input_kind"] == "production" else "fixture"
+    else:
+        require(all(getattr(args, name, None) is not None for name in (
+            "baseline_artifact", "baseline_manifest", "validation_input", "held_out_input",
+            "reserved_openings", "corpus", "golden")), "legacy prepare requires all input paths")
     inputs = {name: entry(getattr(args, name)) for name in ("baseline_artifact", "baseline_manifest",
-            "candidate_executable", "reserved_openings", "corpus", "golden")}
+            "candidate_executable", "corpus", "golden")}
+    inputs["reserved_openings" if verified is None else "input_bundle"] = entry(
+        args.reserved_openings if verified is None else bundle_path)
     validation, vp = independent_rows(args.validation_input, "validation")
     held_out, hp = independent_rows(args.held_out_input, "held_out")
     inputs["validation"] = {**entry(args.validation_input), "provenance": vp}
     inputs["held_out"] = {**entry(args.held_out_input), "provenance": hp}
     base_manifest = training.read_json(args.baseline_manifest)
     base_records = training.validate_records(training.validate_manifest(base_manifest, args.baseline_manifest.parent))
-    reserved = reserved_keys(args.reserved_openings)
+    reserved = (reserved_keys(args.reserved_openings) if verified is None
+                else set(verified["acceptance_reservation"]["keys"]))
     corpus, golden = corpus_inputs(args.corpus, args.golden)
     forbidden = reserved | {key(row["board"], row["side_to_move"]) for row in corpus}
+    if verified is not None:
+        forbidden |= set(verified["exposure_keys"]["oracle_child"])
     forbidden |= {key(row["board"], row["side"]) for row in base_records if row["split"] == "train"}
     forbidden |= {key(row["board"], row["side"]) for row in validation + held_out}
     own = opening_pool(args.seed, args.opening_plies, 6, forbidden, "self-play", reserved)
@@ -280,6 +342,9 @@ def prepare(args: argparse.Namespace) -> None:
         "improvement_rule": RULE, "self_play_openings": own, "comparison_openings": matches,
         "oracle_profile": golden[0]["profile"], "oracle_version": oracle.ORACLE_VERSION,
         "oracle_source_sha256": oracle.SOURCE_SHA256}
+    if verified is not None:
+        manifest.update(schema_version=2, producer_version=BUNDLE_VERSION, bundle_verification=verified,
+                        acceptance_reservation=verified["acceptance_reservation"])
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_bytes(blob(manifest))
     try:
@@ -409,6 +474,8 @@ def corpus_metrics(context: dict, decisions: list[dict], played: set[str]) -> di
 
 def reconstruct(context: dict, games: list[dict], decisions: list[dict]) -> dict[str, bytes]:
     manifest, baseline = context["manifest"], context["baseline"]
+    verified = bundle_evidence(manifest, context.get("manifest_parent", Path(".")))
+    strength_inputs = verified is not None and verified["strength_inputs"]
     teachers, played, excluded_teachers = checked_games(context, games)
     candidate = rf.updated_artifact(baseline, teachers, manifest)
     training.validate_artifact(candidate)
@@ -424,7 +491,7 @@ def reconstruct(context: dict, games: list[dict], decisions: list[dict]) -> dict
         "validation_not_materially_worse": validation["candidate"]["sum_squared_error"] * 10 <= validation["baseline"]["sum_squared_error"] * 11,
         "corpus_not_materially_worse": regret["candidate"]["sum_regret"] * 10 <= regret["baseline"]["sum_regret"] * 11,
         "match_points_sufficient": match["match_points"] >= 10,
-        "strength_inputs": False}
+        "strength_inputs": strength_inputs}
     blobs = {"games.jsonl": lines(games), "teachers.jsonl": lines(teachers),
              "candidate-artifact.json": blob(candidate), "corpus-decisions.jsonl": lines(decisions)}
     report = {"schema_version": 1, "producer_version": VERSION, "score_contract": training.SCORE_CONTRACT,
@@ -435,10 +502,14 @@ def reconstruct(context: dict, games: list[dict], decisions: list[dict]) -> dict
                           "comparison_pairs": 10, "corpus_positions": regret["baseline"]["positions"],
                           "decisions": sum(len(game["decisions"]) for game in games)},
         "teacher_excluded_ids": excluded_teachers, "independent_metrics": metrics, "corpus_regret": regret,
-        "match": match, "improvement_checks": checks, "tooling_only": True,
-        "improvement_observed": False, "production_authorized": False,
+        "match": match, "improvement_checks": checks, "tooling_only": not strength_inputs,
+        "improvement_observed": all(checks.values()), "production_authorized": False,
         "game_digests": [game["game_digest"] for game in games],
         "outputs": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(blobs.items())}}
+    if verified is not None:
+        report.update(schema_version=2, producer_version=BUNDLE_VERSION, bundle_verification=verified,
+                      acceptance_reservation=manifest["acceptance_reservation"],
+                      exposure_keys=exposure_keys(manifest, games, decisions))
     report["report_digest"] = training.digest(report)
     blobs["report.json"] = blob(report)
     return blobs
@@ -542,8 +613,8 @@ def main(argv: list[str]) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     prep = commands.add_parser("prepare")
     for name in ("manifest", "baseline-artifact", "baseline-manifest", "candidate-executable", "validation-input",
-                 "held-out-input", "reserved-openings", "corpus", "golden"):
-        prep.add_argument("--" + name, type=Path, required=True)
+                 "held-out-input", "reserved-openings", "corpus", "golden", "input-bundle"):
+        prep.add_argument("--" + name, type=Path, required=name in ("manifest", "candidate-executable"))
     prep.add_argument("--input-kind", choices=("fixture", "production"), default="production")
     prep.add_argument("--seed", type=int, default=20261014)
     prep.add_argument("--opening-plies", type=int, default=6)

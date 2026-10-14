@@ -24,6 +24,9 @@ canonical SHA-256 identity fields.
 
 ## Project-owned random-game baseline inputs
 
+新規production入力は下記のinput-bundle経路と0051の固定予算を使う。
+この節の直接起動例と旧0032の実測だけでは新bundleの生成経路・資源gateを満たさない。
+
 `random_inputs.py` draws complete legal games from the canonical initial board.
 Its frozen manifest pins the exact clean producer checkout, merged-main base,
 and digests of the generator and imported game/trainer modules, plus seed,
@@ -82,6 +85,117 @@ The trainer writes flushed stderr progress for validated and prediction-checked
 records, with start and done boundaries for loading, aggregation, metrics, and
 publication. `PATTERN_PROGRESS_EVERY=N` is a positive interval override;
 diagnostics never change the artifact or report bytes.
+
+## Winner-empty input bundle（0050/0051）
+
+`input_bundle.py`は既存random generator/trainerを再利用し、生成経路と原本をoffline再構成する。
+署名や承認ファイルは不要。merged-mainのclean producer、全出力SHA、CLIのsource/Cargo.lock/
+release build recipe/binary SHAをpinする。縮小入力は常にtoolingである。
+[保存方式と信頼範囲](../../docs/references/reversi-ai-training-input-bundle.md)も参照する。
+
+実処理は0051で人間がstageごとに起動する。agent/CIは実2560局・実Oracle・実pilotを
+起動・監視しない。生成出力6ファイルは`generated/`だけへ置き、manifest、logs、baseline、
+corpus、Oracle原本、probeは兄弟directoryへ保存する。Linuxのprocess groupを1秒ごとに
+観測し、wall/RSS超過・metric取得不能で停止する。観測RSSは瞬間最大値ではない。
+`--heartbeat-seconds`既定5、内部`--progress-every`既定1・正数のみ、最終単位を必ず表示する。
+
+| stage | wall秒 | 観測RSS |
+| --- | ---: | ---: |
+| calibration-generate / calibration-verify / calibration-train | 120 / 120 / 300 | 256MiB / 512MiB / 1GiB |
+| generate / verify / train | 600 / 1200 / 1800 | 1GiB / 2GiB / 3GiB |
+| corpus / oracle | 120 / 4200（rootごと300） | 256MiB / 3GiB |
+| bundle-verify / cli-probe | 2400 / 10 | 3GiB / 3GiB |
+
+合計10870秒は予算であり予測時間ではない。8局calibrationは4/2/2、productionは
+2048/256/256局で固定する。失敗時は原本を残し、新directoryでstageを最初から再実行する。
+途中game/trainer/Oracleのresumeと後続stage自動起動はない。
+
+以下はmerged clean checkoutで準備するstage入口の例。実path/seedは0051でfreezeする。
+CLI buildは準備工程として次の固定recipe入口で原本とreceiptを保存する。
+
+```sh
+rtk python3 tools/reversi-ai-training/input_bundle.py build-cli \
+  --output-dir /absolute/run/cli-build
+rtk python3 tools/reversi-ai-oracle/oracle.py prepare-runtime \
+  --output-dir /absolute/run/oracle-runtime
+```
+
+stageは構造化requestの入力を自動pinし、producer workerを固定する。
+追加の前stage reportを`--input`でpinする。任意argvをstageとして実行しない。
+以下のrequestを`/absolute/run/requests/generate.json`に保存する。
+
+```json
+{"generator_manifest":"/absolute/run/generator-manifest.json","output_dir":"/absolute/run/generated","progress_every":1}
+```
+
+```sh
+rtk python3 tools/reversi-ai-training/input_bundle.py prepare-stage \
+  --manifest /absolute/run/manifests/generate.json --stage generate \
+  --request /absolute/run/requests/generate.json \
+  --input /absolute/run/stages/calibration-train/report.json
+# 人間が単独で起動する
+rtk make pattern-input-bundle-run-stage \
+  INPUT_BUNDLE_MANIFEST=/absolute/run/manifests/generate.json \
+  INPUT_BUNDLE_STAGE_OUTPUT=/absolute/run/stages/generate
+```
+
+generator manifestは実行前にpinする。全量generate→verify→trainは別stageとし、
+生成後のrecord数とsplit SHAをtrainer-stage manifestへpinする。calibrationも別seedと出力先で行う。
+`--input`には直前の必要stageの`report.json`を渡す（calibration-generateのみ前stage不要）。
+cli-probeはtrain、bundle-verifyはoracleとcli-probeの両reportを要求する。
+requestのfieldは次のとおり。全pathは絶対path、reservationは下記のJSON object。
+
+| stage（calibration prefixも同じfields） | request fields |
+| --- | --- |
+| generate | generator_manifest, output_dir, progress_every |
+| verify | generator_manifest, generator_dir, progress_every |
+| train | generator_manifest, generator_dir, artifact, report, record_total, progress_every |
+| corpus | generator_manifest, generator_dir, seed, output_dir, reservation, progress_every |
+| oracle | corpus_dir, binary, oracle_cwd, output_dir, progress_every（productionはruntime_receiptも必要） |
+| cli-probe | validation, artifact, cli, output_dir, reservation |
+| bundle-verify | bundle_manifest, cli, report |
+
+```json
+{"state":"not-yet-selected","artifact":null,"keys":[]}
+```
+
+独立corpusは三splitと実予約suiteがある場合だけそのkeysを除外してscore観測前に固定する。
+Oracleは12 rootを個別解析しraw problem/mapping/argv/cwd/stdout/stderr/exit/runtimeを保存する。
+`prepare-runtime`は固定archiveを照合してbuild/version確認し、archive原本とruntime receiptを保存する。
+receiptのbinary/cwdをoracle requestへ設定し、`runtime_receipt`にはそのreceiptの絶対pathを指定する。
+receiptなしのfake runtimeは件数やprofile名にかかわらずtoolingに限る。
+CLIは最初の適格validation openingを事前選択し、固定の小予算でresetと合法手をprobeする。
+
+完了したstage原本を用いて`finalize --help`の全path引数を設定し、completion bundleと
+検証reportを最後に保存する。`verify`はCLI/Oracleを起動せず全producer出力を再構成する。
+
+```sh
+rtk python3 tools/reversi-ai-training/input_bundle.py finalize \
+  --manifest /absolute/run/bundle.json --report /absolute/run/bundle-report.json \
+  --generator-manifest /absolute/run/generator-manifest.json \
+  --generator-dir /absolute/run/generated \
+  --baseline-artifact /absolute/run/baseline/artifact.json \
+  --baseline-report /absolute/run/baseline/report.json \
+  --corpus-dir /absolute/run/corpus --oracle-dir /absolute/run/oracle \
+  --cli /absolute/checkout/target/release/reversi-ai-cli \
+  --build-receipt /absolute/run/cli-build/build.json \
+  --cli-probe /absolute/run/probe/cli-probe.json --stage-reports /absolute/run/stages
+rtk make pattern-input-bundle-verify \
+  INPUT_BUNDLE_MANIFEST=/absolute/run/bundle.json \
+  INPUT_BUNDLE_CLI=/absolute/path/reversi-ai-cli
+rtk make pattern-pilot-prepare \
+  PILOT_INPUT_BUNDLE=/absolute/run/bundle.json \
+  PILOT_CANDIDATE_EXECUTABLE=/absolute/path/reversi-ai-cli \
+  PILOT_MANIFEST=/absolute/pilot/manifest.json
+```
+
+0018 suiteは候補選定後に作るため、それまでは`not-yet-selected`と空予約keysを保存する。
+実`reserved`状態はversioned artifact/path/digestとnonempty keysが必要。
+bundle/pilot/0019の露出keysは後段0018の開局root衝突検査に渡す。
+旧pilot schemaは凍結producerでtoolingとして検証し、新schemaのproduction bundleだけが
+改善判定の入力gateを通せる。入力完成だけでは0037成功や0019 freezeを認めない。
+完成bundleの最終資源gateは`bundle-verify` requestをprepareし、そのstageを人間が起動する。
+上の直接`verify`は既に完成した不変出力を受け取った後のoffline検証にも利用できる。
 
 ## One bounded reinforcement cycle
 
@@ -320,12 +434,13 @@ A zero baseline must stay zero.
 Both success and failure retain the candidate and raw output.
 Fixtures use `PILOT_INPUT_KIND=fixture` to mark their results as tool checks.
 
-This release always reports `tooling_only=true`, `strength_inputs=false`, and
-`improvement_observed=false`, even with `PILOT_INPUT_KIND=production`.
-Hashes preserve input bytes but do not prove who produced them.
-A reviewed follow-up must check producer manifests and saved Oracle output
-against independently approved input identities before recognizing improvement.
-Only a complete real pilot with that verification permits the next 0019 manifest.
+旧schema1は`PILOT_INPUT_KIND=production`でも`tooling_only=true`、
+`strength_inputs=false`、`improvement_observed=false`を維持する。
+新schema2は`PILOT_INPUT_BUNDLE`を指定し、merged producerの全対局/学習再現と
+Oracle原本再解析・CLI build identityを通したproduction入力だけで入力gateを有効にする。
+ハッシュはbytesの照合であり生成者の暗号学的認証ではない。
+検証済み入力に加えて実pilotの全対局・独立指標・保存出力再構成が成功したときだけ
+次の0019 manifestを準備できる。`production_authorized=false`は維持する。
 
 The [tooling verification record](../../docs/references/reversi-ai-training-pilot-tooling.md)
 tracks implementation evidence. With no new-contract production inputs as of

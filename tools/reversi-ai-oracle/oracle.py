@@ -903,7 +903,7 @@ def validate_source_directory(source: Path) -> None:
 
 
 def archive_source_tree_sha256(archive: Path) -> str:
-    with tempfile.TemporaryDirectory(prefix=".source-check-", dir=archive.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix="reversi-ai-source-check-") as temporary:
         destination = Path(temporary)
         safe_extract(archive, destination)
         extracted = [path for path in destination.iterdir() if path.is_dir()]
@@ -1421,6 +1421,7 @@ def analyze_records(
     profile: OracleProfile,
     timeout: float,
     candidate_command: str | None,
+    *, solve=None,
 ) -> list[dict[str, object]]:
     validate_profile(profile)
     candidate = (
@@ -1470,8 +1471,8 @@ def analyze_records(
                 pass_meta.append((position_id, 0, "pass", sign))
 
         for query_meta, raw_results in (
-            (child_meta, run_solve(child_queries, binary, cwd, profile, timeout, child_query=True)),
-            (pass_meta, run_solve(pass_queries, binary, cwd, profile, timeout, child_query=False)),
+            (child_meta, (solve or run_solve)(child_queries, binary, cwd, profile, timeout, child_query=True)),
+            (pass_meta, (solve or run_solve)(pass_queries, binary, cwd, profile, timeout, child_query=False)),
         ):
             for (position_id, move_index, move, sign), raw in zip(query_meta, raw_results):
                 evaluation = {
@@ -1570,6 +1571,329 @@ def analyze_records(
     finally:
         if candidate:
             candidate.close()
+
+
+RAW_VERSION = "reversi-ai-oracle-raw-v1"
+RUNTIME_RECEIPT_VERSION = "reversi-ai-oracle-runtime-v1"
+RUNTIME_BUILD_RECIPE = {"configure": ["cmake", "-S", "<source>", "-B", "<fresh-build>",
+                                      "-DCMAKE_BUILD_TYPE=Release", "-DHAS_NO_AVX2=ON"],
+                        "build": ["cmake", "--build", "<fresh-build>", "--parallel", "2"],
+                        "version": ["<binary>", "-version"]}
+
+
+def raw_canonical(value):
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def raw_pin(path):
+    path = Path(path).resolve(strict=True)
+    return {"path": str(path), "sha256": sha256_file(path)}
+
+
+def prepare_saved_runtime(output_dir, timeout=300):
+    """Human-only pinned setup; its immutable archive supports offline validation."""
+    output_dir = Path(output_dir).resolve()
+    if output_dir.exists():
+        die("Oracle runtime preparation output already exists")
+    if output_dir.is_relative_to(repo_root().resolve()):
+        die("Oracle runtime preparation must be outside the checkout")
+    output_dir.mkdir(parents=True)
+    try:
+        binary, source = ensure_oracle(timeout)
+        archive = cache_root() / f"egaroucid-v{ORACLE_VERSION}.tar.gz"
+        if sha256_file(archive) != SOURCE_SHA256:
+            die("Oracle preparation archive source mismatch")
+        saved_archive = output_dir / archive.name
+        shutil.copyfile(archive, saved_archive)
+        source_sha = archive_source_tree_sha256(saved_archive)
+        if sha256_tree(source) != source_sha:
+            die("Oracle preparation source tree mismatch")
+        runtime = runtime_identity(binary, binary.parent)
+        receipt = {"version": RUNTIME_RECEIPT_VERSION, "status": "complete",
+                   "oracle_version": ORACLE_VERSION, "source_url": SOURCE_URL,
+                   "source_archive": raw_pin(saved_archive), "source_tree_sha256": source_sha,
+                   "build_recipe": RUNTIME_BUILD_RECIPE, "producer_sha256": sha256_file(Path(__file__)),
+                   "profile": profile_metadata(STRONG_ENGINE_HCAP_V1), "runtime": runtime}
+        path = output_dir / "runtime.json"
+        path.write_bytes(raw_canonical(receipt))
+        verify_runtime_receipt(path)
+        return path
+    except Exception as error:
+        (output_dir / "failure.json").write_bytes(raw_canonical({"version": RUNTIME_RECEIPT_VERSION,
+                                                                "status": "failed", "error": str(error)}))
+        raise
+
+
+def verify_runtime_receipt(receipt_path):
+    """Validate source archive and saved build/runtime identity without processes."""
+    try:
+        receipt_path = Path(receipt_path)
+        raw = receipt_path.read_bytes()
+        receipt = json.loads(raw)
+        if (raw != raw_canonical(receipt) or set(receipt) != {"version", "status", "oracle_version", "source_url",
+                "source_archive", "source_tree_sha256", "build_recipe", "producer_sha256", "profile", "runtime"}
+                or receipt["version"] != RUNTIME_RECEIPT_VERSION or receipt["status"] != "complete"
+                or receipt["oracle_version"] != ORACLE_VERSION or receipt["source_url"] != SOURCE_URL
+                or receipt["build_recipe"] != RUNTIME_BUILD_RECIPE
+                or receipt["producer_sha256"] != sha256_file(Path(__file__))
+                or receipt["profile"] != profile_metadata(STRONG_ENGINE_HCAP_V1)):
+            die("Oracle runtime preparation identity mismatch")
+        archive_pin = receipt["source_archive"]
+        if (not isinstance(archive_pin, dict) or set(archive_pin) != {"path", "sha256"}
+                or archive_pin["sha256"] != SOURCE_SHA256 or not isinstance(archive_pin["path"], str)
+                or not Path(archive_pin["path"]).is_absolute()):
+            die("Oracle runtime preparation archive identity mismatch")
+        archive = Path(archive_pin["path"])
+        if sha256_file(archive) != SOURCE_SHA256 or archive_source_tree_sha256(archive) != receipt["source_tree_sha256"]:
+            die("Oracle runtime preparation archive/source tree mismatch")
+        validate_saved_runtime(receipt["runtime"])
+        return receipt
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        die(f"Oracle runtime preparation malformed or missing: {error}")
+
+
+def runtime_identity(binary, cwd):
+    binary, cwd = Path(binary).resolve(strict=True), Path(cwd).resolve(strict=True)
+    resources = cwd / "resources"
+    if not binary.is_file() or not resources.is_dir():
+        die("Oracle binary/resources missing")
+    files = [{"path": path.relative_to(cwd).as_posix(), "resolved_path": str(path.resolve(strict=True)),
+              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+             for path in sorted(resources.rglob("*")) if path.is_file()]
+    if not files:
+        die("Oracle resources empty")
+    return {"binary": {"path": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()},
+            "working_directory": str(cwd), "resources": files,
+            "resources_digest": hashlib.sha256(raw_canonical(files)).hexdigest()}
+
+
+def validate_saved_runtime(identity):
+    def sha(value):
+        return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    def absolute(value):
+        return isinstance(value, str) and Path(value).is_absolute() and ".." not in Path(value).parts
+    if (not isinstance(identity, dict) or set(identity) != {"binary", "working_directory", "resources", "resources_digest"}
+            or not isinstance(identity["binary"], dict) or set(identity["binary"]) != {"path", "sha256"}
+            or not absolute(identity["binary"]["path"]) or not sha(identity["binary"]["sha256"])
+            or not absolute(identity["working_directory"]) or not sha(identity["resources_digest"])
+            or not isinstance(identity["resources"], list) or not identity["resources"]):
+        die("saved Oracle runtime identity invalid")
+    paths = []
+    for row in identity["resources"]:
+        if (not isinstance(row, dict) or set(row) != {"path", "resolved_path", "sha256"}
+                or not isinstance(row["path"], str) or not row["path"].startswith("resources/")
+                or ".." in Path(row["path"]).parts or not absolute(row["resolved_path"])
+                or not sha(row["sha256"])):
+            die("saved Oracle resource identity invalid")
+        paths.append(row["path"])
+    if (paths != sorted(set(paths))
+            or identity["resources_digest"] != hashlib.sha256(raw_canonical(identity["resources"])).hexdigest()):
+        die("saved Oracle runtime resources digest mismatch")
+
+
+def query_mapping(record):
+    board, side = record["board"], record["side_to_move"]
+    mapping = []
+    for index, move in enumerate(record["legal_moves"] or (["pass"] if record["outcome"]["kind"] == "Pass" else [])):
+        child = board if move == "pass" else apply_move(board, side, move)
+        requested = side if move == "pass" else other(side)
+        if not legal_moves(child, "B") and not legal_moves(child, "W"):
+            mapping.append({"index": index, "move": move, "board": child, "terminal": True,
+                            "value": terminal_score(child, side)})
+        else:
+            effective, sign = effective_query(child, requested)
+            mapping.append({"index": index, "move": move, "board": child, "terminal": False,
+                            "requested_side": requested, "effective_side": effective,
+                            "root_sign": sign if move == "pass" else -sign})
+    return mapping
+
+
+def generate_saved_golden(records, binary, cwd, output_dir, *, timeout=300, progress_every=1, runner=None, runtime_receipt=None):
+    """Preserve failed originals; publish golden only after every root reconstructs."""
+    validate_corpus(records)
+    if not records or len(records) > 12 or not 0 < timeout <= 300 or progress_every < 1:
+        die("saved Oracle root budget invalid")
+    query_count = sum(not item["terminal"] for record in records for item in query_mapping(record))
+    if query_count > 192:
+        die("saved Oracle query budget exceeded")
+    output_dir = Path(output_dir)
+    if output_dir.exists() and any(output_dir.iterdir()):
+        die("saved Oracle output must be empty")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    profile = profile_from_name("strong-engine-hcap-v1")
+    initial = runtime_identity(binary, cwd)
+    receipt_pin = None
+    if runtime_receipt is not None:
+        receipt = verify_runtime_receipt(runtime_receipt)
+        if receipt["runtime"] != initial:
+            die("Oracle analysis runtime differs from prepared source/build")
+        receipt_pin = raw_pin(runtime_receipt)
+    binary, cwd = Path(initial["binary"]["path"]), Path(initial["working_directory"])
+    evidence = {"version": RAW_VERSION, "profile": profile_metadata(profile), "timeout_seconds": timeout,
+                "corpus_sha256": hashlib.sha256(b"".join(raw_canonical(row) for row in records)).hexdigest(),
+                "total_queries": query_count, "runtime_before": initial, "runtime_after": None,
+                "roots": [], "status": "running", "runtime_receipt": receipt_pin}
+    def publish():
+        (output_dir / "evidence.json").write_bytes(raw_canonical(evidence))
+    publish()
+    golden = []
+    try:
+        for root_index, record in enumerate(records):
+            directory = output_dir / f"root-{root_index:02d}"
+            directory.mkdir()
+            root = {"position_id": record["position_id"], "mapping": query_mapping(record), "observations": []}
+            evidence["roots"].append(root)
+            started = time.monotonic()
+            def preserve(argv, *, cwd, timeout):
+                before = runtime_identity(binary, cwd)
+                problem = Path(argv[-1]).read_bytes()
+                observation = {"argv": argv, "cwd": str(cwd), "timeout_seconds": timeout,
+                               "child_query": record["outcome"]["kind"] != "Pass",
+                               "runtime_before": before, "runtime_after": None,
+                               "exit_code": None, "timed_out": False, "wall_seconds": None}
+                stem = f"query-{len(root['observations']):02d}"
+                observation["stem"] = stem
+                root["observations"].append(observation)
+                (directory / f"{stem}.problem").write_bytes(problem)
+                call_started = time.monotonic()
+                stdout, stderr = "", ""
+                try:
+                    result = (runner or subprocess.run)(argv, cwd=cwd, timeout=timeout,
+                                                         capture_output=True, text=True, check=False)
+                    stdout, stderr = result.stdout, result.stderr
+                    observation["exit_code"] = result.returncode
+                except subprocess.TimeoutExpired as error:
+                    stdout, stderr = error.stdout or "", error.stderr or ""
+                    observation["timed_out"] = True
+                    raise OracleError("saved Oracle root timed out") from error
+                finally:
+                    observation["wall_seconds"] = time.monotonic() - call_started
+                    (directory / f"{stem}.stdout").write_bytes(stdout.encode() if isinstance(stdout, str) else stdout)
+                    (directory / f"{stem}.stderr").write_bytes(stderr.encode() if isinstance(stderr, str) else stderr)
+                    observation["runtime_after"] = runtime_identity(binary, cwd)
+                    publish()
+                if observation["exit_code"] != 0 or observation["wall_seconds"] > timeout:
+                    die("saved Oracle root failed or exceeded time budget")
+                if before != initial or observation["runtime_after"] != initial:
+                    die("Oracle runtime changed during root analysis")
+                return result
+            def solve(queries, binary, cwd, profile, timeout, *, child_query):
+                return run_solve(queries, binary, cwd, profile, timeout, child_query=child_query, runner=preserve)
+            golden.extend(golden_projection(analyze_records([record], binary, cwd, profile, timeout, None, solve=solve)))
+            root["wall_seconds"] = time.monotonic() - started
+            if root["wall_seconds"] > timeout:
+                die("saved Oracle root exceeded time budget")
+            publish()
+            if (root_index + 1) % progress_every == 0 or root_index + 1 == len(records):
+                print(f"progress saved-oracle roots={root_index + 1}/{len(records)}", file=sys.stderr, flush=True)
+        evidence["runtime_after"] = runtime_identity(binary, cwd)
+        if evidence["runtime_after"] != initial:
+            die("Oracle runtime changed during stage")
+        if receipt_pin is not None and raw_pin(runtime_receipt) != receipt_pin:
+            die("Oracle preparation receipt changed during stage")
+        evidence["status"] = "complete"
+        publish()
+        if verify_raw_golden(records, output_dir, compare_golden=False) != golden:
+            die("saved Oracle raw reconstruction mismatch")
+        (output_dir / "golden.jsonl").write_bytes(b"".join(raw_canonical(row) for row in golden))
+    except Exception as error:
+        evidence["status"] = "failed"
+        evidence["error"] = str(error)
+        publish()
+        raise
+    return golden
+
+
+def verify_raw_golden(records, output_dir, *, compare_golden=True):
+    """Rebuild with the existing parser and board/sign logic, without live solves."""
+    try:
+        return _verify_raw_golden(records, output_dir, compare_golden=compare_golden)
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        die(f"saved Oracle evidence malformed or missing: {error}")
+
+
+def _verify_raw_golden(records, output_dir, *, compare_golden=True):
+    validate_corpus(records)
+    output_dir = Path(output_dir)
+    raw = (output_dir / "evidence.json").read_bytes()
+    evidence = json.loads(raw)
+    profile = profile_from_name("strong-engine-hcap-v1")
+    expected_fields = {"version", "profile", "timeout_seconds", "corpus_sha256", "total_queries",
+                       "runtime_before", "runtime_after", "roots", "status", "runtime_receipt"}
+    if (raw != raw_canonical(evidence) or set(evidence) != expected_fields
+            or evidence["version"] != RAW_VERSION or evidence["status"] != "complete"
+            or evidence["profile"] != profile_metadata(profile)
+            or not 0 < evidence["timeout_seconds"] <= 300 or not 0 < len(records) <= 12
+            or evidence["corpus_sha256"] != hashlib.sha256(b"".join(raw_canonical(row) for row in records)).hexdigest()
+            or evidence["runtime_before"] != evidence["runtime_after"]
+            or len(evidence["roots"]) != len(records)):
+        die("saved Oracle evidence identity/completion mismatch")
+    identity = evidence["runtime_before"]
+    validate_saved_runtime(identity)
+    if evidence["runtime_receipt"] is not None:
+        receipt_pin = evidence["runtime_receipt"]
+        if not isinstance(receipt_pin, dict) or set(receipt_pin) != {"path", "sha256"} or raw_pin(receipt_pin["path"]) != receipt_pin:
+            die("saved Oracle preparation receipt pin mismatch")
+        if verify_runtime_receipt(receipt_pin["path"])["runtime"] != identity:
+            die("saved Oracle runtime differs from preparation receipt")
+    query_count = sum(not item["terminal"] for record in records for item in query_mapping(record))
+    if query_count != evidence["total_queries"] or query_count > 192:
+        die("saved Oracle query count mismatch")
+    expected_top = {"evidence.json"} | {f"root-{i:02d}" for i in range(len(records))}
+    if compare_golden:
+        expected_top.add("golden.jsonl")
+    if {path.name for path in output_dir.iterdir()} != expected_top:
+        die("missing or extra saved Oracle evidence")
+    golden = []
+    for root_index, (record, root) in enumerate(zip(records, evidence["roots"])):
+        if (set(root) != {"position_id", "mapping", "observations", "wall_seconds"}
+                or root["position_id"] != record["position_id"] or root["mapping"] != query_mapping(record)
+                or not 0 <= root["wall_seconds"] <= evidence["timeout_seconds"]):
+            die("saved Oracle root mapping/budget mismatch")
+        directory = output_dir / f"root-{root_index:02d}"
+        expected_files = set()
+        pending = list(root["observations"])
+        def solve(queries, binary, cwd, profile, timeout, *, child_query):
+            if not queries:
+                return []
+            if not pending:
+                die("missing saved Oracle query")
+            observation = pending.pop(0)
+            if (not isinstance(observation, dict) or set(observation) != {"argv", "cwd", "timeout_seconds",
+                    "child_query", "runtime_before", "runtime_after", "exit_code", "timed_out",
+                    "wall_seconds", "stem"} or not isinstance(observation["argv"], list)
+                    or len(observation["argv"]) < 3
+                    or not all(isinstance(item, str) for item in observation["argv"])):
+                die("saved Oracle observation shape invalid")
+            stem = observation["stem"]
+            if stem != f"query-{len(root['observations']) - len(pending) - 1:02d}":
+                die("saved Oracle query order mismatch")
+            expected_files.update(f"{stem}.{extension}" for extension in ("problem", "stdout", "stderr"))
+            problem = b"".join((to_egaroucid_problem(board, side) + "\n").encode() for board, side in queries)
+            if (directory / f"{stem}.problem").read_bytes() != problem:
+                die("saved Oracle problem/query mapping mismatch")
+            argv = observation["argv"]
+            if (observation["runtime_before"] != identity or observation["runtime_after"] != identity
+                    or observation["cwd"] != identity["working_directory"]
+                    or observation["child_query"] != child_query or observation["exit_code"] != 0
+                    or observation["timed_out"] is not False or observation["timeout_seconds"] != timeout
+                    or not 0 <= observation["wall_seconds"] <= timeout
+                    or argv != oracle_argv(Path(identity["binary"]["path"]), profile, solve_path=Path(argv[-1]), child_query=child_query)):
+                die("saved Oracle execution identity/status mismatch")
+            depths = [min(board.count("."), profile_depth_at(profile, 64 - board.count(".") - (1 if child_query else 0))) for board, _ in queries]
+            rows = parse_solve_output((directory / f"{stem}.stdout").read_text(), depths, profile)
+            for (board, side), row in zip(queries, rows):
+                if row["move"] not in legal_moves(board, side):
+                    die("saved Oracle continuation move invalid")
+            return rows
+        golden.extend(golden_projection(analyze_records([record], Path(identity["binary"]["path"]),
+            Path(identity["working_directory"]), profile, evidence["timeout_seconds"], None, solve=solve)))
+        if pending or {path.name for path in directory.iterdir()} != expected_files:
+            die("missing or extra saved Oracle query evidence")
+    verify_saved_golden(records, golden)
+    if compare_golden and (output_dir / "golden.jsonl").read_bytes() != b"".join(raw_canonical(row) for row in golden):
+        die("saved Oracle golden differs from raw reconstruction")
+    return golden
 
 
 def golden_projection(reports: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -1953,6 +2277,10 @@ def command_main(argv: list[str]) -> int:
     setup.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     setup.add_argument("--json", action="store_true", help="print verified paths as JSON")
 
+    runtime_setup = subparsers.add_parser("prepare-runtime")
+    runtime_setup.add_argument("--output-dir", type=Path, required=True)
+    runtime_setup.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+
     benchmark_verify = subparsers.add_parser("verify-benchmark-corpus")
     benchmark_verify.add_argument("--corpus", type=Path, required=True)
 
@@ -2015,6 +2343,9 @@ def command_main(argv: list[str]) -> int:
 
     args = parser.parse_args(argv)
     try:
+        if args.command == "prepare-runtime":
+            print(prepare_saved_runtime(args.output_dir, args.timeout))
+            return 0
         if args.command == "analyze-position":
             config = analysis_config(args.opening_depth, args.midgame_depth,
                                      args.exact_solver_empty_squares)
