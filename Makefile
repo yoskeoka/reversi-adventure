@@ -133,6 +133,8 @@ pattern-reinforcement-regret: pattern-reinforcement-verify
 	@candidate_command="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-command --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; regret_timeout="$$($(PYTHON) $(REINFORCEMENT_TOOL) regret-timeout --manifest "$(REINFORCEMENT_MANIFEST)" --output-dir "$(REINFORCEMENT_OUTPUT_DIR)")" || exit; $(PYTHON) $(ORACLE_TOOL) analyze --corpus $(ORACLE_CORPUS) --output "$(REINFORCEMENT_REGRET_REPORT)" --profile strong-engine-hcap-v1 --timeout "$$regret_timeout" --candidate-command "$$candidate_command"
 
 PILOT_TOOL := tools/reversi-ai-training/pilot.py
+PILOT_BUNDLE_VERIFICATION_RECEIPT ?=
+PILOT_INPUT_BUNDLE ?=
 PILOT_MANIFEST ?= /tmp/reversi-ai-training-pilot/manifest.json
 PILOT_OUTPUT_DIR ?= /tmp/reversi-ai-training-pilot/output
 PILOT_BASELINE_ARTIFACT ?=
@@ -153,6 +155,15 @@ PILOT_PROGRESS_EVERY ?= 1
 
 .PHONY: pattern-pilot-prepare pattern-pilot-run pattern-pilot-verify
 pattern-pilot-prepare:
+ifneq ($(strip $(PILOT_INPUT_BUNDLE)),)
+	@test -n "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" || (echo "Set PILOT_BUNDLE_VERIFICATION_RECEIPT to the completed bounded bundle-verify stage report" >&2; exit 2)
+	$(PYTHON) $(PILOT_TOOL) prepare --manifest "$(PILOT_MANIFEST)" --input-bundle "$(PILOT_INPUT_BUNDLE)" --bundle-verification-receipt "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" --candidate-executable "$(PILOT_CANDIDATE_EXECUTABLE)" --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS)
+else
+	$(MAKE) pattern-pilot-prepare-legacy
+endif
+
+.PHONY: pattern-pilot-prepare-legacy
+pattern-pilot-prepare-legacy:
 	@test -n "$(PILOT_BASELINE_ARTIFACT)" && test -n "$(PILOT_BASELINE_MANIFEST)" && test -n "$(PILOT_CANDIDATE_EXECUTABLE)" && test -n "$(PILOT_VALIDATION_INPUT)" && test -n "$(PILOT_HELD_OUT_INPUT)" && test -n "$(PILOT_RESERVED_OPENINGS)" && test -n "$(PILOT_CORPUS)" && test -n "$(PILOT_GOLDEN)" || (echo "Set all PILOT baseline, executable, split, reserved-opening, corpus and golden input paths; see tools/reversi-ai-training/README.md" >&2; exit 2)
 	$(PYTHON) $(PILOT_TOOL) prepare --manifest "$(PILOT_MANIFEST)" --baseline-artifact "$(PILOT_BASELINE_ARTIFACT)" --baseline-manifest "$(PILOT_BASELINE_MANIFEST)" --candidate-executable "$(PILOT_CANDIDATE_EXECUTABLE)" --validation-input "$(PILOT_VALIDATION_INPUT)" --held-out-input "$(PILOT_HELD_OUT_INPUT)" --reserved-openings "$(PILOT_RESERVED_OPENINGS)" --corpus "$(PILOT_CORPUS)" --golden "$(PILOT_GOLDEN)" --input-kind $(PILOT_INPUT_KIND) --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS)
 
@@ -162,6 +173,28 @@ pattern-pilot-run:
 
 pattern-pilot-verify:
 	$(PYTHON) $(PILOT_TOOL) verify --manifest "$(PILOT_MANIFEST)" --output-dir "$(PILOT_OUTPUT_DIR)"
+
+INPUT_BUNDLE_TOOL := tools/reversi-ai-training/input_bundle.py
+INPUT_BUNDLE_PREPARE_ARGS ?=
+INPUT_BUNDLE_FINALIZE_ARGS ?=
+INPUT_BUNDLE_MANIFEST ?=
+INPUT_BUNDLE_STAGE_OUTPUT ?=
+INPUT_BUNDLE_CLI ?=
+INPUT_BUNDLE_HEARTBEAT_SECONDS ?= 5
+
+.PHONY: pattern-input-bundle-prepare-stage pattern-input-bundle-run-stage pattern-input-bundle-finalize pattern-input-bundle-verify
+pattern-input-bundle-prepare-stage:
+	$(PYTHON) $(INPUT_BUNDLE_TOOL) prepare-stage $(INPUT_BUNDLE_PREPARE_ARGS)
+
+# Human-operated single stage; never a test prerequisite or automatic pipeline.
+pattern-input-bundle-run-stage:
+	$(PYTHON) $(INPUT_BUNDLE_TOOL) run-stage --manifest "$(INPUT_BUNDLE_MANIFEST)" --output-dir "$(INPUT_BUNDLE_STAGE_OUTPUT)" --heartbeat-seconds $(INPUT_BUNDLE_HEARTBEAT_SECONDS)
+
+pattern-input-bundle-finalize:
+	$(PYTHON) $(INPUT_BUNDLE_TOOL) finalize $(INPUT_BUNDLE_FINALIZE_ARGS)
+
+pattern-input-bundle-verify:
+	$(PYTHON) $(INPUT_BUNDLE_TOOL) verify --manifest "$(INPUT_BUNDLE_MANIFEST)" $(if $(INPUT_BUNDLE_CLI),--cli "$(INPUT_BUNDLE_CLI)")
 
 WHOLE_GAME_PREPARE_TOOL := tools/reversi-ai-benchmark/prepare-whole-game-measurement.py
 WHOLE_GAME_PREPARE_ARGS ?=

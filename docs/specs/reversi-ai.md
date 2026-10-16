@@ -1338,12 +1338,13 @@ queries are made. Every baseline/candidate decision records its position and
 legal move so offline verification recomputes regret from the saved values.
 The manifest pins Oracle source/version/profile and score semantics. Fixture
 and smoke corpora establish tooling correctness only, not strength evidence.
-This tooling release never authenticates production evidence. Caller labels,
-profile metadata, and matching hashes cannot establish an independent producer.
-All reports therefore set `tooling_only=true`, `strength_inputs=false`, and
-`improvement_observed=false`, including inputs labeled `production`. A reviewed
-follow-up must authenticate producer manifests and saved Oracle output against
-independently approved input identities before enabling improvement recognition.
+Legacy pilot manifests retain `tooling_only=true`, `strength_inputs=false`, and
+`improvement_observed=false`, including inputs labeled `production`. New pilot
+manifests pin the complete input bundle described below. Only a full offline
+reconstruction of a production bundle and matching CLI build identity enables
+`strength_inputs=true`; caller labels, resealed hashes, metadata or a context
+boolean alone cannot enable it. This is reproducibility of a trusted local
+human execution of reviewed producers, not authentication of hostile producers.
 
 The report records before/after validation and held-out sample counts and
 squared errors, corpus regret sum/count, match wins/draws/losses/points, actual
@@ -1352,7 +1353,7 @@ identity. Its predeclared improvement rule is lower held-out MSE, with
 validation MSE and mean corpus regret no more than 10% worse (zero baselines
 require zero), and candidate points at least 10/20. Only complete production
 inputs and a strong-engine corpus with independently authenticated provenance
-can permit improvement recognition after the follow-up above. Failure preserves
+can permit improvement recognition after bundle reconstruction. Failure preserves
 the candidate and all measurements;
 it never authorizes 0019 or claims the 0018 strength target.
 
@@ -1372,6 +1373,113 @@ position count. Default interval is one;
 positive `--progress-every N` limits ordinary updates and always emits the last
 unit. Loading, teacher extraction, update, independent metrics, corpus,
 comparison and publication have explicit stage boundaries.
+
+## Training input bundle (0050)
+
+A frozen preparation manifest pins winner-empty schema2 producers, source commit,
+merged-main ancestry, producer file bytes, CC0-1.0 license, seeds, split game IDs,
+and stage budgets. The producer checkout must be clean and on merged main.
+Calibration has 4/2/2 games; production requires 2048/256/256. Reduced inputs are
+always tooling. Random terminal winner-empty labels remain bootstrap teachers;
+they are distinct from the pilot's baseline-AI continuation teachers.
+
+Generator output contains exactly its existing six files. Preparation manifests,
+stage logs, baseline artifact/report and Oracle evidence live in sibling
+directories. Generated counts and output SHA are pinned in a new trainer-stage
+manifest; frozen manifests are never extended. Completion manifests enumerate
+every generator/trainer input and output, source/license, schema, score contract,
+seed, counts and SHA. Offline verification uses the pinned producer to replay
+and regenerate every game and split, deterministically reconstruct the baseline
+and trainer report, and compare validation/held-out bytes with pilot inputs.
+Neither validation nor held-out participates in baseline updates. Source changes
+require a new bundle. Partial outputs and self-reported verified flags fail closed.
+
+The corpus uses an independent seed/domain of legal Black-start random complete
+games. In game-ID/turn order, at most 256 candidate games yield four roots each
+at 20, 40 and 48 occupied squares. Each root has 2..16 legal moves and a
+nonterminal child. D4 duplicates, all three split keys and existing reservation
+keys are excluded before observing scores. Full candidate logs and selection
+and exclusion IDs are saved and independently regenerated; insufficient roots
+fail without replacement. Later pilot comparison openings exclude this corpus.
+
+Strong-engine-hcap-v1 Oracle analysis retains its existing 8/12 depth contract,
+distinct from project CLI 12/12/12 exact16. Each of 12 roots is a separate solve
+batch with a 300-second timeout, at most 192 nonterminal child queries overall.
+Terminal children use winner-empty directly. Evidence preserves problem bytes,
+root/child/side/sign mapping, argv, cwd, stdout/stderr, exit state and complete
+binary/resource SHA before and after execution. The existing parser reconstructs
+schema2 golden entirely offline. Missing queries, incomplete/invalid output,
+runtime changes or exceeded budgets retain failure originals and publish no
+completed golden. Relabelled smoke/legacy golden is insufficient.
+Production runtime preparation reuses the pinned Egaroucid archive/source
+validation, fresh build and version check, preserving an immutable setup
+receipt with archive/source identity and actual binary/resource hashes. Raw
+analysis and completion bundles pin that receipt and match its runtime before
+and after execution. Offline receipt validation reads saved archive evidence
+without building or launching Oracle. Fake runtimes without this route remain
+tooling regardless of game counts or profile labels.
+
+Linux stage supervision covers the process group. Wall and observed aggregate
+RSS ceilings stop the group; unavailable metrics fail closed. RSS is sampled
+each second and is an observed peak, not a guarantee about instantaneous peaks.
+Stage records preserve CPU, wall, peak observed RSS, exit/timeout, manifest and
+raw stdout/stderr. A completion report is published last after verification.
+SIGTERM cancellation terminates and reaps the worker process group and preserves
+a failure report, with the previous signal handler restored afterward.
+No generator, trainer or Oracle stage resumes partially completed work: retain
+failure originals and restart into a new directory. Completed verified previous
+stages may be reused. No failure automatically starts another stage.
+
+| Stage | Wall seconds | Observed RSS ceiling |
+| --- | ---: | ---: |
+| calibration-generate | 120 | 256 MiB |
+| calibration-verify | 120 | 512 MiB |
+| calibration-train | 300 | 1 GiB |
+| generate | 600 | 1 GiB |
+| verify | 1200 | 2 GiB |
+| train | 1800 | 3 GiB |
+| corpus | 120 | 256 MiB |
+| oracle | 4200 | 3 GiB |
+| bundle-verify | 2400 | 3 GiB |
+| cli-probe | 10 | 3 GiB |
+
+The total budget is 10870 seconds excluding build/preparation, not an estimated
+duration. Human operators start stages individually; agents and CI run only
+bounded fixtures and verify completed saved outputs. Existing internal progress
+is retained. Wrapper stderr uses exactly `progress input-bundle stage=<stage>
+done=<n> total=<n> status=<running|saved|verified|failed> elapsed_s=<value>
+rss_bytes=<value>`. Wrapper completion counts 0/1. Internal totals are 8/2560
+games, 12 Oracle roots, and the verified trainer record count. Start/end and
+resource heartbeats appear with `--heartbeat-seconds` default 5; positive
+`--progress-every N` defaults to 1 and always emits the last internal unit.
+Diagnostics never enter canonical identities.
+Finalization produces a preliminary reconstructable bundle. Pilot preparation
+and replay additionally require a successful bounded `bundle-verify` completion
+receipt tied to the exact bundle and CLI identities. The pilot manifest pins
+that receipt separately from the bundle to avoid a circular hash. Missing,
+failed or mismatched final-stage receipts cannot enable input eligibility.
+
+Acceptance reservation is explicitly `not-yet-selected` with empty keys until
+0018 creates its suite after candidate selection. `reserved` requires a real
+versioned suite artifact, path/digest and nonempty reconstructed keys; neither
+a synthetic opening nor the standard initial board represents that suite.
+The bundle reconstructs exposure keys separately for train, validation,
+held_out, Oracle roots and children. Pilot reports reconstruct opening,
+decision and terminal keys. 0018 checks chosen opening roots against these and
+0019 exposure keys before freezing its suite. Future suite creation is not a
+prerequisite for input generation.
+
+CLI identity pins merged source, Cargo.lock, build recipe and actual binary SHA.
+A single preselected validation opening (first eligible row, at most 20 discs,
+legal move, outside existing reservation) probes reset acknowledgment and a
+legal move with 1/1/1, exact16, turn, 100ms/1000nodes, a two-second response
+watchdog and ten-second stage ceiling. Raw protocol responses, position, argv
+and binary/artifact SHA are saved separately. Offline verification launches
+neither CLI nor Oracle. Verified production inputs still require all six pilot
+games, at most 768 update rows, ten complete comparison pairs, independent
+metrics and output reconstruction before recording improvement or failure.
+`production_authorized=false` remains mandatory. Tooling completion leaves
+0051 input generation, 0037 real pilot, 0019 cycle and 0018 acceptance open.
 
 ## Explanation
 

@@ -147,3 +147,41 @@ rtk python3 tools/reversi-ai-oracle/oracle.py verify --legacy-offline --corpus t
 元 schema、固定 Oracle source/profile、合法手、保存 terminal の元 raw 実石数差を検証する。
 旧 minimax の全 solve は再実行せず、その値の新意味への移植や再受け入れを主張しない。
 旧 schema を新 score contract へ暗黙に読み替えること、保存失敗を成功に変更することは拒否する。
+
+## 0050 input bundle の保存原本
+
+本番用runtimeは人間が次の準備入口を起動する。保存先はcheckout外の新規directoryにする。
+
+```sh
+rtk python3 tools/reversi-ai-oracle/oracle.py prepare-runtime --output-dir /tmp/reversi-ai-inputs/oracle-runtime --timeout 300
+```
+
+既存`ensure_oracle`による固定v7.8.1 archive検証・source tree照合・fresh CMake build・
+version確認を実行し、archive原本と`runtime.json`を保存する。receiptは固定source URL/version、
+archive SHA、archive由来source tree SHA、build recipe、producer SHA、strong profile、
+binary/resources全identityを持つ。準備失敗原本も保持し、既存保存先の再利用を拒否する。
+Oracle stageの`runtime_receipt`へこのpathを渡し、stage実行前後とoffline再構成で照合する。
+archive再検証の一時展開は`/tmp`で行い、保存directoryへの書込みやOracle再実行を必要としない。
+receiptがないfake runtimeのraw fixtureはtooling専用であり、本番件数があってもstrength入力にはしない。
+
+人間が input bundle の `corpus`、`oracle` stage を順に起動する。独立 seed/domain の
+黒先手 random 完成局を game ID/turn 順に調べ、石数20/40/48を各4 root選ぶ。
+選定は score の観測前に行い、全候補対局・採用/除外理由を保存する。
+最大256候補ゲーム、合法手2..16、非終局childあり、D4重複と三split/具体的予約suite
+へのroot/child衝突除外は固定条件であり、失敗時のroot差し替えは行わない。
+
+`generate_saved_golden` は `strong-engine-hcap-v1` の全合法手childをroot単位で解析する。
+12 root/192非終局query、rootごと300秒以内、stage全体4200秒/観測RSS 3GiBの
+runner監督下で実行する。terminal childは盤面からwinner-empty値を計算する。
+このprofileの8/12深度はproject側12/12/12・exact16と同じ設定ではない。
+
+各root directoryにquery problem、実argv/cwd、root/child/手番と符号mapping、
+stdout/stderr、終了/timeout、wall、実行前後のbinaryとresources全ファイルSHAを保存する。
+`evidence.json`が完成し、raw再構成を通った後にだけ`golden.jsonl`を公開する。
+失敗原本を残し、新しい出力先でstageを最初からやり直す。root単位のresumeはない。
+
+`verify_raw_golden` は保存problem/mapping/argv/runtime前後一致を検査し、既存parserと
+盤面・符号変換でschema2 goldenを再構成する。Oracle実行や外部runtimeファイル読込みは
+行わない。既存live `verify`はこのoffline入口から呼ばない。bundle manifestは原本一式の
+SHAも固定する。これらは信頼したローカル人間操作の再現検査であり、外部生成者の認証ではない。
+実2560局・実Oracle・実pilotは0051/0037の人間操作に残し、tooling testsで起動しない。
