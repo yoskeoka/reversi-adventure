@@ -1401,6 +1401,12 @@ nonterminal child. D4 duplicates, all three split keys and existing reservation
 keys are excluded before observing scores. Full candidate logs and selection
 and exclusion IDs are saved and independently regenerated; insufficient roots
 fail without replacement. Later pilot comparison openings exclude this corpus.
+The corpus stage reads split JSONL one record at a time and retains only
+canonical exclusion keys, rather than a decoded split or all of its source
+lines. Blank lines, malformed/non-object/non-finite JSON diagnostics and D4
+exclusions retain their existing meaning. The 256 MiB ceiling remains fixed.
+Source changes still require a newly merged producer and fresh run manifests;
+old completed and failed stage originals must not be relabelled or overwritten.
 
 Strong-engine-hcap-v1 Oracle analysis retains its existing 8/12 depth contract,
 distinct from project CLI 12/12/12 exact16. Each of 12 roots is a separate solve
