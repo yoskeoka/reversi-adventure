@@ -193,6 +193,22 @@ class PilotTests(unittest.TestCase):
             pilot.execute(args)
         self.assertEqual((run_root / "output" / "report.json").read_bytes(), report_bytes)
 
+    def test_one_command_atomically_reserves_run_root_before_preparation(self):
+        self.bundle_stub()
+        run_root = self.root / "raced-one-command"
+        run_root.mkdir()
+        args = self.one_command_args(run_root)
+
+        # Model two callers that both observed a missing root: the exclusive
+        # mkdir must still reject the second caller before preparation.
+        with mock.patch.object(Path, "exists", return_value=False), \
+             mock.patch.object(pilot, "prepare") as prepare:
+            with self.assertRaisesRegex(training.TrainingError, "run root already exists"):
+                pilot.execute(args)
+
+        prepare.assert_not_called()
+        self.assertTrue(run_root.is_dir())
+
     def test_one_command_keeps_partial_output_and_stops_before_verification(self):
         self.bundle_stub()
         run_root = self.root / "failed-one-command"

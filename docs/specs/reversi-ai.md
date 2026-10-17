@@ -1372,11 +1372,12 @@ source checkout. It creates `<run-root>/manifest.json`, runs the bounded pilot
 once into `<run-root>/output/`, and runs the offline verifier in that order.
 The run root must not already exist. The command stops at the first failure and
 keeps a successfully prepared manifest and any produced output for diagnosis;
-a retry uses a new run root. A zero exit status means the offline verifier
-completed. Success prints
-`pilot verified report=<absolute-path> digest=<sha256>` to stdout. This entry
-point consumes the existing 0051 bundle and never regenerates its production
-inputs or starts additional Oracle solves.
+a retry uses a new run root. It reserves the run root atomically before
+preparation so concurrent invocations cannot share a manifest or output
+directory. A zero exit status means the offline verifier completed. Success
+prints `pilot verified report=<absolute-path> digest=<sha256>` to stdout. This
+entry point consumes the existing 0051 bundle and never regenerates its
+production inputs or starts additional Oracle solves.
 
 Progress is flushed on stderr with `stage <name> start/done elapsed=<seconds>s`
 and `progress <kind> pair=<n> member=<n> <done>/<total> game=<seconds>s

@@ -623,6 +623,10 @@ def execute(args: argparse.Namespace) -> dict:
     require(repository_root not in run_root.parents and run_root != repository_root,
             "pilot run root must be outside the source checkout")
     require(not run_root.exists(), "pilot run root already exists; use a fresh path")
+    try:
+        run_root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as error:
+        raise training.TrainingError("pilot run root already exists; use a fresh path") from error
 
     manifest_path = run_root / "manifest.json"
     output_dir = run_root / "output"
