@@ -588,6 +588,12 @@ def verify_probe(path: Path, validation: Path, artifact: Path, cli: dict, reserv
         fail("CLI probe differs from saved raw legal/reset response")
 
 
+def split_position_keys(directory: Path) -> set[str]:
+    return {training.canonical_position_key(row["board"], row["side"])
+            for split in random_inputs.SPLITS
+            for row in training.iter_jsonl(directory / f"{split}.jsonl")}
+
+
 def worker_stage(manifest_path: Path, result_path: Path) -> None:
     manifest = training.read_json(manifest_path)
     stage, request = manifest["stage"], manifest["request"]
@@ -630,8 +636,7 @@ def worker_stage(manifest_path: Path, result_path: Path) -> None:
         if kind == "corpus":
             import corpus
             reserved = reservation(request["reservation"], ROOT)
-            excluded = {training.canonical_position_key(row["board"], row["side"])
-                        for split in random_inputs.SPLITS for row in training.read_jsonl(directory / f"{split}.jsonl")}
+            excluded = split_position_keys(directory)
             if request["seed"] == generator["seed"]:
                 fail("corpus seed must be independent")
             destination = Path(request["output_dir"])
