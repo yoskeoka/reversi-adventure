@@ -15,6 +15,7 @@ import random
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -88,23 +89,25 @@ def read_json(path: Path) -> Any:
         raise TrainingError(f"cannot read {path}: {error}") from error
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
+def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     try:
-        lines = path.read_text().splitlines()
+        with path.open() as stream:
+            for line_number, line in enumerate(stream, 1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line, parse_constant=lambda value: (_ for _ in ()).throw(TrainingError(f"non-finite JSON value {value}")))
+                except (TrainingError, json.JSONDecodeError) as error:
+                    raise TrainingError(f"{path}:{line_number}: invalid JSON: {error}") from error
+                if not isinstance(record, dict):
+                    raise TrainingError(f"{path}:{line_number}: record must be an object")
+                yield record
     except OSError as error:
         raise TrainingError(f"cannot read {path}: {error}") from error
-    records = []
-    for line_number, line in enumerate(lines, 1):
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line, parse_constant=lambda value: (_ for _ in ()).throw(TrainingError(f"non-finite JSON value {value}")))
-        except (TrainingError, json.JSONDecodeError) as error:
-            raise TrainingError(f"{path}:{line_number}: invalid JSON: {error}") from error
-        if not isinstance(record, dict):
-            raise TrainingError(f"{path}:{line_number}: record must be an object")
-        records.append(record)
-    return records
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return list(iter_jsonl(path))
 
 
 def sha256_file(path: Path) -> str:
@@ -176,9 +179,12 @@ def terminal_score(board: str, side: str) -> int:
     return difference + (1 if difference > 0 else -1 if difference < 0 else 0) * (64 - own - opponent)
 
 
+BOARD_KEY_INDICES = tuple(tuple(transform(square, inverse(symmetry)) for square in range(64))
+                          for symmetry in range(8))
+
+
 def board_key(board: str, symmetry: int) -> str:
-    inv = inverse(symmetry)
-    return "".join(board[transform(square, inv)] for square in range(64))
+    return "".join(board[square] for square in BOARD_KEY_INDICES[symmetry])
 
 
 def canonical_position_key(board: str, side: str) -> str:

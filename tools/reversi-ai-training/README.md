@@ -111,6 +111,12 @@ SIGTERM中断もworker groupの停止・回収と失敗原本保存を行う。
 2048/256/256局で固定する。失敗時は原本を残し、新directoryでstageを最初から再実行する。
 途中game/trainer/Oracleのresumeと後続stage自動起動はない。
 
+corpusのsplit除外keysはJSONLを1行ずつ読み込み、全recordをメモリへ展開しない。
+256MiB上限は維持する。旧producerでRSS超過した失敗原本と成功済み前stageは保存する。
+修正producerはマージ後のclean checkoutで新runを準備する必要がある。
+全stageとgeneratorは同じsource identityを要求するため、旧manifestに修正コードを
+差し込む、原本のSHAを書き換える、corpusだけ別producerで継続することはできない。
+
 以下はmerged clean checkoutで準備するstage入口の例。実path/seedは0051でfreezeする。
 CLI buildは準備工程として次の固定recipe入口で原本とreceiptを保存する。
 
