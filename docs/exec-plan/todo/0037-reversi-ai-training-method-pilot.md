@@ -2,10 +2,10 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
-> **2026-10-14実装境界**: 新契約の本番入力はまだないことをユーザーが確認した。
-> 今回はpilot専用prepare/run/verify、一次資料調査、fixtureでの検証を実装する。
-> 実入力の生成・baseline学習、人間操作の6局/20比較局、完成出力の独立検証は未完了。
-> 本計画はその完了条件まで残す。ツールPRの完了を「強化を観測」や0019 freezeの許可としない。
+> **2026-10-14実装境界（当時の状態）**: 新契約の本番入力がなかったため、pilot専用prepare/run/verify、一次資料調査、fixtureでの検証を先行した。
+> 実入力とbaselineは0051で生成・独立検証済み（[run記録](../../references/reversi-ai-winner-empty-input-run.md)）。
+> 0037の人間操作6局/20比較局、完成出力の独立検証は未完了であり、本計画はその完了条件まで残す。
+> 入力toolingやbundle完成を「強化を観測」や0019 freezeの許可としない。
 > 既存production/legacy producerの意味を変更せず、`pilot.py`から共通helperを再利用する。
 > 学習方法と判定基準は[調査記録](../../references/reversi-ai-training-method-review.md)、
 > 起動と検証は[README](../../../tools/reversi-ai-training/README.md)を参照する。
@@ -98,10 +98,10 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 
 ## 実pilotの残作業
 
-- 件数/上限/進捗/再開と入力原本digestを固定する別の人間操作計画で、winner-empty-v1の
-  train/validation/held-outを生成し、baseline artifactとtrainer manifestを検証する。
-- 0051の新契約saved Oracle corpus/golden（strong-engine profile）とbundleを用意する。
-  0018の予約は未選定状態を明示し、既に実suiteが存在する場合のみartifactをpinする。
+- 0051のproduction bundle（SHA-256 `0996da3c4ecfbcf76eeef2ffd7c84072825af450691085b9b5c41ae4f1a09421`）と
+  `bundle-verify/report.json`成功receiptは[run記録](../../references/reversi-ai-winner-empty-input-run.md)に固定した。
+  train/validation/held-out、baseline、Oracle corpus/golden、CLIを同じbundleから取得する。
+  0018予約は未選定・空keysのまま維持する。
 - 新しいimmutable manifestと空のoutput directoryをprepareし、人間がrunを起動する。
 - 全6自己対局・重複排除後768教師行以下・10完全ペア20比較局が完成した不変出力をoffline検証する。
 - 改善認定は0050のbundle再構成・producer ancestry/bytes・CLI build identity・Oracle raw
