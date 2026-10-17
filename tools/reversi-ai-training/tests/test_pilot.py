@@ -5,7 +5,7 @@ import copy
 import io
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -138,6 +138,20 @@ class PilotTests(unittest.TestCase):
         pilot.prepare(self.args)
         return verified, verifier
 
+    def one_command_args(self, run_root):
+        return argparse.Namespace(
+            run_root=run_root,
+            input_bundle=self.args.input_bundle,
+            bundle_verification_receipt=self.args.bundle_verification_receipt,
+            candidate_executable=self.args.candidate_executable,
+            seed=self.args.seed,
+            opening_plies=self.args.opening_plies,
+            time_limit_ms=self.args.time_limit_ms,
+            node_limit=self.args.node_limit,
+            decision_timeout_seconds=self.args.decision_timeout_seconds,
+            progress_every=100,
+        )
+
     def test_bundle_schema_pins_verification_and_reconstructs_exposure_kinds(self):
         _, verifier = self.bundle_stub()
         output = self.complete()
@@ -158,6 +172,47 @@ class PilotTests(unittest.TestCase):
         self.assertTrue(report["tooling_only"])
         self.assertFalse(report["improvement_checks"]["strength_inputs"])
         self.assertGreaterEqual(verifier.call_count, 5)
+
+    def test_one_command_prepares_runs_and_offline_verifies(self):
+        self.bundle_stub()
+        run_root = self.root / "one-command"
+        args = self.one_command_args(run_root)
+        stdout = io.StringIO()
+        with redirect_stderr(io.StringIO()), redirect_stdout(stdout):
+            report = pilot.execute(args)
+
+        self.assertTrue((run_root / "manifest.json").is_file())
+        self.assertTrue((run_root / "output" / "report.json").is_file())
+        self.assertEqual(report["actual_counts"]["self_play_games"], 6)
+        self.assertEqual(report["actual_counts"]["comparison_games"], 20)
+        self.assertTrue(report["tooling_only"])
+        self.assertFalse(report["production_authorized"])
+        self.assertIn(f"pilot verified report={run_root / 'output' / 'report.json'}", stdout.getvalue())
+        report_bytes = (run_root / "output" / "report.json").read_bytes()
+        with self.assertRaisesRegex(training.TrainingError, "run root already exists"):
+            pilot.execute(args)
+        self.assertEqual((run_root / "output" / "report.json").read_bytes(), report_bytes)
+
+    def test_one_command_keeps_partial_output_and_stops_before_verification(self):
+        self.bundle_stub()
+        run_root = self.root / "failed-one-command"
+        args = self.one_command_args(run_root)
+
+        def fail_run(manifest_path, output_dir, progress_every):
+            self.assertTrue(manifest_path.is_file())
+            output_dir.mkdir()
+            (output_dir / "games.jsonl").write_text("partial\n", encoding="utf-8")
+            raise training.TrainingError("synthetic batch failure")
+
+        with mock.patch.object(pilot, "run", side_effect=fail_run), \
+             mock.patch.object(pilot, "verify") as verify, \
+             redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(training.TrainingError, "synthetic batch failure"):
+                pilot.execute(args)
+
+        self.assertTrue((run_root / "manifest.json").is_file())
+        self.assertEqual((run_root / "output" / "games.jsonl").read_text(encoding="utf-8"), "partial\n")
+        verify.assert_not_called()
 
     def test_bundle_gate_is_derived_again_not_taken_from_context(self):
         verified, verifier = self.bundle_stub(production=True)

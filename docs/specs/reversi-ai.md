@@ -1365,6 +1365,19 @@ Long real runs remain human-operated; agents prepare inputs/commands and
 verify completed immutable output only. Unit fixtures are bounded tooling
 checks and cannot satisfy the pilot's external completion boundary.
 
+For a human-operated one-command execution, `make pattern-pilot-execute`
+accepts the verified input bundle, its successful final `bundle-verify` receipt,
+the pinned candidate executable, and a new absolute run-root path outside the
+source checkout. It creates `<run-root>/manifest.json`, runs the bounded pilot
+once into `<run-root>/output/`, and runs the offline verifier in that order.
+The run root must not already exist. The command stops at the first failure and
+keeps a successfully prepared manifest and any produced output for diagnosis;
+a retry uses a new run root. A zero exit status means the offline verifier
+completed. Success prints
+`pilot verified report=<absolute-path> digest=<sha256>` to stdout. This entry
+point consumes the existing 0051 bundle and never regenerates its production
+inputs or starts additional Oracle solves.
+
 Progress is flushed on stderr with `stage <name> start/done elapsed=<seconds>s`
 and `progress <kind> pair=<n> member=<n> <done>/<total> game=<seconds>s
 elapsed=<seconds>s`. Completed games are the work unit (6 self-play, 20 match);
@@ -1373,6 +1386,10 @@ position count. Default interval is one;
 positive `--progress-every N` limits ordinary updates and always emits the last
 unit. Loading, teacher extraction, update, independent metrics, corpus,
 comparison and publication have explicit stage boundaries.
+The one-command entry point also emits
+`stage pilot-prepare start/done elapsed=<seconds>s`; its game progress uses the
+same format and defaults to one completed game per update, controlled by
+`PILOT_PROGRESS_EVERY`.
 
 ## Training input bundle (0050)
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Prepare, run, or replay the bounded legal Black-start training pilot.
 
-Real runs are human-operated. Verification only reads saved evidence and never
-starts the candidate or an Oracle process.
+Real runs are human-operated. The execute command performs preparation, the
+bounded run, and offline replay in one invocation. Verification only reads
+saved evidence and never starts the candidate or an Oracle process.
 """
 
 from __future__ import annotations
@@ -615,6 +616,49 @@ def verify(manifest_path: Path, output: Path, progress_every: int = 1) -> dict:
     return training.read_json(output / "report.json")
 
 
+def execute(args: argparse.Namespace) -> dict:
+    run_root = args.run_root.resolve()
+    repository_root = Path(__file__).resolve().parents[2]
+    require(args.run_root.is_absolute(), "pilot run root must be an absolute path")
+    require(repository_root not in run_root.parents and run_root != repository_root,
+            "pilot run root must be outside the source checkout")
+    require(not run_root.exists(), "pilot run root already exists; use a fresh path")
+
+    manifest_path = run_root / "manifest.json"
+    output_dir = run_root / "output"
+    prepare_args = argparse.Namespace(
+        manifest=manifest_path,
+        input_bundle=args.input_bundle,
+        bundle_verification_receipt=args.bundle_verification_receipt,
+        candidate_executable=args.candidate_executable,
+        seed=args.seed,
+        opening_plies=args.opening_plies,
+        time_limit_ms=args.time_limit_ms,
+        node_limit=args.node_limit,
+        decision_timeout_seconds=args.decision_timeout_seconds,
+    )
+
+    progress = rf.Progress(args.progress_every)
+    stage = progress.stage_start("pilot-prepare")
+    try:
+        prepare(prepare_args)
+    except BaseException:
+        # prepare removes a manifest that fails its final identity/reset probe.
+        # Remove only the new, still-empty run root so the user can correct the
+        # inputs without leaving a misleading run behind.
+        try:
+            run_root.rmdir()
+        except OSError:
+            pass
+        raise
+    progress.stage_done("pilot-prepare", stage)
+
+    run(manifest_path, output_dir, args.progress_every)
+    report = verify(manifest_path, output_dir, args.progress_every)
+    print(f"pilot verified report={output_dir / 'report.json'} digest={report['report_digest']}")
+    return report
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -633,14 +677,27 @@ def main(argv: list[str]) -> int:
         command.add_argument("--manifest", type=Path, required=True)
         command.add_argument("--output-dir", type=Path, required=True)
         command.add_argument("--progress-every", type=rf.positive_interval, default=1)
+    execute_command = commands.add_parser("execute")
+    execute_command.add_argument("--run-root", type=Path, required=True)
+    execute_command.add_argument("--input-bundle", type=Path, required=True)
+    execute_command.add_argument("--bundle-verification-receipt", type=Path, required=True)
+    execute_command.add_argument("--candidate-executable", type=Path, required=True)
+    execute_command.add_argument("--seed", type=int, default=20261014)
+    execute_command.add_argument("--opening-plies", type=int, default=6)
+    execute_command.add_argument("--time-limit-ms", type=int, default=300000)
+    execute_command.add_argument("--node-limit", type=int, default=10000000)
+    execute_command.add_argument("--decision-timeout-seconds", type=int, default=310)
+    execute_command.add_argument("--progress-every", type=rf.positive_interval, default=1)
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
             prepare(args)
         elif args.command == "run":
             run(args.manifest, args.output_dir, args.progress_every)
-        else:
+        elif args.command == "verify":
             verify(args.manifest, args.output_dir, args.progress_every)
+        else:
+            execute(args)
     except (training.TrainingError, oracle.OracleError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"pilot error: {error}", file=sys.stderr)
         return 2

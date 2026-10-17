@@ -377,6 +377,31 @@ a separate plan that a human runs.
 
 Prepare rejects old format1 baselines and raw-disc labels.
 
+For the full pilot, one human-started command can prepare the immutable
+manifest, run the six self-play games and one bounded update, play all twenty
+comparison games, and independently replay the saved output. It requires the
+successful 0051 bundle-verification receipt and the CLI binary pinned by that
+bundle. It does not regenerate 0051 inputs. `PILOT_RUN_ROOT` must be a new
+absolute path outside this checkout; the command writes `manifest.json` and
+the `output/` directory beneath it. Use a new path after a failed run so any
+retained manifest and partial output remain available.
+
+This command uses the completed 2026-10-17 0051 run:
+
+```sh
+rtk make pattern-pilot-execute \
+  PILOT_RUN_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0037-20261018-01 \
+  PILOT_INPUT_BUNDLE=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0051-20261017-02/completion/bundle.json \
+  PILOT_BUNDLE_VERIFICATION_RECEIPT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0051-20261017-02/stages/bundle-verify/report.json \
+  PILOT_CANDIDATE_EXECUTABLE=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.worktrees/reversi-adventure@feat-reversi-ai-winner-empty-input-run-retry/target/release/reversi-ai-cli
+```
+
+Progress goes to stderr by default after each completed game, with the same
+positive `PILOT_PROGRESS_EVERY` rate control as the separate run command. The
+command prints the verified report path and digest to stdout after offline
+reconstruction succeeds. A nonzero exit stops the pipeline and preserves any
+manifest/output already produced.
+
 ```sh
 make pattern-pilot-prepare \
   PILOT_MANIFEST=/absolute/path/pilot/manifest.json \
@@ -400,7 +425,7 @@ Each new setup needs a fresh manifest and output folder.
 
 Prepare checks the reset reply to confirm that the CLI accepts the baseline.
 
-A human starts the real run in another terminal:
+For phase-by-phase operation, a human starts the real run:
 
 ```sh
 make pattern-pilot-run PILOT_MANIFEST=/absolute/path/pilot/manifest.json \
@@ -456,8 +481,10 @@ Oracle原本再解析・CLI build identityを通したproduction入力だけで�
 次の0019 manifestを準備できる。`production_authorized=false`は維持する。
 
 The [tooling verification record](../../docs/references/reversi-ai-training-pilot-tooling.md)
-tracks implementation evidence. With no new-contract production inputs as of
-2026-10-14, plan0037 stays active until the human run and independent result
+tracks implementation evidence. The new-contract production bundle and its
+verification receipt are recorded in the
+[0051 run record](../../docs/references/reversi-ai-winner-empty-input-run.md).
+Plan 0037 remains active until the human-operated pilot and independent result
 verification are complete.
 
 ## Winner-empty migration and preserved evidence
