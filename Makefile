@@ -146,6 +146,7 @@ PILOT_RESERVED_OPENINGS ?=
 PILOT_CORPUS ?=
 PILOT_GOLDEN ?=
 PILOT_INPUT_KIND ?= production
+PILOT_RUN_ROOT ?=
 PILOT_SEED ?= 20261014
 PILOT_OPENING_PLIES ?= 6
 PILOT_TIME_LIMIT_MS ?= 300000
@@ -153,7 +154,7 @@ PILOT_NODE_LIMIT ?= 10000000
 PILOT_DECISION_TIMEOUT_SECONDS ?= 310
 PILOT_PROGRESS_EVERY ?= 1
 
-.PHONY: pattern-pilot-prepare pattern-pilot-run pattern-pilot-verify
+.PHONY: pattern-pilot-prepare pattern-pilot-run pattern-pilot-verify pattern-pilot-execute
 pattern-pilot-prepare:
 ifneq ($(strip $(PILOT_INPUT_BUNDLE)),)
 	@test -n "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" || (echo "Set PILOT_BUNDLE_VERIFICATION_RECEIPT to the completed bounded bundle-verify stage report" >&2; exit 2)
@@ -173,6 +174,14 @@ pattern-pilot-run:
 
 pattern-pilot-verify:
 	$(PYTHON) $(PILOT_TOOL) verify --manifest "$(PILOT_MANIFEST)" --output-dir "$(PILOT_OUTPUT_DIR)"
+
+# Human starts this single command; it prepares, runs, then verifies the pilot.
+pattern-pilot-execute:
+	@test -n "$(PILOT_RUN_ROOT)" || (echo "Set PILOT_RUN_ROOT to a new absolute path outside the checkout" >&2; exit 2)
+	@test -n "$(PILOT_INPUT_BUNDLE)" || (echo "Set PILOT_INPUT_BUNDLE to the completed 0051 bundle" >&2; exit 2)
+	@test -n "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" || (echo "Set PILOT_BUNDLE_VERIFICATION_RECEIPT to the successful bundle-verify report" >&2; exit 2)
+	@test -n "$(PILOT_CANDIDATE_EXECUTABLE)" || (echo "Set PILOT_CANDIDATE_EXECUTABLE to the CLI pinned by the bundle" >&2; exit 2)
+	$(PYTHON) $(PILOT_TOOL) execute --run-root "$(PILOT_RUN_ROOT)" --input-bundle "$(PILOT_INPUT_BUNDLE)" --bundle-verification-receipt "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" --candidate-executable "$(PILOT_CANDIDATE_EXECUTABLE)" --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS) --progress-every $(PILOT_PROGRESS_EVERY)
 
 INPUT_BUNDLE_TOOL := tools/reversi-ai-training/input_bundle.py
 INPUT_BUNDLE_PREPARE_ARGS ?=
