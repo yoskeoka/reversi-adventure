@@ -76,7 +76,10 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 2. 黒先手の標準初期盤面から合法に到達する入力だけを学習対局に使う。旧 `member=1` の色反転途中局面を、別の合法対局や黒白の先後交換として数えない。両色の各局面は手番側視点で同一 pattern 重みを使い、回転/反転の同値性は仕様に従って検証する。学習入力と validation、pilot 比較、0018 の未使用開局を分離する。
 3. ランダム合法手による高速な盤面収集と、教師値の生成を別の段階にする。単なる random rollout の最終石差、強い project-owned/oracle 継続対局の最終石差、局面ごとの exact score を混同しない。候補方式を pilot 前に固定し、対象局面・着手・score 視点・oracle version・time/node 上限・timeout と失敗処理を manifest に記録する。残り 30 空きから毎手完全読みする案は、固定した少数局面の独立計測で実行可能性を確認してから採用し、未完了/timeout の score を教師値にしない。
 4. pilot manifest に本番規模の分母として自己対局 64 局、教師値の上限 7,680 行、候補比較 200 局を固定し、各上限の 10% を切り捨てた自己対局 6 局、採用する教師値 768 行、比較 20 局を超えない。教師値は重複排除後に実際に更新へ渡す行数で数え、生成量が変動しても verifier が上限超過を拒否する。候補比較は pilot 専用の 10 完全ペア・20 局の単段階契約にし、既存 50/200 局の checkpoint/継続判定を流用しない。manifest は分母・丸め規則・各上限・実数を記録し、report/verifier が照合する。乱数・入力・候補 CLI・artifact・学習規則・更新回数と出力は固定する。全局が完成する前の checkpoint は候補証拠にしない。
-5. pilot artifact を baseline と独立 validation/held-out の予測誤差、固定 oracle corpus regret、および未使用の色交替対局で比較する。更新前後の値とサンプル数をすべて記録し、少なくとも一つの事前指定した独立指標で改善し、他指標に重大な悪化がない場合だけ「この pilot では強化を観測」と記す。達しないときは artifact と不成立結果を保存し、0018 や本番サイズへの移行を行わない。
+5. pilot artifact を baseline と独立 validation/held-out の予測誤差、固定 oracle corpus regret、および未使用の色交替対局で比較する。更新前後の値とサンプル数をすべて記録し、少なくとも一つの事前指定した独立指標で改善し、他指標に重大な悪化がない場合だけ「この pilot では強化を観測」と記す。
+   達しないときは artifact と不成立結果を保存し、通常は0018や本番サイズへ移行しない。
+   ただし2026-10-18にユーザーが今回の0019本番batchを明示承認したため、このrunに限り、pilotの改善ゲート未達でもpipeline feasibilityを根拠に0019を開始できる。
+   これは0037を合格扱いにせず、0018への進行も許可しない。検証済み0051 bundleから新baseline/manifest/outputを作成し、0037 candidate artifactは再利用しない。
 
 ## 依存関係と順序
 
@@ -87,7 +90,9 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
   架空の予約開局を作らない。bundle/pilotのkind別露出keysを後段0018へ渡す。
 - 0035 の全局速度基準と、必要なら 0036 の TT 採否を確定してから pilot の engine/config を凍結する。
 - 旧 version-1 run と停止済み version-2 run の部分出力を新 pilot の証拠に流用しない。人間が開始する長時間作業を agent は起動・待機・監視しない。完了した不変出力だけ後から検証する。
-- pilot が独立指標で成功した場合に限り、0019 の大規模 batch を別の新しい manifest で準備する。
+- 通常はpilot成功後に0019の大規模batchを別manifestで準備する。
+  2026-10-18の明示承認による今回のrunでは、0037改善ゲート未達を保持したまま、0051の検証済みbundleを使って新しいbaseline/manifest/outputで0019を開始できる。
+  0037 candidate artifactは持ち越さず、0018の開始条件は変えない。
 
 ## 検証
 
@@ -106,7 +111,8 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 - 全6自己対局・重複排除後768教師行以下・10完全ペア20比較局が完成した不変出力をoffline検証する。
 - 改善認定は0050のbundle再構成・producer ancestry/bytes・CLI build identity・Oracle raw
   再解析を通した本番入力だけで有効にする。ラベル変更や任意boolで有効にしない。
-- raw dataから改善/不成立を記録する。成功時だけ0019を別の新しいmanifestで準備する。
+- raw dataから改善/不成立を記録する。改善ゲート未達でも今回の明示承認では0019へ進めるが、
+  新しいmanifestを使い、0037 candidate artifactは持ち越さない。
 - fixture結果は[ツール検証記録](../../references/reversi-ai-training-pilot-tooling.md)へ記録し、実pilot結果と区別する。
 
 ## Addresses

@@ -1452,12 +1452,40 @@ command over, report a separate 20-game Oracle-match projection from
 representative exact-24 solve timings and show both the core estimate and the
 combined estimate. Do not present the core estimate as the total runtime.
 
-The one-command production runner reports these stages separately, with
-completed games as the work unit and known totals for self-play, baseline
-comparison, Oracle comparison, and offline verification. Oracle progress also
-records completed root decisions and exact/inexact status. A missing game or
-incomplete required exact solve fails the direct-match stage without silently
-substituting the weaker corpus profile.
+The human-operated one-command runner writes flushed diagnostics to stderr
+only; they never enter manifests, game records, reports, or digests. It reuses
+the existing stage forms `stage NAME start elapsed=S.s` and
+`stage NAME done stage=S.s elapsed=S.s`. Stage names are `input-verification`,
+`self-play`, `baseline-match`, `corpus-regret`, `oracle-match`,
+`offline-verification`, and `publication`; emit both boundary lines for every
+stage, including the final stage. `--progress-every N` is a positive integer,
+defaults to `1`, and controls each progress stream independently. Emit an item
+at each interval multiple and force the final item for every game/phase even
+when it is not an interval multiple.
+
+After a completed search at each played Oracle-match root, report the moving
+engine's actual result as
+`progress oracle-match game=G root_decision=D engine=ENGINE empties=E configured_depth=C completed_depth=A exact=BOOL root=S.s elapsed=S.s`.
+`G` and `root_decision` are one-based within the match and game; `ENGINE` is `candidate` or
+`oracle`; depths are in plies; `E` is remaining empty squares. Count root
+decisions separately per game for rate limiting, and always emit that game's
+last root decision. Forced passes do not create search-root records. Match
+completion still writes the existing game-level `progress oracle-match
+game=N N/total game=S.s elapsed=S.s` update, including the last game.
+
+During offline verification, use the same flushed stderr and stage-boundary
+forms. Replayed game progress is
+`progress offline-verification phase=PHASE game=G completed=N/total game=S.s elapsed=S.s`,
+where `PHASE` is `self-play`, `baseline-match`, or `oracle-match`; each phase's
+total comes from the frozen manifest/report. Oracle root replay uses
+`progress offline-verification phase=oracle-root game=G root_decision=D completed=N/total-root-decisions root=S.s elapsed=S.s configured_depth=C completed_depth=A exact=BOOL empties=E`.
+Corpus replay uses
+`progress offline-verification phase=corpus position_id=ID completed=N/total-positions item=S.s elapsed=S.s`.
+Rate-limit each phase independently using `--progress-every N`, and force the
+final game, root, or position update for each phase. A missing game, mismatched
+depth/exactness record, or incomplete required exact solve fails the
+direct-match/verification stage without silently substituting the weaker
+corpus profile.
 
 ## Training input bundle (0050)
 

@@ -49,7 +49,8 @@
 > `2ea9ef8c77dc9ee8f2dae385a238dfa2aac37577ec3c30d382e197b515f1a29e` でoffline検証済み。
 > `improvement_observed=false` はpilotの改善ゲート未達として保持し、0037候補を本番候補に昇格しない。
 > ユーザーは学習と評価の一連の実行可能性を確認した上で、独立した0019本番batchへの移行を明示した。
-> そのためpilot改善判定を今回の0019開始条件にはせず、検証済み0051 bundleから新しいbaseline/manifest/outputで
+> この明示承認は今回のrunに限り、0037 planの「改善ゲート成功後に0019へ進む」という従来の開始条件を置き換える。
+> 0037の改善ゲート自体は未達のまま保持し、pilot候補は再利用しない。検証済み0051 bundleから新しいbaseline/manifest/outputで
 > 本番batchを実施する。0019自身のvalidation、baseline比較、選択、Oracle距離測定は独立に記録する。
 
 ## Objective and completion boundary
@@ -222,6 +223,9 @@ Do not present the 2h45m–2h56m core estimate as the total run time.
   human starts the long-running command.
 - Check every surfaced match/board/score result includes configured and actual
   search depths and exact-solve settings.
+- Verify flushed stderr stage boundaries, root-decision and offline-verification
+  formats, `--progress-every` default/validation, per-phase interval behavior,
+  forced final updates, and exclusion of diagnostics from immutable artifacts.
 - Applicable Rust/Python tests, Clippy, workflow lint, and `git diff --check`.
 
 ## Addresses
