@@ -70,8 +70,9 @@ seed, update rule, candidate and baseline artifact digests, held-out metrics,
 and an oracle corpus-regret report. It establishes evidence for a candidate;
 it does not tune on 0018's held-out openings, claim the 50% win line, alter
 runtime search semantics, or add human-facing explanations. It also records an
-unconditional direct match of the raw candidate against the deep Oracle profile,
-even if the candidate loses to baseline or the baseline is selected.
+unconditional direct match of the raw candidate against 0018's restricted
+Oracle profile, even if the candidate loses to baseline or the baseline is
+selected.
 
 The reinforcement cycle is a human-operated long-running job. A human starts
 it in a separate terminal from the generated frozen manifest; an AI agent does
@@ -90,11 +91,13 @@ gives an initial core-cycle estimate of 9,918–10,579 seconds (2h45m–2h56m).
 This includes pilot-style offline verification, uses game-count scaling, and
 is not a runtime guarantee.
 
-The estimate excludes the new 20-game exact-24 Oracle match because 0037 used
-fixed-depth 8/12 Oracle decisions and recorded no exact-24 solve timing. Before
-handing the human-operated command over, estimate that stage from representative
-24-empty full solves and show its 20-game projection plus the combined total.
-Do not present the 2h45m–2h56m core estimate as the total run time.
+The estimate excludes the new 20-game match under 0018's restricted Oracle
+profile. The 0037 elapsed time does not isolate this candidate-versus-Oracle
+pairing at Oracle depth 6/6/6 with exact solving from 12 empties. Before handing
+the human-operated command over, estimate that stage from representative
+positions under those exact settings and show its 20-game projection plus the
+combined total. Do not present the 2h45m–2h56m core estimate as the total run
+time.
 
 ## Existing references
 
@@ -116,8 +119,8 @@ Do not present the 2h45m–2h56m core estimate as the total run time.
   self-play generation, bounded TD-style outcome update, artifact selection,
   unconditional Oracle match, and fail-closed manifest/report validation.
 - (MODIFY) `tools/reversi-ai-oracle/oracle.py`, README, Makefile, and tests --
-  the pinned depth-12-plus/exact-24 Oracle distance profile, match records, and
-  per-stage runtime/progress reporting.
+  the pinned `oracle-0018-acceptance-v1` Oracle profile (6/6/6, exact12), its
+  0019 diagnostic match records, and per-stage runtime/progress reporting.
 - (NEW) versioned tiny self-play fixture, immutable candidate report schema,
   and Make targets/scripts for the bounded cycle, corpus-regret evidence, and
   Oracle distance match.
@@ -147,16 +150,18 @@ Do not present the 2h45m–2h56m core estimate as the total run time.
    held-out suite remains unread and unused until it freezes the selected
    artifact and configuration for its own win-rate test.
 6. Regardless of the baseline comparison or artifact-selection result, play the
-   raw updated candidate for 20 games against Egaroucid under
-   `deep-oracle-distance-v1`: ten predeclared legal openings, both colors,
-   bookless, one thread, hash 25, at least depth 12 above 24 empties, and a
-   complete remaining-game solve from 24 empties onward. The candidate uses
-   12/12/12 and exact16. Pin both sides' depth/limit profiles and verify actual
-   completed depth and exactness for every position. Preserve this match as a
-   goal-distance diagnostic only; do not use its outcome to select the 0019
-   artifact. Keep its openings disjoint from all training/selection exposure
-   and from 0018's held-out suite. Save its opening, decision, and terminal
-   exposure keys in the report for 0018's later collision check.
+   raw updated candidate for 20 games against Egaroucid using the same pair of
+   profiles planned for 0018: Oracle `oracle-0018-acceptance-v1` at 6/6/6 with
+   exact solving from 12 empties, and the project candidate at 12/12/12 with
+   exact solving from 16 empties. Pin both sides' executable/depth/limit
+   profiles and verify actual completed depth and exactness for every position.
+   Use ten predeclared legal openings with colors swapped, bookless Oracle,
+   one thread, and hash 25. This 20-game result measures distance to the goal;
+   it is diagnostic only, does not gate 0019 artifact selection, and does not
+   replace 0018's final `candidate wins / all games >= 0.50` acceptance test.
+   Keep its openings disjoint from all training/selection exposure and from
+   0018's held-out suite. Save its opening, decision, and terminal exposure
+   keys in the report for 0018's later collision check.
 7. Present every Reversi AI match and board/score analysis, including 0037 and
    later 0018 results, with the artifact/opponent,
    sample size, configured opening/midgame/endgame depths, exact-solve threshold
@@ -179,8 +184,8 @@ Do not present the 2h45m–2h56m core estimate as the total run time.
 - 本番の64 self-play games/7,680 teacher rows/200 comparison gamesに対し、
   0037実測elapsed 991.8秒（6/326/20/12）からの線形投影は2h45m–2h56m。
   これは0019本体とpilot形式のoffline verificationの予測値としてcommand handoffに提示する。
-  `deep-oracle-distance-v1`の20局は含まない。24-empty完全読みの代表rootで測った
-  Oracle所要時間から追加20局のprojectionを算出し、合算した総予測時間も人間run開始前に提示する。
+  `oracle-0018-acceptance-v1`の20局（Oracle 6/6/6・exact12、candidate 12/12/12・exact16）は含まない。
+  このprofileの代表局面を測って20局分のprojectionを算出し、合算した総予測時間も人間run開始前に提示する。
 
 - 0032 is completed in [PR #223](https://github.com/yoskeoka/reversi-adventure/pull/223),
   and its plan was deleted. Revalidation before this freeze belongs to 0019:
@@ -215,7 +220,7 @@ Do not present the 2h45m–2h56m core estimate as the total run time.
 - Validate the selected artifact through `TrainedEvaluator` and run the
   evaluation-only candidate CLI with the frozen configuration.
 - Generate the corpus-regret report; confirm it is not an 0018 opening suite.
-- Verify the deep Oracle match runs even when the candidate loses the baseline
+- Verify the 0018-profile Oracle match runs even when the candidate loses the baseline
   gate or baseline remains selected; replay all 20 games and reject any
   position with an incomplete required exact solve.
 - Verify the frozen human-run summary shows the 2h45m–2h56m core estimate and a

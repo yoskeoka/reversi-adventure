@@ -1418,17 +1418,22 @@ openings. Record the Oracle-match opening, decision, and terminal exposure keys
 in the 0019 report so 0018 can exclude them. The existing Oracle corpus-regret
 analysis remains a separate metric.
 
-The direct-match profile `deep-oracle-distance-v1` pins the Oracle executable,
-version, source digest, book mode, threads, hash, score semantics, and resource
-limits. The Oracle uses at least depth 12 above 24 empty squares and solves the
-full remaining game from every position with 24 or fewer empty squares. A
-position counts as completely solved only when the saved result is exact and
-its completed depth equals the number of remaining empty squares; a cutoff or
-inexact result makes the match incomplete. The project candidate uses the
-frozen 12/12/12 opening/midgame/endgame profile with exact solving at 16 or
-fewer empty squares. Both sides' configured and completed depths, exact-solve
-thresholds and per-position exact flags are recorded. This diagnostic profile
-does not alter `strong-engine-hcap-v1` or 0018's 12/12/12, exact16 acceptance.
+The Oracle opponent profile for the 0019 diagnostic and the later 0018
+acceptance is `oracle-0018-acceptance-v1`. It pins Egaroucid identity, bookless
+operation, one thread, hash level 25, score semantics, and resource limits.
+The Oracle uses 6/6/6 opening/midgame/endgame depths and starts exact solving
+at 12 or fewer empty squares. A position in that exact region counts as solved
+only when the saved result is exact and completed depth equals the remaining
+empty squares. The project candidate uses 12/12/12 and exact16, matching the
+candidate side of the planned 0018 comparison. Record both sides' configured
+and completed depths, exact thresholds, and per-position exact flags.
+
+The 0019 match is a 20-game distance diagnostic and does not apply a pass/fail
+win-rate gate. The final goal remains 0018's held-out `candidate wins / all
+games >= 0.50` under the same Oracle and candidate search profiles, with its
+predeclared sample size and confidence rule. A 12/12/12 exact16 strong-AI
+teacher-evaluation setting is a separate training-data use; it is not the
+Oracle opponent profile for this goal-distance match.
 
 Every human-facing Reversi AI match, board, or score summary (including 0037,
 0019, and 0018 results) identifies the evaluated artifact and opponent, game or
@@ -1446,11 +1451,12 @@ games, and 12 Oracle corpus positions. Linear scaling to 64 self-play games
 initial 0019 core-cycle estimate of 9,918–10,579 seconds (2h45m–2h56m),
 including the pilot-style offline verification. This estimate uses game-count
 scaling and is not a runtime guarantee. It does not include the new 20-game
-exact-24 Oracle match: the pilot used fixed depths 8/12 and did not provide
-exact-24 runtime evidence. Before handing the human-operated production
-command over, report a separate 20-game Oracle-match projection from
-representative exact-24 solve timings and show both the core estimate and the
-combined estimate. Do not present the core estimate as the total runtime.
+match under `oracle-0018-acceptance-v1` (Oracle 6/6/6, exact12; candidate
+12/12/12, exact16). The 0037 elapsed time does not isolate this paired profile.
+Before handing the human-operated production command over, report a separate
+20-game projection from representative positions under these settings and show
+both the core estimate and the combined estimate. Do not present the core
+estimate as the total runtime.
 
 The human-operated one-command runner writes flushed diagnostics to stderr
 only; they never enter manifests, game records, reports, or digests. It reuses
@@ -1465,7 +1471,7 @@ when it is not an interval multiple.
 
 After a completed search at each played Oracle-match root, report the moving
 engine's actual result as
-`progress oracle-match game=G root_decision=D engine=ENGINE empties=E configured_depth=C completed_depth=A exact=BOOL root=S.s elapsed=S.s`.
+`progress oracle-match game=G root_decision=D engine=ENGINE empties=E configured_depth=C completed_depth=A exact_threshold=T exact=BOOL root=S.s elapsed=S.s`.
 `G` and `root_decision` are one-based within the match and game; `ENGINE` is `candidate` or
 `oracle`; depths are in plies; `E` is remaining empty squares. Count root
 decisions separately per game for rate limiting, and always emit that game's
@@ -1478,7 +1484,7 @@ forms. Replayed game progress is
 `progress offline-verification phase=PHASE game=G completed=N/total game=S.s elapsed=S.s`,
 where `PHASE` is `self-play`, `baseline-match`, or `oracle-match`; each phase's
 total comes from the frozen manifest/report. Oracle root replay uses
-`progress offline-verification phase=oracle-root game=G root_decision=D completed=N/total-root-decisions root=S.s elapsed=S.s configured_depth=C completed_depth=A exact=BOOL empties=E`.
+`progress offline-verification phase=oracle-root game=G root_decision=D completed=N/total-root-decisions root=S.s elapsed=S.s configured_depth=C completed_depth=A exact_threshold=T exact=BOOL empties=E`.
 Corpus replay uses
 `progress offline-verification phase=corpus position_id=ID completed=N/total-positions item=S.s elapsed=S.s`.
 Rate-limit each phase independently using `--progress-every N`, and force the
@@ -1742,12 +1748,20 @@ tuning or CI limit, not the production fairness budget. Interrupted exact
 searches retain only a legal fallback or wholly completed result, with
 `exact = false` and no partial exact score/PV.
 
-The profile is a calibration baseline, not proof of the final strength target.
-That target must be evaluated separately on a declared held-out,
-color-swapped, opening-rotated suite and report `wins / all games >= 0.50`
-separately from match points (where a draw is 0.5), with a sample-size and
-confidence rule. `ci-smoke-v1` remains a distinct small, bounded profile and
-cannot be used to assert calibration or final strength.
+`strong-engine-hcap-v1` is a calibration/reference profile, not proof of the
+final strength target. The 0018 acceptance Oracle is separately pinned as
+`oracle-0018-acceptance-v1`: Egaroucid Console v7.8.1, bookless, one thread,
+hash level 25, fixed 6/6/6 across opening/midgame/endgame, and exact solving
+from 12 or fewer empty squares. The project candidate uses 12/12/12 and
+exact16, preserving the search-cost handicap. The 0019 20-game Oracle match
+uses this same pair of search profiles as a distance diagnostic; 0018 later
+tests the final candidate on its held-out suite and requires
+`wins / all games >= 0.50`, reported separately from match points (where a draw
+is 0.5), with its predeclared sample-size and confidence rule. A 12/12/12
+exact16 setting used to compare stronger-AI teacher evaluations is a separate
+training-data use and does not define the Oracle opponent. `ci-smoke-v1` remains
+a distinct small, bounded profile and cannot establish calibration or final
+strength.
 
 ### Explicit search settings and score-contract audit
 
