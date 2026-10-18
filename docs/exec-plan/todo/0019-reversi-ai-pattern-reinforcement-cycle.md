@@ -79,20 +79,26 @@ The reinforcement cycle is a human-operated long-running job, but its
 production one-command path is not ready yet. The existing 0037
 `tools/reversi-ai-training/pilot.py execute` path prepares, runs, and verifies
 the bounded pilot in one invocation. Extend that same script and orchestration
-with an explicit production mode; keep the current pilot mode as the default
-with its existing behavior, and do not create a parallel runner. Production
-mode consumes the verified 0051 bundle and receipt, prepares a fresh manifest
-and output root, runs the bounded training and baseline-selection stages,
-always runs the 0018-profile Oracle match, then verifies and publishes the
-final report. The 0051 bundle remains a prerequisite; one production command
-must not require separate manual reinforcement prepare/run/verify or Oracle
-match commands. A thin Make target may supply the production inputs, but it
-must invoke the extended `pilot.py` path. Once implemented, a human starts the
-full production command once; an AI agent does not start, wait for, poll,
-monitor, or claim completion of the production run. Merging this plan PR alone
-does not make the production run ready to start. A later task receives only
-its immutable artifact/report paths and digests, validates them, and then
-decides whether 0018 may freeze the candidate.
+to accept explicit self-play, baseline-comparison, and Oracle-match game
+counts, plus an optional phase resume point; do not create a parallel runner
+or require a `production` mode switch. Keep the current pilot behavior by
+having `pattern-pilot-execute` pass its bounded counts. The new
+`pattern-reinforcement-execute` Make target passes the 0019 defaults and lets
+the operator override them without editing Python source. The command
+consumes the verified 0051 bundle and receipt, freezes all supplied counts in
+the manifest, runs input verification, training, selection, corpus regret,
+and the unconditional Oracle match, then verifies and publishes the final
+report. A resumed invocation must validate its existing manifest and all
+preceding phase receipts, and may reuse only complete, phase-verified outputs.
+It reruns the selected phase in a new attempt directory. Changed
+counts or other frozen settings require a new manifest and run root. The 0051
+bundle remains a prerequisite; one production command must not require
+separate manual reinforcement prepare/run/verify or Oracle-match commands.
+Once implemented, a human starts the full production command; an AI agent does
+not start, wait for, poll, monitor, or claim completion of the production run.
+Merging this plan PR alone does not make the production run ready to start. A
+later task receives only its immutable artifact/report paths and digests,
+validates them, and then decides whether 0018 may freeze the candidate.
 
 ### Pilot-grounded runtime estimate
 
@@ -103,20 +109,22 @@ verification. Scaling the measured end-to-end time by the 0019 production
 denominators (64/6 = 10.67x for self-play and 200/20 = 10x for comparison)
 gives an initial core-cycle estimate of 9,918–10,579 seconds (2h45m–2h56m).
 This includes pilot-style offline verification, uses game-count scaling, and
-is not a runtime guarantee.
+is not a runtime guarantee. This projection is for the default 64 self-play
+and 200 baseline-comparison games; recompute it from the manifest's supplied
+counts whenever either value is overridden.
 
 The estimate excludes the new 20-game match under 0018's restricted Oracle
 profile. The 0037 elapsed time does not isolate this candidate-versus-Oracle
 pairing at Oracle depth 6/6/6 with exact solving from 12 empties. Before handing
 the human-operated command over, estimate that stage from representative
-positions under those exact settings and show its 20-game projection plus the
-combined total. Do not present the 2h45m–2h56m core estimate as the total run
-time.
+positions under those exact settings and show the projection for the manifest's
+Oracle-match game count plus the combined total. The default is 20 games. Do
+not present the 2h45m–2h56m core estimate as the total run time.
 
 ## Existing references
 
 - `tools/reversi-ai-training/pilot.py:613-712` -- existing `execute` flow,
-  arguments, and dispatch to extend while preserving the pilot mode.
+  arguments, and dispatch to extend with game-count and phase-resume controls.
 - `Makefile:121-132,157-183` -- current separate production-stage targets and
   one-command `pattern-pilot-execute` wrapper.
 - `docs/specs/reversi-ai.md:56-145` -- pattern contract and offline trainer.
@@ -140,58 +148,77 @@ time.
   the pinned `oracle-0018-acceptance-v1` Oracle profile (6/6/6, exact12), its
   0019 diagnostic match records, and per-stage runtime/progress reporting.
 - (MODIFY) `tools/reversi-ai-training/pilot.py`, Makefile, and training README
-  -- extend the existing `execute` orchestration with production mode and a
-  `pattern-reinforcement-execute` wrapper. Reuse pilot prepare/run/verify
-  orchestration; do not add a second independent executor.
-- (NEW) versioned tiny production-mode fixture and integration coverage for
+  -- extend the existing `execute` orchestration with manifest-pinned game
+  counts and verified phase resume. Keep `pattern-pilot-execute` on its current
+  bounded counts; add `pattern-reinforcement-execute` with overrideable 0019
+  count defaults. Reuse the pilot orchestration; do not add a second executor.
+- (NEW) versioned tiny production-execute fixture and integration coverage for
   the extended one-command end-to-end path.
 - (MODIFY) `docs/exec-plan/todo/0018-reversi-ai-strong-engine-acceptance.md`
   -- depend on this candidate-production evidence before freezing acceptance.
 
 ## Black-box contract and work
 
-1. Extend `tools/reversi-ai-training/pilot.py execute` with
-   `--mode production`; when omitted, it retains the existing bounded pilot
-   behavior. `pattern-reinforcement-execute` is only a Make wrapper around
-   that production mode, not a second orchestrator. One invocation consumes
-   the verified 0051 bundle and receipt, freezes source commit, baseline
-   artifact digest, evaluator/search profile, exact-solver threshold, book
-   mode, game count, pairing/rotation policy, seed, resource cap, and update
-   rule into a fresh manifest/output root, then runs input verification,
-   self-play, candidate selection, corpus regret, and the unconditional
-   20-game Oracle match before offline verification. Self-play uses only
-   project-owned binaries and artifacts. Document one human-run command,
-   absolute paths, and stop/restart behavior; it must not require separate
-   manual reinforcement prepare/run/verify/Oracle commands. It publishes the
-   report only after the complete cycle verifies; partial output is not
-   candidate evidence and a retry uses a new run root.
-2. Generate legal games with color-swapped and symmetry-rotated pairs. Record
+1. Extend `tools/reversi-ai-training/pilot.py execute` with required
+   `--self-play-games`, `--baseline-comparison-games`, and
+   `--oracle-match-games` arguments, plus optional `--resume-from PHASE`.
+   `pattern-pilot-execute` passes the existing bounded pilot counts (6 self-play,
+   20 baseline-comparison, 0 direct Oracle-match); `pattern-reinforcement-execute`
+   passes overrideable Make variables `REINFORCEMENT_SELF_PLAY_GAMES=64`,
+   `REINFORCEMENT_COMPARISON_GAMES=200`, and `REINFORCEMENT_ORACLE_GAMES=20`.
+   The Make recipe, not a hidden Python constant, supplies these defaults.
+   Production requires a positive Oracle-match count. Game counts must
+   preserve color-swapped pairs; the manifest records requested and actual
+   counts, and every run uses only project-owned binaries and artifacts. One
+   new-cycle invocation consumes the
+   verified 0051 bundle and receipt and freezes source commit, baseline artifact
+   digest, evaluator/search profile, exact-solver threshold, book mode, all
+   counts, pairing/rotation policy, seed, resource cap, and update rule in a
+   fresh manifest/output root. It then runs input verification, self-play,
+   candidate selection, corpus regret, and the unconditional Oracle match
+   before offline verification. Document one human-run command, absolute
+   paths, count overrides, and resume behavior; it must not require separate
+   manual reinforcement prepare/run/verify/Oracle commands.
+2. `--resume-from PHASE` names the first phase to execute and accepts only
+   `input-verification`, `self-play`, `candidate-update`, `baseline-match`,
+   `candidate-selection`, `corpus-regret`, `oracle-match`, or
+   `offline-verification`. It resumes only an existing run with an unchanged
+   frozen manifest. Verify the manifest digest and every completed
+   predecessor-phase receipt/output before continuing; reject missing,
+   altered, incomplete, or mismatched evidence. Reuse only complete,
+   phase-verified outputs. Write a retry of the selected phase to a new attempt
+   directory and preserve failed attempt evidence. Any changed count or other
+   frozen setting requires a new manifest and run root; it must not be
+   presented as a resume. The report is published only after the full cycle
+   verifies, and partial output is not candidate evidence.
+3. Generate legal games with color-swapped and symmetry-rotated pairs. Record
    every game input, terminal score, failure, and digest; a timeout, malformed
    record, or incomplete pair fails the cycle rather than being omitted.
-3. Update sparse phase/feature weights from final-disc outcomes with a bounded,
+4. Update sparse phase/feature weights from final-disc outcomes with a bounded,
    deterministic TD-style rule. Preserve the 64-feature, 60-phase, `-64..=64`,
    integer-bound, and canonical-artifact contracts. Identical frozen inputs
    reproduce candidate and report digests exactly.
-4. Select at most one candidate against the baseline using a validation split
+5. Select at most one candidate against the baseline using a validation split
    that is disjoint from self-play tuning records and 0018 openings. The report
    must retain both results and choose the baseline on a tie or failed gate.
-5. Run corpus regret under the frozen 0011 profile as evidence only. The 0018
+6. Run corpus regret under the frozen 0011 profile as evidence only. The 0018
    held-out suite remains unread and unused until it freezes the selected
    artifact and configuration for its own win-rate test.
-6. Regardless of the baseline comparison or artifact-selection result, play the
-   raw updated candidate for 20 games against Egaroucid using the same pair of
-   profiles planned for 0018: Oracle `oracle-0018-acceptance-v1` at 6/6/6 with
+7. Regardless of the baseline comparison or artifact-selection result, play the
+   raw updated candidate for the requested number of games (default 20) against
+   Egaroucid using the same pair of profiles planned for 0018: Oracle
+   `oracle-0018-acceptance-v1` at 6/6/6 with
    exact solving from 12 empties, and the project candidate at 12/12/12 with
    exact solving from 16 empties. Pin both sides' executable/depth/limit
    profiles and verify actual completed depth and exactness for every position.
-   Use ten predeclared legal openings with colors swapped, bookless Oracle,
-   one thread, and hash 25. This 20-game result measures distance to the goal;
-   it is diagnostic only, does not gate 0019 artifact selection, and does not
+   Generate one predeclared legal opening per color-swapped pair, bookless
+   Oracle, one thread, and hash 25. It measures distance to the goal; it is
+   diagnostic only, does not gate 0019 artifact selection, and does not
    replace 0018's final `candidate wins / all games >= 0.50` acceptance test.
    Keep its openings disjoint from all training/selection exposure and from
    0018's held-out suite. Save its opening, decision, and terminal exposure
    keys in the report for 0018's later collision check.
-7. Present every Reversi AI match and board/score analysis, including 0037 and
+8. Present every Reversi AI match and board/score analysis, including 0037 and
    later 0018 results, with the artifact/opponent,
    sample size, configured opening/midgame/endgame depths, exact-solve threshold
    in remaining empty squares, and the actual per-position completed depth and
@@ -243,18 +270,21 @@ time.
 - Unit tests for deterministic pair generation, legal replay, update bounds,
   seed reproducibility, split isolation, and baseline-on-tie selection.
 - Run the bounded fixture twice and require byte-identical artifacts/reports.
-- Exercise `pilot.py execute --mode production` with bounded inputs and confirm
-  one invocation reaches offline report verification without follow-up stage
-  commands; verify the Make wrapper invokes this same path and the existing
-  pilot mode still completes its bounded end-to-end path. The real production
-  run remains human-operated.
+- Exercise configurable pilot and 0019 count arguments, validate even/pair and
+  positive Oracle-match counts, and confirm the supplied values appear in the
+  frozen manifest and final report without source edits.
+- Exercise fresh-run and `--resume-from PHASE` flows. Accept reuse only when the
+  manifest and all predecessor receipts/output digests match; reject changed
+  counts, incomplete receipts, and tampered phase output. Verify the selected
+  phase is rerun into a new attempt directory and final offline verification
+  completes in one command. The real production run remains human-operated.
 - Verify that the human-run command documents its output digest and that a
   partial or missing report fails closed without any monitoring loop.
 - Validate the selected artifact through `TrainedEvaluator` and run the
   evaluation-only candidate CLI with the frozen configuration.
 - Generate the corpus-regret report; confirm it is not an 0018 opening suite.
 - Verify the 0018-profile Oracle match runs even when the candidate loses the baseline
-  gate or baseline remains selected; replay all 20 games and reject any
+  gate or baseline remains selected; replay all requested games (default 20) and reject any
   position with an incomplete required exact solve.
 - Verify the frozen human-run summary shows the 2h45m–2h56m core estimate and a
   separately measured Oracle-match estimate plus combined total before the
