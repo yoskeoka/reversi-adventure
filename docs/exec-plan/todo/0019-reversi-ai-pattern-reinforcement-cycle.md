@@ -177,7 +177,9 @@ time.
 - 0037の実pilotは、検証済み新契約入力で6局/768教師行以下/20比較局を完了し、
   raw outputをoffline再構成できたことをpipeline feasibilityの証拠とする。
   `improvement_observed=false` はpilot改善の不成立としてそのまま記録するが、
-  2026-10-18の明示ユーザー指示に基づく今回の0019本番runはそれを開始blockerにしない。
+  2026-10-18の明示ユーザー指示は今回の0019本番runに限り、0037が定める
+  「pilot改善ゲートを通過してから0019を準備する」という前提を上書きするため、
+  それを開始blockerにしない。
   0051 verified bundleからbaselineと新規manifest/outputを使い、pilot artifactは再利用しない。
   [tooling実装・fixture検証](../../references/reversi-ai-training-pilot-tooling.md)だけではproduction inputsや
   run feasibilityの証拠にならず、人間操作pilot reportとoffline verificationが必要。

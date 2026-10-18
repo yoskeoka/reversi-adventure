@@ -78,8 +78,8 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 4. pilot manifest に本番規模の分母として自己対局 64 局、教師値の上限 7,680 行、候補比較 200 局を固定し、各上限の 10% を切り捨てた自己対局 6 局、採用する教師値 768 行、比較 20 局を超えない。教師値は重複排除後に実際に更新へ渡す行数で数え、生成量が変動しても verifier が上限超過を拒否する。候補比較は pilot 専用の 10 完全ペア・20 局の単段階契約にし、既存 50/200 局の checkpoint/継続判定を流用しない。manifest は分母・丸め規則・各上限・実数を記録し、report/verifier が照合する。乱数・入力・候補 CLI・artifact・学習規則・更新回数と出力は固定する。全局が完成する前の checkpoint は候補証拠にしない。
 5. pilot artifact を baseline と独立 validation/held-out の予測誤差、固定 oracle corpus regret、および未使用の色交替対局で比較する。更新前後の値とサンプル数をすべて記録し、少なくとも一つの事前指定した独立指標で改善し、他指標に重大な悪化がない場合だけ「この pilot では強化を観測」と記す。
    達しないときは artifact と不成立結果を保存し、通常は0018や本番サイズへ移行しない。
-   ただし2026-10-18にユーザーが今回の0019本番batchを明示承認したため、このrunに限り、pilotの改善ゲート未達でもpipeline feasibilityを根拠に0019を開始できる。
-   これは0037を合格扱いにせず、0018への進行も許可しない。検証済み0051 bundleから新baseline/manifest/outputを作成し、0037 candidate artifactは再利用しない。
+   ただし2026-10-18のユーザー指示は今回の0019本番batchを明示的に許可しており、このrunに限り「pilot改善ゲートを通過してから0019を準備する」という前提を上書きする。pipeline feasibilityを根拠に0019を開始できる。
+   この例外は0037の改善判定基準を変えず、pilotが改善したとは記録しない。0018への進行も許可しない。検証済み0051 bundleから新baseline/manifest/outputを作成し、0037 candidate artifactは再利用しない。
 
 ## 依存関係と順序
 
@@ -91,8 +91,9 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 - 0035 の全局速度基準と、必要なら 0036 の TT 採否を確定してから pilot の engine/config を凍結する。
 - 旧 version-1 run と停止済み version-2 run の部分出力を新 pilot の証拠に流用しない。人間が開始する長時間作業を agent は起動・待機・監視しない。完了した不変出力だけ後から検証する。
 - 通常はpilot成功後に0019の大規模batchを別manifestで準備する。
-  2026-10-18の明示承認による今回のrunでは、0037改善ゲート未達を保持したまま、0051の検証済みbundleを使って新しいbaseline/manifest/outputで0019を開始できる。
-  0037 candidate artifactは持ち越さず、0018の開始条件は変えない。
+  2026-10-18の明示ユーザー指示は今回のrunに限りこの順序前提を上書きする。
+  0037改善ゲート未達と`improvement_observed=false`を維持したまま、0051の検証済みbundleから
+  新しいbaseline/manifest/outputで0019を開始できる。0037 candidate artifactは持ち越さず、0018の開始条件は変えない。
 
 ## 検証
 
