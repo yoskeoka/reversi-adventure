@@ -153,6 +153,15 @@ PILOT_TIME_LIMIT_MS ?= 300000
 PILOT_NODE_LIMIT ?= 10000000
 PILOT_DECISION_TIMEOUT_SECONDS ?= 310
 PILOT_PROGRESS_EVERY ?= 1
+REINFORCEMENT_RUN_ROOT ?=
+REINFORCEMENT_INPUT_BUNDLE ?=
+REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT ?=
+REINFORCEMENT_CANDIDATE_EXECUTABLE ?=
+REINFORCEMENT_ORACLE_BINARY ?=
+REINFORCEMENT_SELF_PLAY_GAMES ?= 64
+REINFORCEMENT_COMPARISON_GAMES ?= 200
+REINFORCEMENT_ORACLE_GAMES ?= 20
+REINFORCEMENT_RESUME_FROM ?=
 
 .PHONY: pattern-pilot-prepare pattern-pilot-run pattern-pilot-verify pattern-pilot-execute
 pattern-pilot-prepare:
@@ -181,7 +190,16 @@ pattern-pilot-execute:
 	@test -n "$(PILOT_INPUT_BUNDLE)" || (echo "Set PILOT_INPUT_BUNDLE to the completed 0051 bundle" >&2; exit 2)
 	@test -n "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" || (echo "Set PILOT_BUNDLE_VERIFICATION_RECEIPT to the successful bundle-verify report" >&2; exit 2)
 	@test -n "$(PILOT_CANDIDATE_EXECUTABLE)" || (echo "Set PILOT_CANDIDATE_EXECUTABLE to the CLI pinned by the bundle" >&2; exit 2)
-	$(PYTHON) $(PILOT_TOOL) execute --run-root "$(PILOT_RUN_ROOT)" --input-bundle "$(PILOT_INPUT_BUNDLE)" --bundle-verification-receipt "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" --candidate-executable "$(PILOT_CANDIDATE_EXECUTABLE)" --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS) --progress-every $(PILOT_PROGRESS_EVERY)
+	$(PYTHON) $(PILOT_TOOL) execute --run-root "$(PILOT_RUN_ROOT)" --input-bundle "$(PILOT_INPUT_BUNDLE)" --bundle-verification-receipt "$(PILOT_BUNDLE_VERIFICATION_RECEIPT)" --candidate-executable "$(PILOT_CANDIDATE_EXECUTABLE)" --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS) --progress-every $(PILOT_PROGRESS_EVERY) --self-play-games 6 --baseline-comparison-games 20 --oracle-match-games 0
+
+.PHONY: pattern-reinforcement-execute
+pattern-reinforcement-execute:
+	@test -n "$(REINFORCEMENT_RUN_ROOT)" || (echo "Set REINFORCEMENT_RUN_ROOT to a new absolute path outside the checkout" >&2; exit 2)
+	@test -n "$(REINFORCEMENT_INPUT_BUNDLE)" || (echo "Set REINFORCEMENT_INPUT_BUNDLE to the verified 0051 bundle" >&2; exit 2)
+	@test -n "$(REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT)" || (echo "Set REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT to the successful bundle-verify receipt" >&2; exit 2)
+	@test -n "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" || (echo "Set REINFORCEMENT_CANDIDATE_EXECUTABLE to the CLI pinned by the bundle" >&2; exit 2)
+	@test -n "$(REINFORCEMENT_ORACLE_BINARY)" || (echo "Set REINFORCEMENT_ORACLE_BINARY to the pinned Egaroucid executable" >&2; exit 2)
+	$(PYTHON) $(PILOT_TOOL) execute --run-root "$(REINFORCEMENT_RUN_ROOT)" --input-bundle "$(REINFORCEMENT_INPUT_BUNDLE)" --bundle-verification-receipt "$(REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT)" --candidate-executable "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" --oracle-binary "$(REINFORCEMENT_ORACLE_BINARY)" --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS) --progress-every $(PILOT_PROGRESS_EVERY) --self-play-games $(REINFORCEMENT_SELF_PLAY_GAMES) --baseline-comparison-games $(REINFORCEMENT_COMPARISON_GAMES) --oracle-match-games $(REINFORCEMENT_ORACLE_GAMES) $(if $(REINFORCEMENT_RESUME_FROM),--resume-from "$(REINFORCEMENT_RESUME_FROM)")
 
 INPUT_BUNDLE_TOOL := tools/reversi-ai-training/input_bundle.py
 INPUT_BUNDLE_PREPARE_ARGS ?=

@@ -1,5 +1,5 @@
 import copy
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 from io import StringIO
 import json
@@ -19,6 +19,71 @@ SPEC.loader.exec_module(oracle)
 
 
 class OracleHarnessTests(unittest.TestCase):
+    def test_0018_acceptance_profile_and_profiled_match_telemetry(self):
+        profile = oracle.ORACLE_0018_ACCEPTANCE_V1
+        oracle.validate_profile(profile)
+        self.assertEqual(profile.name, "oracle-0018-acceptance-v1")
+        self.assertEqual(oracle.profile_depth_at(profile, 4), 6)
+        self.assertEqual(oracle.profile_depth_at(profile, 51), 6)
+        self.assertEqual(oracle.profile_depth_at(profile, 52), 12)
+        self.assertEqual(oracle.profile_exact_threshold(profile), 12)
+        metadata = oracle.profile_metadata(profile)
+        self.assertEqual(metadata["oracle"]["hash_level"], 25)
+        self.assertFalse(metadata["oracle"]["book"])
+        self.assertEqual(metadata["oracle"]["threads"], 1)
+        self.assertEqual(metadata["candidate"]["heuristic_depth"], 12)
+        self.assertEqual(metadata["candidate"]["exact_solver_empty_squares"], 16)
+
+        board, side = oracle.initial_board(), "B"
+        while board.count("B") + board.count("W") < 56:
+            legal = oracle.legal_moves(board, side)
+            if not legal:
+                side = oracle.other(side)
+                legal = oracle.legal_moves(board, side)
+                if not legal:
+                    self.fail("fixture game ended before the telemetry position")
+            board, side = oracle.apply_move(board, side, legal[0]), oracle.other(side)
+        opening = {"board": board, "side": side, "moves": [], "rotation": 0}
+
+        class Candidate:
+            def new_game(self, _identifier):
+                pass
+
+            def choose_with_diagnostic(self, _identifier, current, current_side):
+                legal = oracle.legal_moves(current, current_side)
+                move = legal[0] if legal else "pass"
+                empty = current.count(".")
+                return move, {"completed_depth": empty if legal else 0,
+                              "exact": bool(legal) and empty <= 16,
+                              "elapsed_us": 1, "nodes": 1,
+                              "outcome": "move" if legal else "pass"}
+
+        def solve(queries, _binary, _cwd, selected_profile, _timeout, **_kwargs):
+            current, current_side = queries[0]
+            legal = oracle.legal_moves(current, current_side)
+            empty = current.count(".")
+            depth = oracle.profile_depth_at(selected_profile,
+                                             current.count("B") + current.count("W"))
+            return [{"move": legal[0], "completed_depth": min(empty, depth),
+                     "exact": empty <= oracle.profile_exact_threshold(selected_profile)}]
+
+        with TemporaryDirectory() as temporary, patch.object(oracle, "run_solve", side_effect=solve), \
+             redirect_stderr(StringIO()):
+            report = oracle.run_profiled_match(
+                Path(temporary) / "oracle", Path(temporary), Candidate(),
+                [(opening, opening)], profile,
+                {"opening_depth": 12, "midgame_depth": 12, "endgame_depth": 12,
+                 "exact_solver_empty_squares": 16}, 10, progress_every=10)
+        self.assertEqual(report["games"], 2)
+        self.assertEqual(report["summary"]["games"], 2)
+        self.assertEqual({item["candidate_side"] for item in report["results"]}, {"B", "W"})
+        for game in report["results"]:
+            self.assertTrue(game["decisions"])
+            for decision in game["decisions"]:
+                self.assertIn("completed_depth", decision)
+                self.assertIn("exact", decision)
+                self.assertIn("exact_solver_empty_squares", decision)
+
     def test_setup_oracle_json_reports_verified_paths(self):
         output = StringIO()
         with patch.object(oracle, "ensure_oracle", return_value=(Path("/tmp/oracle"), Path("/tmp/data"))):

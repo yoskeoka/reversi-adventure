@@ -454,6 +454,58 @@ Corpus values come from the saved Oracle golden file, while the runner records
 project CLI choices without new Oracle solves.
 The offline check starts no process.
 
+## 0019 production cycle
+
+The 0019 production path uses one human-operated command. It consumes a
+completed 0051 bundle and verification receipt, pins every input and executable,
+then runs the eight receipt-backed phases through offline verification. The
+default counts are 64 self-play games, 200 baseline-comparison games, and 20
+direct Oracle-match games. All counts must be even; the Oracle match must be
+positive. The bounded maxima are 64 self-play, 200 comparison, and 200 Oracle
+games. `pattern-pilot-execute` remains the six-game, twenty-comparison
+bounded pilot with no direct Oracle match.
+
+Use a new absolute run root outside the checkout. The command reports its
+pilot-grounded core estimate and representative Oracle/project search timings
+before it begins the phases:
+
+```sh
+rtk make pattern-reinforcement-execute \
+  REINFORCEMENT_RUN_ROOT=/absolute/path/0019-run \
+  REINFORCEMENT_INPUT_BUNDLE=/absolute/path/0051/bundle.json \
+  REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT=/absolute/path/0051/bundle-verify/report.json \
+  REINFORCEMENT_CANDIDATE_EXECUTABLE=/absolute/path/reversi-ai-cli \
+  REINFORCEMENT_ORACLE_BINARY=/absolute/path/Egaroucid_for_Console.out
+```
+
+Override counts without editing Python source by setting
+`REINFORCEMENT_SELF_PLAY_GAMES`, `REINFORCEMENT_COMPARISON_GAMES`, and
+`REINFORCEMENT_ORACLE_GAMES`. Use an even number for every count. The baseline
+comparison stops after 50 games when the candidate has 25 or fewer match
+points; otherwise it completes the requested count. Selection still requires
+strictly more than half the actual match points, so a tie selects the baseline.
+The raw updated candidate always plays the diagnostic Oracle match, regardless
+of selection.
+
+Every successful phase writes a receipt over its outputs. A failure retains its
+partial files and failure record. To retry a phase, use the same run root,
+counts, inputs, binary paths, seed, and resource settings, and set
+`REINFORCEMENT_RESUME_FROM` to one of `input-verification`, `self-play`,
+`candidate-update`, `baseline-match`, `candidate-selection`, `corpus-regret`,
+`oracle-match`, or `offline-verification`. The selected phase gets a new
+numbered attempt directory. The runner verifies the frozen manifest and every
+predecessor receipt before reuse. Changed counts or inputs require a new run
+root.
+
+The manifest pins the current source commit and producer-file digests. The final
+`report.json` is published only after offline replay succeeds. It contains the
+selected artifact digest and relative path, actual game counts,
+validation and corpus-regret metrics, the baseline comparison, Oracle match
+summary, and exposure keys for later 0018 opening checks. `match.json` retains
+every Oracle game and its configured and completed search depth and exactness
+for each decision. A human starts the production command and supplies its
+completed immutable output before any 0018 freeze decision.
+
 Corpus rows that overlap training, reserved roots or played boards are excluded
 with IDs; at least one separate legal root must remain.
 Validation and held-out exclusions also cover the random opening moves.

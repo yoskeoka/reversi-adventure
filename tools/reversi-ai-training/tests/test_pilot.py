@@ -16,6 +16,7 @@ import pilot
 import random_inputs
 import reinforcement as rf
 import training
+import production_cycle
 from types import SimpleNamespace
 
 
@@ -113,12 +114,13 @@ class PilotTests(unittest.TestCase):
         self.assertFalse(report["improvement_observed"])
         self.assertFalse(report["production_authorized"])
 
-    def bundle_stub(self, production=False):
+    def bundle_stub(self, production=False, profiled=False):
         """Unit-test the pilot adapter; producer verification has separate tests."""
         path = self.root / "input-bundle.json"
         path.write_bytes(pilot.blob({"fixture": "adapter-only"}))
         receipt = self.root / "bundle-verification-receipt.json"
         receipt.write_bytes(pilot.blob({"fixture": "adapter-only-receipt"}))
+        executable = self.args.candidate_executable
         original = training.read_json(self.args.manifest)
         verified = {"schema_version": 1, "bundle_sha256": training.sha256_file(path),
             "strength_inputs": production, "input_kind": "production" if production else "tooling",
@@ -132,6 +134,11 @@ class PilotTests(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
         mock.patch.dict(sys.modules, {"input_bundle": SimpleNamespace(verify_for_pilot=verifier)}).start()
         self.args.manifest.unlink()
+        fixture_cli = ROOT / "fixtures" / ("fake-production-candidate-v1.py" if profiled
+                                             else "fake-self-play-v1.py")
+        executable.write_text("#!/usr/bin/env python3\nimport runpy\n"
+                              f"runpy.run_path({str(fixture_cli)!r}, run_name='__main__')\n")
+        executable.chmod(0o755)
         self.args.input_bundle = path
         self.args.bundle_verification_receipt = receipt
         self.args.reserved_openings = None
@@ -144,13 +151,31 @@ class PilotTests(unittest.TestCase):
             input_bundle=self.args.input_bundle,
             bundle_verification_receipt=self.args.bundle_verification_receipt,
             candidate_executable=self.args.candidate_executable,
+            oracle_binary=None,
             seed=self.args.seed,
             opening_plies=self.args.opening_plies,
             time_limit_ms=self.args.time_limit_ms,
             node_limit=self.args.node_limit,
             decision_timeout_seconds=self.args.decision_timeout_seconds,
             progress_every=100,
+            self_play_games=6,
+            baseline_comparison_games=20,
+            oracle_match_games=0,
+            resume_from=None,
         )
+
+    def production_args(self, run_root):
+        fixture = training.read_json(ROOT / "fixtures" / "production-execute-v1.json")
+        args = self.one_command_args(run_root)
+        args.oracle_binary = self.root / "pinned-oracle-fixture"
+        args.oracle_binary.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n")
+        args.oracle_binary.chmod(0o755)
+        args.seed = fixture["seed"]
+        args.self_play_games = fixture["counts"]["self_play_games"]
+        args.baseline_comparison_games = fixture["counts"]["baseline_comparison_games"]
+        args.oracle_match_games = fixture["counts"]["oracle_match_games"]
+        args.resume_from = None
+        return args
 
     def test_bundle_schema_pins_verification_and_reconstructs_exposure_kinds(self):
         _, verifier = self.bundle_stub()
@@ -229,6 +254,86 @@ class PilotTests(unittest.TestCase):
         self.assertTrue((run_root / "manifest.json").is_file())
         self.assertEqual((run_root / "output" / "games.jsonl").read_text(encoding="utf-8"), "partial\n")
         verify.assert_not_called()
+
+    def test_0019_execute_is_deterministic_and_reports_all_phase_evidence(self):
+        self.bundle_stub(production=True, profiled=True)
+        fixture = training.read_json(ROOT / "fixtures" / "production-execute-v1.json")
+
+        def oracle_move(queries, _binary, _cwd, profile, _timeout, **_kwargs):
+            board, side = queries[0]
+            legal = production_cycle.oracle_module.legal_moves(board, side)
+            empty = board.count(".")
+            depth = production_cycle.oracle_module.profile_depth_at(
+                profile, board.count("B") + board.count("W"))
+            return [{"move": legal[0], "completed_depth": min(empty, depth),
+                     "exact": empty <= production_cycle.oracle_module.profile_exact_threshold(profile)}]
+
+        snapshots = []
+        reports = []
+        for name in ("production-one", "production-two"):
+            args = self.production_args(self.root / name)
+            args.opening_plies = fixture["opening_plies"]
+            with mock.patch.object(production_cycle, "runtime_estimate", return_value={"fixture": True}), \
+                 mock.patch.object(production_cycle.oracle_module, "run_solve", side_effect=oracle_move), \
+                 redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                report = pilot.execute(args)
+            root = args.run_root
+            self.assertEqual(report["requested_counts"], fixture["counts"])
+            self.assertEqual(report["actual_counts"], fixture["counts"])
+            self.assertEqual(report["oracle_match"]["profile"]["name"], fixture["oracle_profile"])
+            self.assertEqual(set(report["phase_receipts"]), set(production_cycle.PHASES[:-1]))
+            self.assertEqual(report["run_status"], "complete")
+            snapshots.append({str(path.relative_to(root)): path.read_bytes()
+                              for path in root.rglob("*") if path.is_file()})
+            reports.append(report)
+        self.assertEqual(snapshots[0], snapshots[1])
+        self.assertEqual(reports[0], reports[1])
+
+    def test_0019_resume_verifies_predecessors_and_retries_selected_phase(self):
+        self.bundle_stub(production=True, profiled=True)
+        args = self.production_args(self.root / "resumable-production")
+
+        with mock.patch.object(production_cycle, "runtime_estimate", return_value={"fixture": True}), \
+             mock.patch.object(production_cycle, "phase_baseline_match",
+                               side_effect=training.TrainingError("synthetic interruption")), \
+             redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(training.TrainingError, "synthetic interruption"):
+                pilot.execute(args)
+
+        root = args.run_root
+        self.assertTrue((root / "phases" / "baseline-match" / "attempt-0001" / "failure.json").is_file())
+        args.resume_from = "baseline-match"
+        args.baseline_comparison_games += 2
+        with self.assertRaisesRegex(training.TrainingError, "resume arguments differ"):
+            pilot.execute(args)
+        args.baseline_comparison_games -= 2
+
+        self_play = root / "phases" / "self-play" / "attempt-0001" / "games.jsonl"
+        original = self_play.read_bytes()
+        self_play.write_bytes(original + b"tampered\n")
+        args.resume_from = "baseline-match"
+        with mock.patch.object(production_cycle, "runtime_estimate", return_value={"fixture": True}), \
+             redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(training.TrainingError, "predecessor phase"):
+                pilot.execute(args)
+        self_play.write_bytes(original)
+
+        def oracle_move(queries, _binary, _cwd, profile, _timeout, **_kwargs):
+            board, side = queries[0]
+            legal = production_cycle.oracle_module.legal_moves(board, side)
+            empty = board.count(".")
+            depth = production_cycle.oracle_module.profile_depth_at(
+                profile, board.count("B") + board.count("W"))
+            return [{"move": legal[0], "completed_depth": min(empty, depth),
+                     "exact": empty <= production_cycle.oracle_module.profile_exact_threshold(profile)}]
+
+        with mock.patch.object(production_cycle, "runtime_estimate", return_value={"fixture": True}), \
+             mock.patch.object(production_cycle.oracle_module, "run_solve", side_effect=oracle_move), \
+             redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+            report = pilot.execute(args)
+        self.assertEqual(report["run_status"], "complete")
+        self.assertTrue((root / "phases" / "baseline-match" / "attempt-0002" / "receipt.json").is_file())
+        self.assertTrue((root / "phases" / "baseline-match" / "attempt-0001" / "failure.json").is_file())
 
     def test_bundle_gate_is_derived_again_not_taken_from_context(self):
         verified, verifier = self.bundle_stub(production=True)

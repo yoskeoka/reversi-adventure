@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import os
 import random
+import queue
 import re
 import select
 import shlex
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 from collections import defaultdict
 from pathlib import Path
 
@@ -226,7 +228,8 @@ def validate_manifest(path: Path, *, for_execution: bool = False) -> tuple[dict,
 
 
 class Candidate:
-    def __init__(self, executable: Path, artifact: Path, config: dict, timeout: int):
+    def __init__(self, executable: Path, artifact: Path, config: dict, timeout: int,
+                 capture_diagnostics: bool = False):
         argv = [str(executable), "--evaluator", "trained", "--trained-artifact", str(artifact),
                 "--opening-depth", str(config["opening_depth"]), "--midgame-depth", str(config["midgame_depth"]),
                 "--endgame-depth", str(config["endgame_depth"]),
@@ -234,11 +237,24 @@ class Candidate:
                 "--time-limit-ms", str(config["time_limit_ms"]),
                 "--node-limit", str(config["node_limit"]), "--exact-cache-scope", "turn"]
         try:
-            self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+            self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE if capture_diagnostics else subprocess.DEVNULL, bufsize=0)
         except OSError as error:
             fail(f"cannot start candidate executable: {error}")
         self.timeout = timeout
         self.buffer = bytearray()
+        self.diagnostics = capture_diagnostics
+        self.diagnostic_lines = queue.Queue()
+        self.diagnostic_reader = None
+        if capture_diagnostics:
+            self.diagnostic_reader = threading.Thread(target=self._read_diagnostics, daemon=True)
+            self.diagnostic_reader.start()
+
+    def _read_diagnostics(self) -> None:
+        assert self.process.stderr is not None
+        for line in iter(self.process.stderr.readline, b""):
+            self.diagnostic_lines.put(line)
+        self.diagnostic_lines.put(None)
 
     def request(self, identifier: str, request: str) -> str:
         assert self.process.stdin and self.process.stdout
@@ -284,10 +300,59 @@ class Candidate:
             fail(f"candidate response malformed at {identifier}")
         return move
 
+    def choose_with_diagnostic(self, identifier: str, board: str, side: str) -> tuple[str, dict | None]:
+        move = self.choose(identifier, board, side)
+        if not self.diagnostics:
+            return move, None
+        deadline = time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                fail(f"candidate search diagnostic timed out at {identifier}")
+            try:
+                line = self.diagnostic_lines.get(timeout=remaining)
+            except queue.Empty:
+                fail(f"candidate search diagnostic timed out at {identifier}")
+            if line is None:
+                fail(f"candidate exited before search diagnostic at {identifier}")
+            try:
+                text = line.decode("ascii").rstrip("\r\n")
+            except UnicodeDecodeError:
+                fail(f"candidate search diagnostic is not ASCII at {identifier}")
+            if not text.startswith("search_diagnostic_v1\t"):
+                continue
+            fields = {}
+            for item in text.split("\t")[1:]:
+                if "=" not in item:
+                    fail(f"malformed candidate search diagnostic at {identifier}")
+                name, value = item.split("=", 1)
+                fields[name] = value
+            required = {"position_id", "completed_depth", "exact", "elapsed_us", "nodes", "outcome"}
+            if fields.get("position_id") != identifier or not required.issubset(fields):
+                fail(f"candidate search diagnostic identity mismatch at {identifier}")
+            try:
+                depth = int(fields["completed_depth"])
+                elapsed = int(fields["elapsed_us"])
+                nodes = int(fields["nodes"])
+            except ValueError:
+                fail(f"candidate search diagnostic numeric field is invalid at {identifier}")
+            if depth < 0 or elapsed < 0 or nodes < 0 or fields["exact"] not in ("true", "false") \
+                    or fields["outcome"] not in ("move", "pass", "game_over"):
+                fail(f"candidate search diagnostic fields are invalid at {identifier}")
+            return move, {"completed_depth": depth, "exact": fields["exact"] == "true",
+                          "elapsed_us": elapsed, "nodes": nodes, "outcome": fields["outcome"]}
+
     def close(self) -> None:
         if self.process.poll() is None:
             self.process.kill()
-        self.process.communicate()
+        if self.diagnostic_reader:
+            self.process.wait()
+            self.diagnostic_reader.join(timeout=2)
+            for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+                if stream:
+                    stream.close()
+        else:
+            self.process.communicate()
 
 
 def play(kind: str, pair: int, member: int, board: str, side: str, opening: list[str], rotation: int,

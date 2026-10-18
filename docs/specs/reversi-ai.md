@@ -324,6 +324,79 @@ bytes, and cannot make a failed or interrupted cycle valid.
   report for the selected artifact. The 0018 held-out opening suite is not read
   during generation, update, selection, or corpus regret.
 
+### One-command 0019 production execution
+
+The production path is one human-operated `pattern-reinforcement-execute`
+invocation implemented by extending `pilot.py execute`. It consumes the
+verified 0051 bundle and its successful `bundle-verify` receipt, then freezes
+the bundle and receipt identities, source commit and producer digests, executable identities, baseline
+artifact, validation input, search and update settings, seed, resource limits,
+pairing rules, and requested game counts in a new manifest. Its run root is a
+new absolute path outside the source checkout. The command refuses to replace
+an existing run root. `pattern-pilot-execute` retains its bounded pilot counts
+and behavior.
+
+The production Make defaults are 64 self-play games, 200 baseline-comparison
+games, and 20 direct Oracle-match games. Their Make variables are
+`REINFORCEMENT_SELF_PLAY_GAMES`, `REINFORCEMENT_COMPARISON_GAMES`, and
+`REINFORCEMENT_ORACLE_GAMES`. Counts must form complete color-swapped pairs,
+with caps of 64 self-play, 200 comparison, and 200 Oracle-match games; the
+production Oracle-match count must be positive. The frozen manifest records
+requested counts; phase receipts and the final report record actual
+counts, including the 50-game early-stop result. Each pair uses legal openings with the
+declared D4 rotation and color swap; every game, decision, pass, terminal
+score, failure, and digest is retained. A timeout, malformed response,
+resource-limit breach, illegal move, or incomplete pair fails the cycle.
+
+The command runs `input-verification`, `self-play`, `candidate-update`,
+`baseline-match`, `candidate-selection`, `corpus-regret`, `oracle-match`, and
+`offline-verification` in that order. It verifies and records each phase's
+outputs before moving on. A failed or interrupted attempt is retained but
+cannot produce a candidate report. The final report is published only after
+offline verification succeeds and includes the selected and baseline artifact
+digests, all input identities, requested and completed counts, match results,
+validation metrics, corpus regret, and 0019 exposure keys. Selection uses the
+predeclared baseline-versus-candidate match gate; a tie or failed gate selects
+the baseline. Validation remains disjoint from self-play tuning and 0018
+openings and does not become a substitute for the match gate.
+
+`--resume-from PHASE` accepts only the phase names above. It requires the
+existing manifest to remain unchanged and verifies its digest plus every
+predecessor receipt and output before reuse. A retry writes to a new numbered
+attempt directory and preserves the previous attempt. Changed counts, inputs,
+or any other frozen setting require a new manifest and run root. Reusing a
+partial file or report without a matching successful phase receipt is an
+error.
+
+The direct Oracle match runs the raw updated candidate whether or not it is
+selected, against `oracle-0018-acceptance-v1`: Oracle 6/6/6 with exact solving
+from 12 empty squares, and project candidate 12/12/12 with exact solving from
+16 empty squares. Both executable and search profiles are pinned. The Oracle
+uses one thread, hash 25, and no book. Each color-swapped pair has one
+predeclared legal opening kept disjoint from training, validation, corpus, and
+0018 held-out exposure. The report records configured depths and exact
+thresholds, actual completed depth and exactness for each decision, wins,
+draws, losses, match points, and opening/decision/terminal exposure keys.
+This match is diagnostic and does not replace 0018's acceptance gate.
+
+All phase and completed-game progress is flushed to stderr and excluded from
+manifests, reports, records, and digests. Stage boundaries use
+`stage NAME start elapsed=S.s` and
+`stage NAME done stage=S.s elapsed=S.s`. Completed game lines include the
+phase, pair and member, `N/total`, per-game elapsed time, and cumulative
+elapsed time. `--progress-every` defaults to one and accepts a positive
+interval; the final completed game is always reported. The manifest and
+outputs, rather than progress output, establish completion.
+
+Before handing the production command to a human, the summary gives a
+pilot-grounded core-cycle estimate for the manifest's self-play and
+baseline-comparison counts, separately measures representative positions
+under the pinned Oracle-match profiles, and reports the Oracle-stage and
+combined estimate. These are projections, not runtime guarantees. A human
+starts the production command in a separate terminal. An AI agent may prepare
+the immutable inputs and validate completed outputs, but does not start,
+wait for, poll, monitor, or claim completion of the production run.
+
 ### Random-game input batch progress
 
 The existing random-input `generate` and `verify` commands can process up to

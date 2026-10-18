@@ -617,6 +617,12 @@ def verify(manifest_path: Path, output: Path, progress_every: int = 1) -> dict:
 
 
 def execute(args: argparse.Namespace) -> dict:
+    if args.oracle_match_games > 0:
+        import production_cycle
+        return production_cycle.execute(args)
+    require(args.self_play_games == 6 and args.baseline_comparison_games == 20
+            and args.resume_from is None,
+            "the bounded pilot execute path requires 6/20/0 counts and no phase resume")
     run_root = args.run_root.resolve()
     repository_root = Path(__file__).resolve().parents[2]
     require(args.run_root.is_absolute(), "pilot run root must be an absolute path")
@@ -686,6 +692,12 @@ def main(argv: list[str]) -> int:
     execute_command.add_argument("--input-bundle", type=Path, required=True)
     execute_command.add_argument("--bundle-verification-receipt", type=Path, required=True)
     execute_command.add_argument("--candidate-executable", type=Path, required=True)
+    execute_command.add_argument("--oracle-binary", type=Path)
+    execute_command.add_argument("--self-play-games", type=int, required=True)
+    execute_command.add_argument("--baseline-comparison-games", type=int, required=True)
+    execute_command.add_argument("--oracle-match-games", type=int, required=True)
+    execute_command.add_argument("--resume-from", choices=("input-verification", "self-play", "candidate-update",
+        "baseline-match", "candidate-selection", "corpus-regret", "oracle-match", "offline-verification"))
     execute_command.add_argument("--seed", type=int, default=20261014)
     execute_command.add_argument("--opening-plies", type=int, default=6)
     execute_command.add_argument("--time-limit-ms", type=int, default=300000)

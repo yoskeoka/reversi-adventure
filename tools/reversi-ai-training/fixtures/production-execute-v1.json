@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "fixture_version": "0019-production-execute-v1",
+  "counts": {
+    "self_play_games": 2,
+    "baseline_comparison_games": 2,
+    "oracle_match_games": 2
+  },
+  "opening_plies": 6,
+  "seed": 190019,
+  "update_rule": {
+    "name": "bounded_td_v1",
+    "normalization_divisor": 64
+  },
+  "oracle_profile": "oracle-0018-acceptance-v1",
+  "purpose": "deterministic integration coverage only; not production evidence"
+}
