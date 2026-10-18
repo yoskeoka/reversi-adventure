@@ -1386,6 +1386,21 @@ prints `pilot verified report=<absolute-path> digest=<sha256>` to stdout. This
 entry point consumes the existing 0051 bundle and never regenerates its
 production inputs or starts additional Oracle solves.
 
+The production entry point is `make pattern-reinforcement-execute`, a thin
+wrapper around `tools/reversi-ai-training/pilot.py execute --mode production`.
+It extends the same orchestration; the existing pilot mode remains the default
+and retains its bounded prepare/run/verify behavior. A human starts the
+production mode once with the verified 0051 bundle and receipt, pinned
+candidate executable, and a new absolute run-root path outside the checkout.
+It prepares the 0019 manifest, verifies the inputs, runs self-play,
+baseline comparison and selection, corpus regret, and the unconditional
+0018-profile Oracle match, then performs offline verification and publishes
+the report. The run stops at the first failure, retains partial evidence for
+diagnosis, and a retry uses a new run root. The command does not require
+separate manual reinforcement prepare/run/verify or Oracle-match commands and
+does not regenerate the 0051 production input bundle. Do not add a separate
+production orchestrator alongside `pilot.py`.
+
 Progress is flushed on stderr with `stage <name> start/done elapsed=<seconds>s`
 and `progress <kind> pair=<n> member=<n> <done>/<total> game=<seconds>s
 elapsed=<seconds>s`. Completed games are the work unit (6 self-play, 20 match);

@@ -75,11 +75,24 @@ unconditional direct match of the raw candidate against 0018's restricted
 Oracle profile, even if the candidate loses to baseline or the baseline is
 selected.
 
-The reinforcement cycle is a human-operated long-running job. A human starts
-it in a separate terminal from the generated frozen manifest; an AI agent does
-not start, wait for, poll, monitor, or claim completion of that job. A later
-task receives only its immutable artifact/report paths and digests, validates
-them, and then decides whether 0018 may freeze the candidate.
+The reinforcement cycle is a human-operated long-running job, but its
+production one-command path is not ready yet. The existing 0037
+`tools/reversi-ai-training/pilot.py execute` path prepares, runs, and verifies
+the bounded pilot in one invocation. Extend that same script and orchestration
+with an explicit production mode; keep the current pilot mode as the default
+with its existing behavior, and do not create a parallel runner. Production
+mode consumes the verified 0051 bundle and receipt, prepares a fresh manifest
+and output root, runs the bounded training and baseline-selection stages,
+always runs the 0018-profile Oracle match, then verifies and publishes the
+final report. The 0051 bundle remains a prerequisite; one production command
+must not require separate manual reinforcement prepare/run/verify or Oracle
+match commands. A thin Make target may supply the production inputs, but it
+must invoke the extended `pilot.py` path. Once implemented, a human starts the
+full production command once; an AI agent does not start, wait for, poll,
+monitor, or claim completion of the production run. Merging this plan PR alone
+does not make the production run ready to start. A later task receives only
+its immutable artifact/report paths and digests, validates them, and then
+decides whether 0018 may freeze the candidate.
 
 ### Pilot-grounded runtime estimate
 
@@ -102,6 +115,10 @@ time.
 
 ## Existing references
 
+- `tools/reversi-ai-training/pilot.py:613-712` -- existing `execute` flow,
+  arguments, and dispatch to extend while preserving the pilot mode.
+- `Makefile:121-132,157-183` -- current separate production-stage targets and
+  one-command `pattern-pilot-execute` wrapper.
 - `docs/specs/reversi-ai.md:56-145` -- pattern contract and offline trainer.
 - `tools/reversi-ai-training/training.py:162-309` -- manifest validation,
   sparse artifact serialization, digesting, and held-out report.
@@ -122,21 +139,32 @@ time.
 - (MODIFY) `tools/reversi-ai-oracle/oracle.py`, README, Makefile, and tests --
   the pinned `oracle-0018-acceptance-v1` Oracle profile (6/6/6, exact12), its
   0019 diagnostic match records, and per-stage runtime/progress reporting.
-- (NEW) versioned tiny self-play fixture, immutable candidate report schema,
-  and Make targets/scripts for the bounded cycle, corpus-regret evidence, and
-  Oracle distance match.
+- (MODIFY) `tools/reversi-ai-training/pilot.py`, Makefile, and training README
+  -- extend the existing `execute` orchestration with production mode and a
+  `pattern-reinforcement-execute` wrapper. Reuse pilot prepare/run/verify
+  orchestration; do not add a second independent executor.
+- (NEW) versioned tiny production-mode fixture and integration coverage for
+  the extended one-command end-to-end path.
 - (MODIFY) `docs/exec-plan/todo/0018-reversi-ai-strong-engine-acceptance.md`
   -- depend on this candidate-production evidence before freezing acceptance.
 
 ## Black-box contract and work
 
-1. Freeze a self-play manifest before any game: source commit, baseline
+1. Extend `tools/reversi-ai-training/pilot.py execute` with
+   `--mode production`; when omitted, it retains the existing bounded pilot
+   behavior. `pattern-reinforcement-execute` is only a Make wrapper around
+   that production mode, not a second orchestrator. One invocation consumes
+   the verified 0051 bundle and receipt, freezes source commit, baseline
    artifact digest, evaluator/search profile, exact-solver threshold, book
    mode, game count, pairing/rotation policy, seed, resource cap, and update
-   rule. Self-play must use only project-owned binaries and artifacts.
-   Document the exact human-run command, output directory, and stop/restart
-   behavior. The command writes its report atomically only after a complete
-   cycle; partial output is not candidate evidence.
+   rule into a fresh manifest/output root, then runs input verification,
+   self-play, candidate selection, corpus regret, and the unconditional
+   20-game Oracle match before offline verification. Self-play uses only
+   project-owned binaries and artifacts. Document one human-run command,
+   absolute paths, and stop/restart behavior; it must not require separate
+   manual reinforcement prepare/run/verify/Oracle commands. It publishes the
+   report only after the complete cycle verifies; partial output is not
+   candidate evidence and a retry uses a new run root.
 2. Generate legal games with color-swapped and symmetry-rotated pairs. Record
    every game input, terminal score, failure, and digest; a timeout, malformed
    record, or incomplete pair fails the cycle rather than being omitted.
@@ -215,6 +243,11 @@ time.
 - Unit tests for deterministic pair generation, legal replay, update bounds,
   seed reproducibility, split isolation, and baseline-on-tie selection.
 - Run the bounded fixture twice and require byte-identical artifacts/reports.
+- Exercise `pilot.py execute --mode production` with bounded inputs and confirm
+  one invocation reaches offline report verification without follow-up stage
+  commands; verify the Make wrapper invokes this same path and the existing
+  pilot mode still completes its bounded end-to-end path. The real production
+  run remains human-operated.
 - Verify that the human-run command documents its output digest and that a
   partial or missing report fails closed without any monitoring loop.
 - Validate the selected artifact through `TrainedEvaluator` and run the
