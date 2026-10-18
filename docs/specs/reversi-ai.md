@@ -1354,8 +1354,12 @@ validation MSE and mean corpus regret no more than 10% worse (zero baselines
 require zero), and candidate points at least 10/20. Only complete production
 inputs and a strong-engine corpus with independently authenticated provenance
 can permit improvement recognition after bundle reconstruction. Failure preserves
-the candidate and all measurements;
-it never authorizes 0019 or claims the 0018 strength target.
+the candidate and all measurements and does not establish that the pilot method
+improved strength. A separately user-authorized 0019 production experiment may
+proceed after the production input bundle and pilot outputs are independently
+verified, even when `improvement_observed=false`; it uses a fresh manifest and
+output directory and does not carry the pilot candidate forward. Neither pilot
+nor production-cycle evidence alone claims the 0018 strength target.
 
 Run refuses nonempty output directories and publishes the report last. Verify
 replays openings and games, checks resets and full pair/count identities,
@@ -1391,6 +1395,69 @@ The one-command entry point also emits
 `stage pilot-prepare start/done elapsed=<seconds>s`; its game progress uses the
 same format and defaults to one completed game per update, controlled by
 `PILOT_PROGRESS_EVERY`.
+
+## Production reinforcement batch and Oracle distance (0019)
+
+The production cycle remains one bounded update with denominators of 64
+self-play games, 7,680 unique teacher rows, and 200 candidate-versus-baseline
+games. A fully reconstructed 0037 production-input pilot establishes that the
+prepare/run/verify pipeline can complete; passing the pilot's improvement rule
+is not required when the user explicitly authorizes a separate 0019 experiment.
+The 0037 artifact is never used as the 0019 candidate or selected model. The
+production cycle uses its own pinned baseline, inputs, manifest, output root,
+validation, and artifact-selection gates.
+
+Every 0019 production run also plays the raw post-update candidate against the
+pinned Oracle, regardless of the candidate-versus-baseline result or which
+artifact the baseline-selection gate selects. This direct match is diagnostic
+evidence for distance to the project goal; it does not change 0019's artifact
+selection and does not replace 0018 acceptance. Use 20 complete games from ten
+predeclared legal openings, with each opening replayed once per color. The
+suite is disjoint from self-play, candidate-selection inputs, and 0018 held-out
+openings. Record the Oracle-match opening, decision, and terminal exposure keys
+in the 0019 report so 0018 can exclude them. The existing Oracle corpus-regret
+analysis remains a separate metric.
+
+The direct-match profile `deep-oracle-distance-v1` pins the Oracle executable,
+version, source digest, book mode, threads, hash, score semantics, and resource
+limits. The Oracle uses at least depth 12 above 24 empty squares and solves the
+full remaining game from every position with 24 or fewer empty squares. A
+position counts as completely solved only when the saved result is exact and
+its completed depth equals the number of remaining empty squares; a cutoff or
+inexact result makes the match incomplete. The project candidate uses the
+frozen 12/12/12 opening/midgame/endgame profile with exact solving at 16 or
+fewer empty squares. Both sides' configured and completed depths, exact-solve
+thresholds and per-position exact flags are recorded. This diagnostic profile
+does not alter `strong-engine-hcap-v1` or 0018's 12/12/12, exact16 acceptance.
+
+Every human-facing Reversi AI match, board, or score summary (including 0037,
+0019, and 0018 results) identifies the evaluated artifact and opponent, game or
+position count, opening/midgame/endgame search depths, exact-solve threshold in
+remaining empty squares, and whether each reported position actually completed
+an exact solve. A bare score or win rate without these settings is incomplete
+evidence.
+
+The 0037 run `0037-20261018-01` produced report digest
+`2ea9ef8c77dc9ee8f2dae385a238dfa2aac37577ec3c30d382e197b515f1a29e`; its
+human-run progress log reported 991.8 seconds through final offline
+verification for 6 self-play games, 326 teacher rows, 20 candidate comparison
+games, and 12 Oracle corpus positions. Linear scaling to 64 self-play games
+(64/6 = 10.67x) and 200 candidate comparison games (200/20 = 10x) gives an
+initial 0019 core-cycle estimate of 9,918–10,579 seconds (2h45m–2h56m),
+including the pilot-style offline verification. This estimate uses game-count
+scaling and is not a runtime guarantee. It does not include the new 20-game
+exact-24 Oracle match: the pilot used fixed depths 8/12 and did not provide
+exact-24 runtime evidence. Before handing the human-operated production
+command over, report a separate 20-game Oracle-match projection from
+representative exact-24 solve timings and show both the core estimate and the
+combined estimate. Do not present the core estimate as the total runtime.
+
+The one-command production runner reports these stages separately, with
+completed games as the work unit and known totals for self-play, baseline
+comparison, Oracle comparison, and offline verification. Oracle progress also
+records completed root decisions and exact/inexact status. A missing game or
+incomplete required exact solve fails the direct-match stage without silently
+substituting the weaker corpus profile.
 
 ## Training input bundle (0050)
 
