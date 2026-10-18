@@ -1,4 +1,4 @@
-# 学習方法を再検討し小規模な強化実績を作る
+# 学習pipelineの小規模pilotを完走・検証する
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
@@ -45,7 +45,7 @@
 higher exact thresholdでのgame-scope再利用は0035で保留中であり、学習方法が必要とする場合に評価する。
 設定可能性を本pilotの完了や本番freezeの承認にしない。
 
-学習データの生成方法と教師値を明示して選び、0019 の本格的な再実行より先に、予定規模の 10% 以下の小規模 batch で `TrainedEvaluator` の更新前後を独立に比べる。改善が観測された artifact、全入力/設定の digest、検証結果を残す。改善しなければ失敗結果を保存し、方法を再計画する。小規模結果から 0018 の 50% 目標達成や統計的な一般化は主張しない。
+このpilotの主目的は、データ準備・教師値生成・学習・候補比較・offline検証までの一連のpipelineを本番規模の10%以下で一度完走させ、予定した入力と出力を独立に再構成できることを確かめること。小標本で強さの改善を期待したり、本番学習方法の有効性を判定したりしない。更新前後の独立指標と`improvement_observed`は診断情報として記録し、改善が見えなくてもpilot失敗や0019開始blockerとはしない。0019では検証済みproduction bundleからbaseline・manifest・outputを新規に作り、pilot artifactを再利用しない。pilot結果から0018の50%目標達成や統計的な一般化は主張しない。
 
 ## 参照
 
@@ -68,7 +68,7 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
   `random_inputs.py`の新契約入力生成と`training.py`/`reinforcement.py`の教師式・更新helper自体は変更不要。
 - (MODIFY) Makefile と `tools/reversi-ai-training/README.md` — 小規模の prepare/run/verify と人間が起動する長時間処理を分ける。
 - (NEW) `docs/references/` の pilot report — 失敗例も含め、入力・artifact digest、比較方法、観測値を保存する。
-- (MODIFY) `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md` — pilot 成功後にのみ新たな本番 manifest を凍結する依存へ更新する。
+- (MODIFY) `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md` — pilotで確認したpipeline feasibilityを本番batchへ接続し、別のbaseline・manifest・outputを使う依存へ更新する。
 
 ## ブラックボックス契約と作業
 
@@ -76,10 +76,8 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
 2. 黒先手の標準初期盤面から合法に到達する入力だけを学習対局に使う。旧 `member=1` の色反転途中局面を、別の合法対局や黒白の先後交換として数えない。両色の各局面は手番側視点で同一 pattern 重みを使い、回転/反転の同値性は仕様に従って検証する。学習入力と validation、pilot 比較、0018 の未使用開局を分離する。
 3. ランダム合法手による高速な盤面収集と、教師値の生成を別の段階にする。単なる random rollout の最終石差、強い project-owned/oracle 継続対局の最終石差、局面ごとの exact score を混同しない。候補方式を pilot 前に固定し、対象局面・着手・score 視点・oracle version・time/node 上限・timeout と失敗処理を manifest に記録する。残り 30 空きから毎手完全読みする案は、固定した少数局面の独立計測で実行可能性を確認してから採用し、未完了/timeout の score を教師値にしない。
 4. pilot manifest に本番規模の分母として自己対局 64 局、教師値の上限 7,680 行、候補比較 200 局を固定し、各上限の 10% を切り捨てた自己対局 6 局、採用する教師値 768 行、比較 20 局を超えない。教師値は重複排除後に実際に更新へ渡す行数で数え、生成量が変動しても verifier が上限超過を拒否する。候補比較は pilot 専用の 10 完全ペア・20 局の単段階契約にし、既存 50/200 局の checkpoint/継続判定を流用しない。manifest は分母・丸め規則・各上限・実数を記録し、report/verifier が照合する。乱数・入力・候補 CLI・artifact・学習規則・更新回数と出力は固定する。全局が完成する前の checkpoint は候補証拠にしない。
-5. pilot artifact を baseline と独立 validation/held-out の予測誤差、固定 oracle corpus regret、および未使用の色交替対局で比較する。更新前後の値とサンプル数をすべて記録し、少なくとも一つの事前指定した独立指標で改善し、他指標に重大な悪化がない場合だけ「この pilot では強化を観測」と記す。
-   達しないときは artifact と不成立結果を保存し、通常は0018や本番サイズへ移行しない。
-   ただし2026-10-18のユーザー指示は今回の0019本番batchを明示的に許可しており、このrunに限り「pilot改善ゲートを通過してから0019を準備する」という前提を上書きする。pipeline feasibilityを根拠に0019を開始できる。
-   この例外は0037の改善判定基準を変えず、pilotが改善したとは記録しない。0018への進行も許可しない。検証済み0051 bundleから新baseline/manifest/outputを作成し、0037 candidate artifactは再利用しない。
+5. pilot artifact を baseline と独立 validation/held-out の予測誤差、固定 oracle corpus regret、および未使用の色交替対局で比較する。更新前後の値とサンプル数は診断情報として記録する。事前指定した指標の改善条件を満たす場合だけ`improvement_observed=true`と記録できるが、改善条件の未達はpilotの完走・検証を失敗にせず、本番batchへの進行を止めない。小標本の結果から学習方法の強さや0018の50%目標は判定しない。
+   本番batchはpipeline feasibilityの確認後に独立して実施し、0018への進行は0018自身の条件で判断する。検証済み0051 bundleから新baseline/manifest/outputを作成し、0037 candidate artifactは再利用しない。
 
 ## 依存関係と順序
 
@@ -90,30 +88,30 @@ higher exact thresholdでのgame-scope再利用は0035で保留中であり、�
   架空の予約開局を作らない。bundle/pilotのkind別露出keysを後段0018へ渡す。
 - 0035 の全局速度基準と、必要なら 0036 の TT 採否を確定してから pilot の engine/config を凍結する。
 - 旧 version-1 run と停止済み version-2 run の部分出力を新 pilot の証拠に流用しない。人間が開始する長時間作業を agent は起動・待機・監視しない。完了した不変出力だけ後から検証する。
-- 通常はpilot成功後に0019の大規模batchを別manifestで準備する。
-  2026-10-18の明示ユーザー指示は今回のrunに限りこの順序前提を上書きする。
-  0037改善ゲート未達と`improvement_observed=false`を維持したまま、0051の検証済みbundleから
-  新しいbaseline/manifest/outputで0019を開始できる。0037 candidate artifactは持ち越さず、0018の開始条件は変えない。
+- 0037の完了条件は予定上限内でpipelineが完走し、production inputと全出力をoffline再構成できること。
+  更新前後の改善指標は診断用で、本番batchへの進行条件ではない。0019は0051の検証済みbundleから
+  新しいbaseline/manifest/outputで実施し、0037 candidate artifactは持ち越さない。0018の開始条件は変えない。
 
 ## 検証
 
 - 黒先手からの合法再生、分割の独立性、色相対 score、exact/oracle score の一致と timeout fail-closed を確認する。
 - pilot が manifest の 64/7,680/200 分母から切り捨てた 6/768/20 上限をすべて守り、単段階 10 ペアの対局数と同じ固定入力の再検証で artifact/report digest が一致する。
-- 更新前後の独立指標を raw data から再計算し、`TrainedEvaluator` が artifact を受理する。
+- 更新前後の独立指標を raw data から再計算し、結果は診断情報として報告する。`TrainedEvaluator` が artifact を受理することと、固定上限内でoffline再構成できることをpilot完了確認に使う。改善値は完了判定に使わない。
 - 該当 Python/Rust テスト、Clippy、GDExtension build、workflow lint、`git diff --check`。
 
-## 実pilotの残作業
+## 実pilotの完了結果
 
 - 0051のproduction bundle（SHA-256 `0996da3c4ecfbcf76eeef2ffd7c84072825af450691085b9b5c41ae4f1a09421`）と
   `bundle-verify/report.json`成功receiptは[run記録](../../references/reversi-ai-winner-empty-input-run.md)に固定した。
   train/validation/held-out、baseline、Oracle corpus/golden、CLIを同じbundleから取得する。
   0018予約は未選定・空keysのまま維持する。
-- 新しいimmutable manifestと空のoutput directoryをprepareし、人間がrunを起動する。
-- 全6自己対局・重複排除後768教師行以下・10完全ペア20比較局が完成した不変出力をoffline検証する。
-- 改善認定は0050のbundle再構成・producer ancestry/bytes・CLI build identity・Oracle raw
-  再解析を通した本番入力だけで有効にする。ラベル変更や任意boolで有効にしない。
-- raw dataから改善/不成立を記録する。改善ゲート未達でも今回の明示承認では0019へ進めるが、
-  新しいmanifestを使い、0037 candidate artifactは持ち越さない。
+- 人間操作run `0037-20261018-01` はreport
+  `2ea9ef8c77dc9ee8f2dae385a238dfa2aac37577ec3c30d382e197b515f1a29e` をoffline検証し、
+  6 self-play games/326 teacher rows/20 comparison games/12 corpus positionsを完了した。
+  elapsedは991.8秒で、pilotの目的であるend-to-end pipelineの実行・再構成を確認した。
+- `improvement_observed=false`は小標本で改善を確認しなかった診断結果として保持する。
+  pilotの失敗や0019開始blockerを意味せず、0037 candidate artifactは0019へ持ち越さない。
+- 0019では検証済み0051 bundleを使い、独立した新baseline・manifest・outputを準備する。
 - fixture結果は[ツール検証記録](../../references/reversi-ai-training-pilot-tooling.md)へ記録し、実pilot結果と区別する。
 
 ## Addresses

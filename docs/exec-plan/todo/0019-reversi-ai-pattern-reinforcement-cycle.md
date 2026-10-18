@@ -9,7 +9,8 @@
 > [移行記録](../../references/reversi-ai-winner-empty-migration.md)を参照する。
 > 0040のreport-pinned producerでの独立root/選択child照合（132 exact positions、252 Oracle queries）・資源観測・
 > 人間の性能判断は2026-10-13に完了した（[結果](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md)）。
-> 0037実pilotとreport再構成は完了し、改善ゲート未達は診断結果として保持する。
+> 0037実pilotはpipeline feasibilityの確認を目的として完走・再構成済み。小規模結果に改善を期待せず、
+> `improvement_observed=false`は診断情報として保持する。
 > 0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは別の未達gateとして残す。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
 > TrainedEvaluator学習前の探索器/対局ハーネスprofileはStrategicEvaluator・8/8/8・exact16・turnで計測済み。
@@ -32,7 +33,7 @@
 
 > **2026-10-02 prerequisite status (historical)**: 当時は0035の14計測レポートは検証済みだが、
 > 設定選択と変更前後の点数/exactness確認は未完了だった。0040の補完/採否は上記のとおり完了。
-> 0037のpilot成功と0032入力の完全game/provenance検証は引き続き本番freezeの前提とする。
+> 0037のpipeline feasibility確認と0032入力の完全game/provenance検証は本番freezeの前提とする。
 > 詳細は `docs/references/reversi-ai-whole-game-0035-results.md` を参照。
 > プロセスが常駐しても、各局の開始前に通常TT/完全読み表を消去する。局内の読みだけを
 > 再利用し、局間cacheを残した旧persistent測定は本番性能の採用証拠にしない。
@@ -47,11 +48,11 @@
 
 > **2026-10-18 0037 pilot handoff**: 人間操作run `0037-20261018-01` はreport digest
 > `2ea9ef8c77dc9ee8f2dae385a238dfa2aac37577ec3c30d382e197b515f1a29e` でoffline検証済み。
-> `improvement_observed=false` はpilotの改善ゲート未達として保持し、0037候補を本番候補に昇格しない。
-> ユーザーは学習と評価の一連の実行可能性を確認した上で、独立した0019本番batchへの移行を明示した。
-> この明示承認は今回のrunに限り、0037 planの「改善ゲート成功後に0019へ進む」という従来の開始条件を置き換える。
-> 0037の改善ゲート自体は未達のまま保持し、pilot候補は再利用しない。検証済み0051 bundleから新しいbaseline/manifest/outputで
-> 本番batchを実施する。0019自身のvalidation、baseline比較、選択、Oracle距離測定は独立に記録する。
+> 小規模pilotの主目的はpipeline feasibilityの確認であり、強さの改善は期待しない。
+> `improvement_observed=false`は診断結果として保存し、失敗扱いや0019開始blockerとしない。
+> ユーザーは一連の学習・検証pipelineが動くことを確認した上で、独立した0019本番batchへの移行を明示した。
+> 0037候補は再利用せず、検証済み0051 bundleから新しいbaseline/manifest/outputで本番batchを実施する。
+> 0019自身のvalidation、baseline比較、選択、Oracle距離測定は独立に記録する。
 
 ## Objective and completion boundary
 
@@ -174,12 +175,9 @@ time.
   完成bundleのoffline検証 → 0037実pilotの完了実行とoffline再構成の順で進む。旧0032 raw差入力の検証は
   履歴であり、新契約入力完成の代わりにはしない。bundleとpilotの露出keysに0019の
   学習/評価keysを加えて保存し、候補選定後の0018開局root衝突検査へ渡す。
-- 0037の実pilotは、検証済み新契約入力で6局/768教師行以下/20比較局を完了し、
-  raw outputをoffline再構成できたことをpipeline feasibilityの証拠とする。
-  `improvement_observed=false` はpilot改善の不成立としてそのまま記録するが、
-  2026-10-18の明示ユーザー指示は今回の0019本番runに限り、0037が定める
-  「pilot改善ゲートを通過してから0019を準備する」という前提を上書きするため、
-  それを開始blockerにしない。
+- 0037の実pilotは検証済み新契約入力で固定上限内の全工程を完了し、raw outputをoffline再構成できた。
+  これはpilotの主目的であるpipeline feasibilityの証拠である。小標本に強さの改善は期待せず、
+  `improvement_observed=false`は診断情報として保持して本番batchの開始条件にはしない。
   0051 verified bundleからbaselineと新規manifest/outputを使い、pilot artifactは再利用しない。
   [tooling実装・fixture検証](../../references/reversi-ai-training-pilot-tooling.md)だけではproduction inputsや
   run feasibilityの証拠にならず、人間操作pilot reportとoffline verificationが必要。

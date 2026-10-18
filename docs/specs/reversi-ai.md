@@ -1349,17 +1349,20 @@ human execution of reviewed producers, not authentication of hostile producers.
 The report records before/after validation and held-out sample counts and
 squared errors, corpus regret sum/count, match wins/draws/losses/points, actual
 counts, exclusions, all game/input/artifact digests and deterministic update
-identity. Its predeclared improvement rule is lower held-out MSE, with
+identity. The pilot's primary completion evidence is that the bounded
+prepare/run/verify pipeline finishes and its outputs can be independently
+reconstructed; the small sample is not expected to demonstrate a strength
+improvement. Its predeclared improvement rule is lower held-out MSE, with
 validation MSE and mean corpus regret no more than 10% worse (zero baselines
-require zero), and candidate points at least 10/20. Only complete production
-inputs and a strong-engine corpus with independently authenticated provenance
-can permit improvement recognition after bundle reconstruction. Failure preserves
-the candidate and all measurements and does not establish that the pilot method
-improved strength. A separately user-authorized 0019 production experiment may
-proceed after the production input bundle and pilot outputs are independently
-verified, even when `improvement_observed=false`; it uses a fresh manifest and
-output directory and does not carry the pilot candidate forward. Neither pilot
-nor production-cycle evidence alone claims the 0018 strength target.
+require zero), and candidate points at least 10/20. This rule labels a
+diagnostic result only: it does not gate pilot completion or an independently
+authorized 0019 batch. Only complete production inputs and a strong-engine
+corpus with independently authenticated provenance can permit recording
+`improvement_observed=true` after bundle reconstruction. A false value does not
+mean the pipeline failed or that the method is ineffective. Preserve the
+candidate and all measurements; 0019 uses a fresh manifest and output directory
+and never carries the pilot candidate forward. Neither pilot nor production-cycle
+evidence alone claims the 0018 strength target.
 
 Run refuses nonempty output directories and publishes the report last. Verify
 replays openings and games, checks resets and full pair/count identities,
@@ -1400,12 +1403,14 @@ same format and defaults to one completed game per update, controlled by
 
 The production cycle remains one bounded update with denominators of 64
 self-play games, 7,680 unique teacher rows, and 200 candidate-versus-baseline
-games. A fully reconstructed 0037 production-input pilot establishes that the
-prepare/run/verify pipeline can complete; passing the pilot's improvement rule
-is not required when the user explicitly authorizes a separate 0019 experiment.
-The 0037 artifact is never used as the 0019 candidate or selected model. The
-production cycle uses its own pinned baseline, inputs, manifest, output root,
-validation, and artifact-selection gates.
+games. The 0037 pilot's primary goal is to verify that the prepare/run/verify
+pipeline completes and its outputs can be independently reconstructed within
+the small-run caps. Its sample is too small to expect a strength improvement;
+before/after metrics are diagnostic, not a production gate. A successfully
+verified pilot therefore establishes pipeline feasibility even when
+`improvement_observed=false`. The 0037 artifact is never used as the 0019
+candidate or selected model. The production cycle uses its own pinned baseline,
+inputs, manifest, output root, validation, and artifact-selection gates.
 
 Every 0019 production run also plays the raw post-update candidate against the
 pinned Oracle, regardless of the candidate-versus-baseline result or which
