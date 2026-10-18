@@ -9,7 +9,9 @@
 > [移行記録](../../references/reversi-ai-winner-empty-migration.md)を参照する。
 > 0040のreport-pinned producerでの独立root/選択child照合（132 exact positions、252 Oracle queries）・資源観測・
 > 人間の性能判断は2026-10-13に完了した（[結果](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md)）。
-> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは別の未達gateとして残す。
+> 0037実pilotはpipeline feasibilityの確認を目的として完走・再構成済み。小規模結果に改善を期待せず、
+> `improvement_observed=false`は診断情報として保持する。
+> 0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは別の未達gateとして残す。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
 > TrainedEvaluator学習前の探索器/対局ハーネスprofileはStrategicEvaluator・8/8/8・exact16・turnで計測済み。
 > 平均3.77秒、nearest-rank P95 8.08秒で、当該profileに広い探索最適化を加える根拠はない。
@@ -31,7 +33,7 @@
 
 > **2026-10-02 prerequisite status (historical)**: 当時は0035の14計測レポートは検証済みだが、
 > 設定選択と変更前後の点数/exactness確認は未完了だった。0040の補完/採否は上記のとおり完了。
-> 0037のpilot成功と0032入力の完全game/provenance検証は引き続き本番freezeの前提とする。
+> 0037のpipeline feasibility確認と0032入力の完全game/provenance検証は本番freezeの前提とする。
 > 詳細は `docs/references/reversi-ai-whole-game-0035-results.md` を参照。
 > プロセスが常駐しても、各局の開始前に通常TT/完全読み表を消去する。局内の読みだけを
 > 再利用し、局間cacheを残した旧persistent測定は本番性能の採用証拠にしない。
@@ -43,6 +45,14 @@
 > 0043実装後の既定は手番ごとにexact tableを消去し、再利用の不一致が未解決のまま新本番runを凍結しない。
 > 0045の12/8/12・exact20・各3局は実験用検証であり、本番exact16や学習batch局数を変更しない。
 > 再利用や閾値20の本番採用は明示承認とproduction spec/manifest互換更新後にだけ行う。
+
+> **2026-10-18 0037 pilot handoff**: 人間操作run `0037-20261018-01` はreport digest
+> `2ea9ef8c77dc9ee8f2dae385a238dfa2aac37577ec3c30d382e197b515f1a29e` でoffline検証済み。
+> 小規模pilotの主目的はpipeline feasibilityの確認であり、強さの改善は期待しない。
+> `improvement_observed=false`は診断結果として保存し、失敗扱いや0019開始blockerとしない。
+> ユーザーは一連の学習・検証pipelineが動くことを確認した上で、独立した0019本番batchへの移行を明示した。
+> 0037候補は再利用せず、検証済み0051 bundleから新しいbaseline/manifest/outputで本番batchを実施する。
+> 0019自身のvalidation、baseline比較、選択、Oracle距離測定は独立に記録する。
 
 ## Objective and completion boundary
 
@@ -60,13 +70,35 @@ game outcomes. Completion records the frozen self-play configuration, inputs,
 seed, update rule, candidate and baseline artifact digests, held-out metrics,
 and an oracle corpus-regret report. It establishes evidence for a candidate;
 it does not tune on 0018's held-out openings, claim the 50% win line, alter
-runtime search semantics, or add human-facing explanations.
+runtime search semantics, or add human-facing explanations. It also records an
+unconditional direct match of the raw candidate against 0018's restricted
+Oracle profile, even if the candidate loses to baseline or the baseline is
+selected.
 
 The reinforcement cycle is a human-operated long-running job. A human starts
 it in a separate terminal from the generated frozen manifest; an AI agent does
 not start, wait for, poll, monitor, or claim completion of that job. A later
 task receives only its immutable artifact/report paths and digests, validates
 them, and then decides whether 0018 may freeze the candidate.
+
+### Pilot-grounded runtime estimate
+
+The completed 0037 run `0037-20261018-01` has 6 self-play games, 326 teacher
+rows, 20 candidate comparison games, and 12 Oracle corpus positions. Its
+human-run progress log reported 991.8 seconds elapsed through final offline
+verification. Scaling the measured end-to-end time by the 0019 production
+denominators (64/6 = 10.67x for self-play and 200/20 = 10x for comparison)
+gives an initial core-cycle estimate of 9,918–10,579 seconds (2h45m–2h56m).
+This includes pilot-style offline verification, uses game-count scaling, and
+is not a runtime guarantee.
+
+The estimate excludes the new 20-game match under 0018's restricted Oracle
+profile. The 0037 elapsed time does not isolate this candidate-versus-Oracle
+pairing at Oracle depth 6/6/6 with exact solving from 12 empties. Before handing
+the human-operated command over, estimate that stage from representative
+positions under those exact settings and show its 20-game projection plus the
+combined total. Do not present the 2h45m–2h56m core estimate as the total run
+time.
 
 ## Existing references
 
@@ -81,13 +113,18 @@ them, and then decides whether 0018 may freeze the candidate.
 
 ## Change map
 
-- (MODIFY) `docs/specs/reversi-ai.md` -- self-play input provenance, one-cycle
-  update/selection rules, and separation of tuning from acceptance openings.
+- (MODIFY) `docs/specs/reversi-ai.md` -- self-play input provenance, pilot-to-
+  production handoff, Oracle distance match, runtime estimate, and separation
+  of tuning from acceptance openings.
 - (MODIFY) `tools/reversi-ai-training/training.py` and tests -- deterministic
   self-play generation, bounded TD-style outcome update, artifact selection,
-  and fail-closed manifest/report validation.
+  unconditional Oracle match, and fail-closed manifest/report validation.
+- (MODIFY) `tools/reversi-ai-oracle/oracle.py`, README, Makefile, and tests --
+  the pinned `oracle-0018-acceptance-v1` Oracle profile (6/6/6, exact12), its
+  0019 diagnostic match records, and per-stage runtime/progress reporting.
 - (NEW) versioned tiny self-play fixture, immutable candidate report schema,
-  and Make targets/scripts for the bounded cycle and corpus-regret evidence.
+  and Make targets/scripts for the bounded cycle, corpus-regret evidence, and
+  Oracle distance match.
 - (MODIFY) `docs/exec-plan/todo/0018-reversi-ai-strong-engine-acceptance.md`
   -- depend on this candidate-production evidence before freezing acceptance.
 
@@ -113,18 +150,42 @@ them, and then decides whether 0018 may freeze the candidate.
 5. Run corpus regret under the frozen 0011 profile as evidence only. The 0018
    held-out suite remains unread and unused until it freezes the selected
    artifact and configuration for its own win-rate test.
+6. Regardless of the baseline comparison or artifact-selection result, play the
+   raw updated candidate for 20 games against Egaroucid using the same pair of
+   profiles planned for 0018: Oracle `oracle-0018-acceptance-v1` at 6/6/6 with
+   exact solving from 12 empties, and the project candidate at 12/12/12 with
+   exact solving from 16 empties. Pin both sides' executable/depth/limit
+   profiles and verify actual completed depth and exactness for every position.
+   Use ten predeclared legal openings with colors swapped, bookless Oracle,
+   one thread, and hash 25. This 20-game result measures distance to the goal;
+   it is diagnostic only, does not gate 0019 artifact selection, and does not
+   replace 0018's final `candidate wins / all games >= 0.50` acceptance test.
+   Keep its openings disjoint from all training/selection exposure and from
+   0018's held-out suite. Save its opening, decision, and terminal exposure
+   keys in the report for 0018's later collision check.
+7. Present every Reversi AI match and board/score analysis, including 0037 and
+   later 0018 results, with the artifact/opponent,
+   sample size, configured opening/midgame/endgame depths, exact-solve threshold
+   in remaining empty squares, and the actual per-position completed depth and
+   exact flag. Report wins, draws, losses and match points separately.
 
 ## Dependencies and sequencing
 
 - 0050 toolingマージ → 0051のwinner-empty入力生成・baseline再学習・Oracle原本保存と
-  完成bundleのoffline検証 → 0037の実pilot成功の順で進む。旧0032 raw差入力の検証は
+  完成bundleのoffline検証 → 0037実pilotの完了実行とoffline再構成の順で進む。旧0032 raw差入力の検証は
   履歴であり、新契約入力完成の代わりにはしない。bundleとpilotの露出keysに0019の
   学習/評価keysを加えて保存し、候補選定後の0018開局root衝突検査へ渡す。
-- 0037の実pilotを、新契約の独立入力と単段階6局/768教師行以下/20比較局で完成させる。
-  `pattern-pilot-verify`がraw dataからheld-out誤差改善と他指標の悪化上限を確認した場合だけ、
-  0019の新規本番manifestを別directoryで凍結する。
-  [ツール実装・fixture検証](../../references/reversi-ai-training-pilot-tooling.md)だけではこの依存を満たさない。
-  不成立時はcandidate artifactと結果を保存して方法を再計画する。
+- 0037の実pilotは検証済み新契約入力で固定上限内の全工程を完了し、raw outputをoffline再構成できた。
+  これはpilotの主目的であるpipeline feasibilityの証拠である。小標本に強さの改善は期待せず、
+  `improvement_observed=false`は診断情報として保持して本番batchの開始条件にはしない。
+  0051 verified bundleからbaselineと新規manifest/outputを使い、pilot artifactは再利用しない。
+  [tooling実装・fixture検証](../../references/reversi-ai-training-pilot-tooling.md)だけではproduction inputsや
+  run feasibilityの証拠にならず、人間操作pilot reportとoffline verificationが必要。
+- 本番の64 self-play games/7,680 teacher rows/200 comparison gamesに対し、
+  0037実測elapsed 991.8秒（6/326/20/12）からの線形投影は2h45m–2h56m。
+  これは0019本体とpilot形式のoffline verificationの予測値としてcommand handoffに提示する。
+  `oracle-0018-acceptance-v1`の20局（Oracle 6/6/6・exact12、candidate 12/12/12・exact16）は含まない。
+  このprofileの代表局面を測って20局分のprojectionを算出し、合算した総予測時間も人間run開始前に提示する。
 
 - 0032 is completed in [PR #223](https://github.com/yoskeoka/reversi-adventure/pull/223),
   and its plan was deleted. Revalidation before this freeze belongs to 0019:
@@ -159,6 +220,17 @@ them, and then decides whether 0018 may freeze the candidate.
 - Validate the selected artifact through `TrainedEvaluator` and run the
   evaluation-only candidate CLI with the frozen configuration.
 - Generate the corpus-regret report; confirm it is not an 0018 opening suite.
+- Verify the 0018-profile Oracle match runs even when the candidate loses the baseline
+  gate or baseline remains selected; replay all 20 games and reject any
+  position with an incomplete required exact solve.
+- Verify the frozen human-run summary shows the 2h45m–2h56m core estimate and a
+  separately measured Oracle-match estimate plus combined total before the
+  human starts the long-running command.
+- Check every surfaced match/board/score result includes configured and actual
+  search depths and exact-solve settings.
+- Verify flushed stderr stage boundaries, root-decision and offline-verification
+  formats, `--progress-every` default/validation, per-phase interval behavior,
+  forced final updates, and exclusion of diagnostics from immutable artifacts.
 - Applicable Rust/Python tests, Clippy, workflow lint, and `git diff --check`.
 
 ## Addresses

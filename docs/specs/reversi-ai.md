@@ -1349,13 +1349,20 @@ human execution of reviewed producers, not authentication of hostile producers.
 The report records before/after validation and held-out sample counts and
 squared errors, corpus regret sum/count, match wins/draws/losses/points, actual
 counts, exclusions, all game/input/artifact digests and deterministic update
-identity. Its predeclared improvement rule is lower held-out MSE, with
+identity. The pilot's primary completion evidence is that the bounded
+prepare/run/verify pipeline finishes and its outputs can be independently
+reconstructed; the small sample is not expected to demonstrate a strength
+improvement. Its predeclared improvement rule is lower held-out MSE, with
 validation MSE and mean corpus regret no more than 10% worse (zero baselines
-require zero), and candidate points at least 10/20. Only complete production
-inputs and a strong-engine corpus with independently authenticated provenance
-can permit improvement recognition after bundle reconstruction. Failure preserves
-the candidate and all measurements;
-it never authorizes 0019 or claims the 0018 strength target.
+require zero), and candidate points at least 10/20. This rule labels a
+diagnostic result only: it does not gate pilot completion or an independently
+authorized 0019 batch. Only complete production inputs and a strong-engine
+corpus with independently authenticated provenance can permit recording
+`improvement_observed=true` after bundle reconstruction. A false value does not
+mean the pipeline failed or that the method is ineffective. Preserve the
+candidate and all measurements; 0019 uses a fresh manifest and output directory
+and never carries the pilot candidate forward. Neither pilot nor production-cycle
+evidence alone claims the 0018 strength target.
 
 Run refuses nonempty output directories and publishes the report last. Verify
 replays openings and games, checks resets and full pair/count identities,
@@ -1391,6 +1398,105 @@ The one-command entry point also emits
 `stage pilot-prepare start/done elapsed=<seconds>s`; its game progress uses the
 same format and defaults to one completed game per update, controlled by
 `PILOT_PROGRESS_EVERY`.
+
+## Production reinforcement batch and Oracle distance (0019)
+
+The production cycle remains one bounded update with denominators of 64
+self-play games, 7,680 unique teacher rows, and 200 candidate-versus-baseline
+games. The 0037 pilot's primary goal is to verify that the prepare/run/verify
+pipeline completes and its outputs can be independently reconstructed within
+the small-run caps. Its sample is too small to expect a strength improvement;
+before/after metrics are diagnostic, not a production gate. A successfully
+verified pilot therefore establishes pipeline feasibility even when
+`improvement_observed=false`. The 0037 artifact is never used as the 0019
+candidate or selected model. The production cycle uses its own pinned baseline,
+inputs, manifest, output root, validation, and artifact-selection gates.
+
+Every 0019 production run also plays the raw post-update candidate against the
+pinned Oracle, regardless of the candidate-versus-baseline result or which
+artifact the baseline-selection gate selects. This direct match is diagnostic
+evidence for distance to the project goal; it does not change 0019's artifact
+selection and does not replace 0018 acceptance. Use 20 complete games from ten
+predeclared legal openings, with each opening replayed once per color. The
+suite is disjoint from self-play, candidate-selection inputs, and 0018 held-out
+openings. Record the Oracle-match opening, decision, and terminal exposure keys
+in the 0019 report so 0018 can exclude them. The existing Oracle corpus-regret
+analysis remains a separate metric.
+
+The Oracle opponent profile for the 0019 diagnostic and the later 0018
+acceptance is `oracle-0018-acceptance-v1`. It pins Egaroucid identity, bookless
+operation, one thread, hash level 25, score semantics, and resource limits.
+The Oracle uses 6/6/6 opening/midgame/endgame depths and starts exact solving
+at 12 or fewer empty squares. A position in that exact region counts as solved
+only when the saved result is exact and completed depth equals the remaining
+empty squares. The project candidate uses 12/12/12 and exact16, matching the
+candidate side of the planned 0018 comparison. Record both sides' configured
+and completed depths, exact thresholds, and per-position exact flags.
+
+The 0019 match is a 20-game distance diagnostic and does not apply a pass/fail
+win-rate gate. The final goal remains 0018's held-out `candidate wins / all
+games >= 0.50` under the same Oracle and candidate search profiles, with its
+predeclared sample size and confidence rule. A 12/12/12 exact16 strong-AI
+teacher-evaluation setting is a separate training-data use; it is not the
+Oracle opponent profile for this goal-distance match.
+
+Every human-facing Reversi AI match, board, or score summary (including 0037,
+0019, and 0018 results) identifies the evaluated artifact and opponent, game or
+position count, opening/midgame/endgame search depths, exact-solve threshold in
+remaining empty squares, and whether each reported position actually completed
+an exact solve. A bare score or win rate without these settings is incomplete
+evidence.
+
+The 0037 run `0037-20261018-01` produced report digest
+`2ea9ef8c77dc9ee8f2dae385a238dfa2aac37577ec3c30d382e197b515f1a29e`; its
+human-run progress log reported 991.8 seconds through final offline
+verification for 6 self-play games, 326 teacher rows, 20 candidate comparison
+games, and 12 Oracle corpus positions. Linear scaling to 64 self-play games
+(64/6 = 10.67x) and 200 candidate comparison games (200/20 = 10x) gives an
+initial 0019 core-cycle estimate of 9,918–10,579 seconds (2h45m–2h56m),
+including the pilot-style offline verification. This estimate uses game-count
+scaling and is not a runtime guarantee. It does not include the new 20-game
+match under `oracle-0018-acceptance-v1` (Oracle 6/6/6, exact12; candidate
+12/12/12, exact16). The 0037 elapsed time does not isolate this paired profile.
+Before handing the human-operated production command over, report a separate
+20-game projection from representative positions under these settings and show
+both the core estimate and the combined estimate. Do not present the core
+estimate as the total runtime.
+
+The human-operated one-command runner writes flushed diagnostics to stderr
+only; they never enter manifests, game records, reports, or digests. It reuses
+the existing stage forms `stage NAME start elapsed=S.s` and
+`stage NAME done stage=S.s elapsed=S.s`. Stage names are `input-verification`,
+`self-play`, `baseline-match`, `corpus-regret`, `oracle-match`,
+`offline-verification`, and `publication`; emit both boundary lines for every
+stage, including the final stage. `--progress-every N` is a positive integer,
+defaults to `1`, and controls each progress stream independently. Emit an item
+at each interval multiple and force the final item for every game/phase even
+when it is not an interval multiple.
+
+After a completed search at each played Oracle-match root, report the moving
+engine's actual result as
+`progress oracle-match game=G root_decision=D engine=ENGINE empties=E configured_depth=C completed_depth=A exact_threshold=T exact=BOOL root=S.s elapsed=S.s`.
+`G` and `root_decision` are one-based within the match and game; `ENGINE` is `candidate` or
+`oracle`; depths are in plies; `E` is remaining empty squares. Count root
+decisions separately per game for rate limiting, and always emit that game's
+last root decision. Forced passes do not create search-root records. Match
+completion still writes the existing game-level `progress oracle-match
+game=N N/total game=S.s elapsed=S.s` update, including the last game.
+
+During offline verification, use the same flushed stderr and stage-boundary
+forms. Replayed game progress is
+`progress offline-verification phase=PHASE game=G completed=N/total game=S.s elapsed=S.s`,
+where `PHASE` is `self-play`, `baseline-match`, or `oracle-match`; each phase's
+total comes from the frozen manifest/report. Oracle root replay uses
+`progress offline-verification phase=oracle-root game=G root_decision=D completed=N/total-root-decisions root=S.s elapsed=S.s configured_depth=C completed_depth=A exact_threshold=T exact=BOOL empties=E`.
+Corpus replay uses
+`progress offline-verification phase=corpus position_id=ID completed=N/total-positions item=S.s elapsed=S.s`.
+Rate-limit each phase independently using `--progress-every N`, and force the
+final game, root, or position update for each phase. A missing game, mismatched
+depth/exactness record, or incomplete required exact solve fails the
+direct-match/verification stage without silently substituting the weaker
+corpus profile.
 
 ## Training input bundle (0050)
 
@@ -1647,12 +1753,20 @@ tuning or CI limit, not the production fairness budget. Interrupted exact
 searches retain only a legal fallback or wholly completed result, with
 `exact = false` and no partial exact score/PV.
 
-The profile is a calibration baseline, not proof of the final strength target.
-That target must be evaluated separately on a declared held-out,
-color-swapped, opening-rotated suite and report `wins / all games >= 0.50`
-separately from match points (where a draw is 0.5), with a sample-size and
-confidence rule. `ci-smoke-v1` remains a distinct small, bounded profile and
-cannot be used to assert calibration or final strength.
+`strong-engine-hcap-v1` is a calibration/reference profile, not proof of the
+final strength target. The 0018 acceptance Oracle is separately pinned as
+`oracle-0018-acceptance-v1`: Egaroucid Console v7.8.1, bookless, one thread,
+hash level 25, fixed 6/6/6 across opening/midgame/endgame, and exact solving
+from 12 or fewer empty squares. The project candidate uses 12/12/12 and
+exact16, preserving the search-cost handicap. The 0019 20-game Oracle match
+uses this same pair of search profiles as a distance diagnostic; 0018 later
+tests the final candidate on its held-out suite and requires
+`wins / all games >= 0.50`, reported separately from match points (where a draw
+is 0.5), with its predeclared sample-size and confidence rule. A 12/12/12
+exact16 setting used to compare stronger-AI teacher evaluations is a separate
+training-data use and does not define the Oracle opponent. `ci-smoke-v1` remains
+a distinct small, bounded profile and cannot establish calibration or final
+strength.
 
 ### Explicit search settings and score-contract audit
 

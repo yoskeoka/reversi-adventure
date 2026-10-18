@@ -13,16 +13,20 @@
 > higher exact thresholdでのgame-scope採否は0035で保留し、学習方法が必要とした場合に判断する。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
 
-> **Dependency**: 0019 now selects its candidate under the version-2 direct-match contract and does not require source/seed replay. Keep this plan's restricted-oracle profile and win-rate target; freeze its opening suite only after that selected candidate is independently verified.
+> **Dependency**: 0019 now selects its candidate under the version-2 direct-match contract and does not require source/seed replay. Freeze its opening suite only after that selected candidate is independently verified. This plan's Oracle is `oracle-0018-acceptance-v1` (6/6/6, exact12); the project candidate uses 12/12/12, exact16.
 
 ## Objective and completion boundary
 
 Run the final held-out evidence suite for the project-owned strong engine under
-the calibrated external-oracle handicap profile. Completion establishes whether
-the engine wins at least 50% of games against the restricted oracle. The frozen
-candidate includes a completed, accepted project-owned opening book when one
-exists; otherwise it is explicitly bookless. It does not retune the engine
-during the held-out run or claim parity with unrestricted world-class engines.
+the restricted Oracle profile `oracle-0018-acceptance-v1`. Egaroucid uses
+opening/midgame/endgame depths 6/6/6 and exact solving from 12 or fewer empty
+squares. The project candidate uses 12/12/12 and exact solving from 16 or fewer
+empty squares; this search-cost handicap is part of the target comparison.
+Completion establishes whether the engine wins at least 50% of games against
+that restricted Oracle. The frozen candidate includes a completed, accepted
+project-owned opening book when one exists; otherwise it is explicitly
+bookless. It does not retune the engine during the held-out run or claim parity
+with unrestricted world-class engines.
 
 ## Existing references
 
@@ -38,18 +42,19 @@ during the held-out run or claim parity with unrestricted world-class engines.
 - (MODIFY) `docs/specs/reversi-ai.md` -- final suite identity, lock/freeze
   rules, result schema, sample size, and confidence requirement.
 - (MODIFY) `tools/reversi-ai-oracle/oracle.py`, tests, README, and Makefile --
-  held-out suite selection, color-swapped opening matrix, and summary checks.
+  `oracle-0018-acceptance-v1` (6/6/6, exact12), held-out suite selection,
+  color-swapped opening matrix, and summary checks.
 - (NEW) versioned held-out opening suite and immutable acceptance report.
 - (DELETE) `docs/issues/0005-trained-evaluator.md` and parent 0009 only after
   the approved acceptance result and implementation closeout.
 
 ## Black-box contract and work
 
-1. Freeze source commit, candidate weight artifact, all `AiConfig` reading
-   depths and exact-solver threshold, accepted book artifact and `--book` mode
-   (or an explicit bookless declaration), `strong-engine-hcap-v1`, opening
-   suite digest, suite seed, hardware/resource declaration, and report schema
-   before the first held-out game.
+1. Freeze source commit, candidate weight artifact, candidate depths
+   12/12/12 and exact16, the Oracle profile `oracle-0018-acceptance-v1` at
+   6/6/6 and exact12, accepted book artifact and `--book` mode (or an explicit
+   bookless declaration), opening suite digest, suite seed, hardware/resource
+   declaration, and report schema before the first held-out game.
 2. Use legal, diverse opening prefixes; pair each with reversed colors and
    symmetry rotations where applicable. No opening or position used for 0019
    self-play tuning or artifact selection may enter this suite; check its
