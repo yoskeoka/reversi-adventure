@@ -1386,9 +1386,48 @@ prints `pilot verified report=<absolute-path> digest=<sha256>` to stdout. This
 entry point consumes the existing 0051 bundle and never regenerates its
 production inputs or starts additional Oracle solves.
 
+The production entry point is `make pattern-reinforcement-execute`, a thin
+wrapper around the same `tools/reversi-ai-training/pilot.py execute` path used
+by `make pattern-pilot-execute`; there is no production-mode switch or second
+orchestrator. The pilot target passes its bounded 6 self-play / 20 comparison /
+0 direct Oracle-match counts. The production target passes overrideable Make
+variables `REINFORCEMENT_SELF_PLAY_GAMES` (default 64),
+`REINFORCEMENT_COMPARISON_GAMES` (default 200), and
+`REINFORCEMENT_ORACLE_GAMES` (default 20). The direct CLI requires explicit
+`--self-play-games`, `--baseline-comparison-games`, and `--oracle-match-games`
+values. Production requires a positive Oracle-match count; game counts must
+preserve color-swapped pairs. The runner pins requested and actual counts in
+the manifest and report, so operators can change counts without editing
+Python source.
+
+A human starts a new cycle once with the verified 0051 bundle and receipt, the
+pinned candidate executable, an absolute run-root path outside the checkout,
+and the requested counts. It creates the 0019 manifest, verifies inputs, runs
+self-play, baseline comparison and selection, corpus regret, and the
+unconditional 0018-profile Oracle match, then performs offline verification
+and publishes the report. It stops at the first failure and preserves partial
+attempt evidence. The command does not require separate manual reinforcement
+prepare/run/verify or Oracle-match commands and does not regenerate the 0051
+production input bundle.
+
+For `--resume-from PHASE`, the operator supplies the existing run root and
+unchanged counts/settings. Supported phases are `input-verification`,
+`self-play`, `candidate-update`, `baseline-match`, `candidate-selection`,
+`corpus-regret`, `oracle-match`, and `offline-verification`; the selected phase
+is the first phase to execute. The runner verifies the frozen manifest and
+every completed predecessor phase receipt and output digest before continuing;
+it rejects missing, altered, incomplete, or mismatched evidence. It reuses
+only complete phase-verified outputs and writes a retry of the selected phase
+to a new attempt directory. A changed count or other frozen setting requires
+a new manifest and run root, and cannot reuse old outputs as a resume. Make
+exposes the same option as `REINFORCEMENT_RESUME_FROM`. The one-command path
+still performs final offline verification before publishing the report.
+
 Progress is flushed on stderr with `stage <name> start/done elapsed=<seconds>s`
 and `progress <kind> pair=<n> member=<n> <done>/<total> game=<seconds>s
-elapsed=<seconds>s`. Completed games are the work unit (6 self-play, 20 match);
+elapsed=<seconds>s`. Completed games are the work unit (6 self-play and 20
+comparison games for the bounded pilot; production totals come from its
+manifest);
 corpus queries count one player's completed decision, totaling twice the retained
 position count. Default interval is one;
 positive `--progress-every N` limits ordinary updates and always emits the last
@@ -1416,12 +1455,14 @@ Every 0019 production run also plays the raw post-update candidate against the
 pinned Oracle, regardless of the candidate-versus-baseline result or which
 artifact the baseline-selection gate selects. This direct match is diagnostic
 evidence for distance to the project goal; it does not change 0019's artifact
-selection and does not replace 0018 acceptance. Use 20 complete games from ten
-predeclared legal openings, with each opening replayed once per color. The
-suite is disjoint from self-play, candidate-selection inputs, and 0018 held-out
-openings. Record the Oracle-match opening, decision, and terminal exposure keys
-in the 0019 report so 0018 can exclude them. The existing Oracle corpus-regret
-analysis remains a separate metric.
+selection and does not replace 0018 acceptance. The Make default is 20 complete
+games from ten predeclared legal openings, with each opening replayed once per
+color. `--oracle-match-games` selects another positive even game count, using
+one legal opening per color-swapped pair. The suite is disjoint from self-play,
+candidate-selection inputs, and 0018 held-out openings. Record the requested
+and completed game counts and the Oracle-match opening, decision, and terminal
+exposure keys in the 0019 report so 0018 can exclude them. The existing Oracle
+corpus-regret analysis remains a separate metric.
 
 The Oracle opponent profile for the 0019 diagnostic and the later 0018
 acceptance is `oracle-0018-acceptance-v1`. It pins Egaroucid identity, bookless
@@ -1433,10 +1474,11 @@ empty squares. The project candidate uses 12/12/12 and exact16, matching the
 candidate side of the planned 0018 comparison. Record both sides' configured
 and completed depths, exact thresholds, and per-position exact flags.
 
-The 0019 match is a 20-game distance diagnostic and does not apply a pass/fail
-win-rate gate. The final goal remains 0018's held-out `candidate wins / all
-games >= 0.50` under the same Oracle and candidate search profiles, with its
-predeclared sample size and confidence rule. A 12/12/12 exact16 strong-AI
+The 0019 match is a distance diagnostic and does not apply a pass/fail win-rate
+gate; its default sample size is 20 games and the manifest records any override.
+The final goal remains 0018's held-out `candidate wins / all games >= 0.50`
+under the same Oracle and candidate search profiles, with its predeclared
+sample size and confidence rule. A 12/12/12 exact16 strong-AI
 teacher-evaluation setting is a separate training-data use; it is not the
 Oracle opponent profile for this goal-distance match.
 
@@ -1455,21 +1497,24 @@ games, and 12 Oracle corpus positions. Linear scaling to 64 self-play games
 (64/6 = 10.67x) and 200 candidate comparison games (200/20 = 10x) gives an
 initial 0019 core-cycle estimate of 9,918–10,579 seconds (2h45m–2h56m),
 including the pilot-style offline verification. This estimate uses game-count
-scaling and is not a runtime guarantee. It does not include the new 20-game
+scaling, assumes the Make defaults of 64 self-play and 200 comparison games,
+and is not a runtime guarantee. Recompute it from the manifest counts whenever
+an operator overrides either value. It does not include the default 20-game
 match under `oracle-0018-acceptance-v1` (Oracle 6/6/6, exact12; candidate
 12/12/12, exact16). The 0037 elapsed time does not isolate this paired profile.
 Before handing the human-operated production command over, report a separate
-20-game projection from representative positions under these settings and show
-both the core estimate and the combined estimate. Do not present the core
-estimate as the total runtime.
+projection for the manifest's Oracle-match game count using representative
+positions under these settings and show both the core estimate and combined
+estimate. Do not present the core estimate as the total runtime.
 
 The human-operated one-command runner writes flushed diagnostics to stderr
 only; they never enter manifests, game records, reports, or digests. It reuses
 the existing stage forms `stage NAME start elapsed=S.s` and
 `stage NAME done stage=S.s elapsed=S.s`. Stage names are `input-verification`,
-`self-play`, `baseline-match`, `corpus-regret`, `oracle-match`,
-`offline-verification`, and `publication`; emit both boundary lines for every
-stage, including the final stage. `--progress-every N` is a positive integer,
+`self-play`, `candidate-update`, `baseline-match`, `candidate-selection`,
+`corpus-regret`, `oracle-match`, `offline-verification`, and `publication`;
+emit both boundary lines for every stage, including the final stage.
+`--progress-every N` is a positive integer,
 defaults to `1`, and controls each progress stream independently. Emit an item
 at each interval multiple and force the final item for every game/phase even
 when it is not an interval multiple.
@@ -1758,8 +1803,9 @@ final strength target. The 0018 acceptance Oracle is separately pinned as
 `oracle-0018-acceptance-v1`: Egaroucid Console v7.8.1, bookless, one thread,
 hash level 25, fixed 6/6/6 across opening/midgame/endgame, and exact solving
 from 12 or fewer empty squares. The project candidate uses 12/12/12 and
-exact16, preserving the search-cost handicap. The 0019 20-game Oracle match
-uses this same pair of search profiles as a distance diagnostic; 0018 later
+exact16, preserving the search-cost handicap. The 0019 Oracle distance match
+uses this same pair of search profiles (default 20 games; the manifest pins
+the selected count); 0018 later
 tests the final candidate on its held-out suite and requires
 `wins / all games >= 0.50`, reported separately from match points (where a draw
 is 0.5), with its predeclared sample-size and confidence rule. A 12/12/12
