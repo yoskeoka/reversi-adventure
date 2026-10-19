@@ -16,7 +16,7 @@
 - `tools/reversi-ai-training/input_bundle.py:74-112,835-856` — `verify_source`, `verify_bundle`, `verify_for_pilot`。producer commit/source hashesとreceipt/artifactを照合する現行契約。
 - `tools/reversi-ai-training/production_cycle.py:128-156,255-280` — production manifest準備時とoffline revalidation時の0051 bundle検証。
 - `tools/reversi-ai-training/pilot.py:175-190,296-316` — shared `bundle_evidence` と bounded pilot input verification。0019の修正がbounded pilotの6/20/0経路を変えないこと。
-- `tools/reversi-ai-training/tests/test_production_cycle.py` — production execute/resume/independent verification tests。
+- `tools/reversi-ai-training/tests/test_pilot.py` — existing `bundle_stub` verifier mock and production execute/resume tests; extend this suite with pinned-checkout cases.
 - 0051 completion artifacts `bundle.json` と `stages/bundle-verify/report.json` — producer checkout/source commit、source digests、成功receiptの具体例。
 
 ## 変更マップ
@@ -24,7 +24,7 @@
 - (MODIFY) `docs/specs/reversi-ai.md` — 0019のbundle再検証に使うproducer checkout/tool identity、fail-closed条件、manifest/offline verifierの一致を規定する。
 - (NEW) `tools/reversi-ai-training/pinned_bundle_verifier.py` — 隔離subprocessでbundleに記録されたproducer checkoutから、そのcheckoutの未変更`input_bundle.py`とproducer modulesを読み込み、検証結果をcanonical JSONで返す。
 - (MODIFY) `tools/reversi-ai-training/production_cycle.py` — manifest準備とoffline再検証の両方を新helper経由にし、0019 execution source identityとproducer verifier identityを別々に記録する。frozen producerの一部である`input_bundle.py`は編集しない。
-- (MODIFY) `tools/reversi-ai-training/tests/test_production_cycle.py` と関連fixture — current 0019 sourceのproducer driftを含む成功、producer sourceの改変/欠落を拒否する失敗、offline再検証を確認する。
+- (MODIFY) `tools/reversi-ai-training/tests/test_pilot.py` と関連fixture — 既存の`bundle_stub` verifier mockを拡張し、current 0019 sourceのproducer driftを含む成功、producer sourceの改変/欠落を拒否する失敗、offline再検証を確認する。
 - (DELETE) `docs/exec-plan/todo/0039-pinned-producer-bundle-verification.md` — 実装PRのverificationとPR準備後に削除する。
 
 ## ブラックボックス契約と作業
