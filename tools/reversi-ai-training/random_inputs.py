@@ -145,7 +145,7 @@ def prepare(path: Path, master: int, counts: dict[str, int], start: int, max_tur
     path.write_bytes(canonical(manifest))
 
 
-def check_manifest(path: Path) -> dict:
+def check_manifest(path: Path, *, require_current_sources: bool = True) -> dict:
     manifest = training.read_json(path)
     if not isinstance(manifest, dict) or set(manifest) != {"schema_version", "generator_version", "source_commit", "base_commit", "generator_sha256", "producer_sources", "license", "source", "seed", "seed_derivation", "random_rule", "split_rule", "counts", "game_ids", "record_start_placements", "max_turns", "output_schema", "score_contract"}:
         reject("invalid generator manifest shape")
@@ -153,24 +153,32 @@ def check_manifest(path: Path) -> dict:
         reject("unsupported generator manifest")
     if manifest["seed_derivation"] != "sha256-prefix64-v1" or manifest["random_rule"] != "splitmix64-rejection-sorted-legal-v1" or manifest["split_rule"] != "splitmix64-fisher-yates-v1":
         reject("unsupported random stream rule")
-    if manifest["generator_sha256"] != training.sha256_file(Path(__file__)):
-        reject("generator source digest mismatch")
+    source_digests = [manifest["generator_sha256"]]
     sources = manifest["producer_sources"]
     if not isinstance(sources, dict) or set(sources) != {"reinforcement.py", "training.py"}:
         reject("invalid producer source digests")
-    for name, module in (("reinforcement.py", reinforcement), ("training.py", training)):
-        if sources[name] != training.sha256_file(Path(module.__file__)):
-            reject(f"producer source digest mismatch: {name}")
+    source_digests.extend(sources.values())
+    if any(not isinstance(value, str) or len(value) != 64
+           or any(character not in "0123456789abcdef" for character in value)
+           for value in source_digests):
+        reject("invalid producer source digests")
+    if require_current_sources:
+        if manifest["generator_sha256"] != training.sha256_file(Path(__file__)):
+            reject("generator source digest mismatch")
+        for name, module in (("reinforcement.py", reinforcement), ("training.py", training)):
+            if sources[name] != training.sha256_file(Path(module.__file__)):
+                reject(f"producer source digest mismatch: {name}")
     source = manifest["source_commit"]
     if not isinstance(source, str) or len(source) != 40 or any(c not in "0123456789abcdef" for c in source):
         reject("invalid source commit")
     base = manifest["base_commit"]
     if not isinstance(base, str) or len(base) != 40 or any(c not in "0123456789abcdef" for c in base):
         reject("invalid merged base commit")
-    root = Path(__file__).resolve().parents[2]
-    if (subprocess.run(["git", "merge-base", "--is-ancestor", source, "HEAD"], cwd=root).returncode
-            or subprocess.run(["git", "merge-base", "--is-ancestor", base, source], cwd=root).returncode):
-        reject("source checkout or merged base commit mismatch")
+    if require_current_sources:
+        root = Path(__file__).resolve().parents[2]
+        if (subprocess.run(["git", "merge-base", "--is-ancestor", source, "HEAD"], cwd=root).returncode
+                or subprocess.run(["git", "merge-base", "--is-ancestor", base, source], cwd=root).returncode):
+            reject("source checkout or merged base commit mismatch")
     master = training.require_int(manifest["seed"], "seed", 0, MASK)
     counts = manifest["counts"]
     if not isinstance(counts, dict) or set(counts) != set(SPLITS):
@@ -328,7 +336,8 @@ def generate(manifest_path: Path, output: Path, progress_every: int = 1) -> None
     progress.stage_done("random-inputs-output-publication", stage)
 
 
-def verify(manifest_path: Path, output: Path, progress_every: int = 1, *, legacy_offline: bool = False, legacy_source_dir: Path | None = None) -> dict:
+def verify(manifest_path: Path, output: Path, progress_every: int = 1, *, legacy_offline: bool = False,
+           legacy_source_dir: Path | None = None, require_current_sources: bool = True) -> dict:
     if legacy_source_dir is not None and not legacy_offline:
         reject("--legacy-source-dir requires --legacy-offline")
     if legacy_offline:
@@ -351,7 +360,7 @@ def verify(manifest_path: Path, output: Path, progress_every: int = 1, *, legacy
             if "progress_every" in inspect.signature(frozen.verify).parameters:
                 return frozen.verify(manifest_path, output, progress_every)
             return frozen.verify(manifest_path, output)
-    manifest = check_manifest(manifest_path)
+    manifest = check_manifest(manifest_path, require_current_sources=require_current_sources)
     expected_names = {"games.jsonl", "train.jsonl", "validation.jsonl", "held_out.jsonl", "trainer-manifest.json", "report.json"}
     if not output.is_dir() or {path.name for path in output.iterdir()} != expected_names:
         reject("missing or extra generator output")

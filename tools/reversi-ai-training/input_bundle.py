@@ -9,6 +9,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import select
 import signal
 import subprocess
@@ -88,19 +89,33 @@ def source_identity(root: Path = ROOT, *, require_clean: bool = True) -> dict:
                                  for name in PRODUCERS}}
 
 
-def verify_source(identity: dict, root: Path | None = None) -> None:
+def validate_producer_metadata(identity: dict, *, require_source_closure: bool = False) -> None:
+    """Check the recorded producer identity's shape without opening its checkout."""
     if not isinstance(identity, dict) or set(identity) != {"source_commit", "merged_main", "producer_sources", "checkout"}:
         fail("invalid producer identity")
-    root = root or Path(identity["checkout"])
     for key in ("source_commit", "merged_main"):
         text = identity[key]
-        if not isinstance(text, str) or len(text) != 40 or any(c not in "0123456789abcdef" for c in text):
+        if not isinstance(text, str) or not re.fullmatch(r"[0-9a-f]{40}", text):
             fail("invalid producer revision")
+    checkout = identity["checkout"]
+    if not isinstance(checkout, str) or not Path(checkout).is_absolute():
+        fail("invalid producer checkout metadata")
+    sources = identity["producer_sources"]
+    if not isinstance(sources, dict) or not sources or any(not isinstance(name, str) for name in sources):
+        fail("incomplete producer source closure")
+    if require_source_closure and set(sources) != set(PRODUCERS):
+        fail("incomplete producer source closure")
+    if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+           for value in sources.values()):
+        fail("invalid producer source digest")
+
+
+def verify_source(identity: dict, root: Path | None = None) -> None:
+    validate_producer_metadata(identity, require_source_closure=True)
+    root = root or Path(identity["checkout"])
     source, main = identity["source_commit"], identity["merged_main"]
     git("merge-base", "--is-ancestor", source, main, root=root)
     git("merge-base", "--is-ancestor", main, "origin/main", root=root)
-    if set(identity["producer_sources"]) != set(PRODUCERS):
-        fail("incomplete producer source closure")
     for name, expected in identity["producer_sources"].items():
         if hashlib.sha256(git("show", f"{source}:{name}", root=root)).hexdigest() != expected:
             fail("producer bytes differ from Git revision")
@@ -425,25 +440,39 @@ def build_cli(output: Path, source_root: Path = ROOT) -> None:
                                 "exit_code": 0, "binary": pin(binary)})
 
 
-def verify_build(receipt: Path, binary: Path, producer: dict) -> None:
+def verify_build(receipt: Path, binary: Path, producer: dict, *,
+                 require_current_sources: bool = True, cargo_lock_sha256: str | None = None) -> None:
     record = training.read_json(receipt)
     frozen = training.read_json(checked_pin(record["manifest"], receipt.parent))
-    root = Path(producer["checkout"])
-    expected = {"version": VERSION, "producer": producer, "cwd": str(root.resolve()), "argv": BUILD_RECIPE,
-                "cargo_lock_sha256": hashlib.sha256(git("show", f"{producer['source_commit']}:Cargo.lock", root=root)).hexdigest()}
     for name in ("stdout", "stderr"):
         checked_pin(record[name], receipt.parent)
+    if require_current_sources:
+        root = Path(producer["checkout"])
+        expected_lock = hashlib.sha256(git("show", f"{producer['source_commit']}:Cargo.lock", root=root)).hexdigest()
+        expected_cwd = str(root.resolve())
+    else:
+        expected_lock = cargo_lock_sha256
+        expected_cwd = producer["checkout"]
+    expected = {"version": VERSION, "producer": producer, "cwd": expected_cwd, "argv": BUILD_RECIPE,
+                "cargo_lock_sha256": expected_lock}
     if frozen != expected or record.get("version") != VERSION or record.get("exit_code") != 0 or record.get("binary") != pin(binary):
         fail("CLI build receipt differs from pinned source/build/binary")
 
 
-def verify_cli(value: dict, producer: dict, base: Path, executable: Path | None) -> dict:
+def verify_cli(value: dict, producer: dict, base: Path, executable: Path | None, *,
+               require_current_sources: bool = True) -> dict:
     if not isinstance(value, dict) or set(value) != {"source_commit", "cargo_lock_sha256", "build_recipe", "binary", "build_receipt"}:
         fail("invalid CLI build identity")
+    if (value.get("source_commit") != producer.get("source_commit")
+            or not isinstance(value.get("cargo_lock_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value["cargo_lock_sha256"])
+            or value.get("build_recipe") != BUILD_RECIPE):
+        fail("invalid CLI producer/build metadata")
     binary = checked_pin(value["binary"], base)
     receipt = checked_pin(value["build_receipt"], base)
-    verify_build(receipt, binary, producer)
-    expected = cli_identity(binary, producer, receipt)
+    verify_build(receipt, binary, producer, require_current_sources=require_current_sources,
+                 cargo_lock_sha256=value["cargo_lock_sha256"])
+    expected = (cli_identity(binary, producer, receipt) if require_current_sources else value)
     if value != expected:
         fail("CLI source/lock/build identity mismatch")
     if executable is not None and training.sha256_file(executable) != value["binary"]["sha256"]:
@@ -674,7 +703,8 @@ def strength_eligible(generator: dict, *, oracle_runtime_verified: bool) -> bool
             and generator["record_start_placements"] == 8 and generator["max_turns"] == 128)
 
 
-def verify_bundle(path: Path, candidate_executable: Path | None = None, *, cli_path: Path | None = None) -> dict:
+def verify_bundle(path: Path, candidate_executable: Path | None = None, *, cli_path: Path | None = None,
+                  require_current_sources: bool = True) -> dict:
     """Replay every input offline; never launch CLI, Oracle, generator subprocesses."""
     path = Path(path).resolve()
     manifest = training.read_json(path)
@@ -682,16 +712,24 @@ def verify_bundle(path: Path, candidate_executable: Path | None = None, *, cli_p
         fail("invalid completion bundle shape")
     if manifest["version"] != VERSION or manifest["score_contract"] != training.SCORE_CONTRACT or manifest["total_wall_budget_seconds"] != TOTAL_WALL_SECONDS:
         fail("unsupported bundle score identity")
-    verify_source(manifest["producer"])
+    if require_current_sources:
+        verify_source(manifest["producer"])
+    else:
+        validate_producer_metadata(manifest["producer"])
     reserved = reservation(manifest["acceptance_reservation"], path.parent)
     generator_manifest = checked_pin(manifest["generator_manifest"], path.parent)
-    # Load original producer bytes from the frozen checkout, rather than trusting mutable imports.
-    from legacy import producer
-    source_dir = Path(manifest["producer"]["checkout"]) / "tools/reversi-ai-training"
-    digests = {name: manifest["producer"]["producer_sources"][f"tools/reversi-ai-training/{name}"]
-               for name in ("training.py", "reinforcement.py", "random_inputs.py")}
-    with producer("random_inputs", source_dir=source_dir, source_digests=digests) as frozen:
-        generator = frozen.check_manifest(generator_manifest)
+    if require_current_sources:
+        # Strict standalone verification replays the historical producer bytes.
+        from legacy import producer
+        source_dir = Path(manifest["producer"]["checkout"]) / "tools/reversi-ai-training"
+        digests = {name: manifest["producer"]["producer_sources"][f"tools/reversi-ai-training/{name}"]
+                   for name in ("training.py", "reinforcement.py", "random_inputs.py")}
+        with producer("random_inputs", source_dir=source_dir, source_digests=digests) as frozen:
+            generator = frozen.check_manifest(generator_manifest)
+    else:
+        # 0019 consumes the already-completed producer receipt and replays the
+        # data with current code; source hashes remain provenance metadata.
+        generator = random_inputs.check_manifest(generator_manifest, require_current_sources=False)
     if generator["source_commit"] != manifest["producer"]["source_commit"] or generator["base_commit"] != manifest["producer"]["merged_main"]:
         fail("generator revision differs from bundle")
     outputs = manifest["generator_outputs"]
@@ -702,8 +740,11 @@ def verify_bundle(path: Path, candidate_executable: Path | None = None, *, cli_p
     directory = resolved["train.jsonl"].parent
     if any(p.parent != directory or p.name != name for name, p in resolved.items()):
         fail("generator package must use original six-file directory")
-    with producer("random_inputs", source_dir=source_dir, source_digests=digests) as frozen:
-        frozen.verify(generator_manifest, directory)
+    if require_current_sources:
+        with producer("random_inputs", source_dir=source_dir, source_digests=digests) as frozen:
+            frozen.verify(generator_manifest, directory)
+    else:
+        random_inputs.verify(generator_manifest, directory, require_current_sources=False)
     trainer = training.read_json(resolved["trainer-manifest.json"])
     records = training.validate_records(training.validate_manifest(trainer, directory))
     # All records remain available for diagnostics; the original trainer updates train only.
@@ -737,15 +778,17 @@ def verify_bundle(path: Path, candidate_executable: Path | None = None, *, cli_p
     if actual_names != set(oracle_files) or any(p != (oracle_dir / name).resolve() for name, p in oracle_paths.items()):
         fail("Oracle file closure differs from bundle")
     oracle = load_oracle()
-    oracle.verify_raw_golden(training.read_jsonl(corpus_paths["corpus.jsonl"]), oracle_dir)
+    oracle.verify_raw_golden(training.read_jsonl(corpus_paths["corpus.jsonl"]), oracle_dir,
+                             require_current_source=require_current_sources)
     raw_evidence = training.read_json(oracle_paths["evidence.json"])
     oracle_receipt_pin = raw_evidence.get("runtime_receipt")
     runtime_verified = False
     if oracle_receipt_pin is not None:
         receipt = checked_pin(oracle_receipt_pin, oracle_dir)
-        oracle.verify_runtime_receipt(receipt)
+        oracle.verify_runtime_receipt(receipt, require_current_source=require_current_sources)
         runtime_verified = True
-    cli = verify_cli(manifest["cli"], manifest["producer"], path.parent, candidate_executable or cli_path)
+    cli = verify_cli(manifest["cli"], manifest["producer"], path.parent,
+                     candidate_executable or cli_path, require_current_sources=require_current_sources)
     probe_path = checked_pin(manifest["cli_probe"], path.parent)
     verify_probe(probe_path, resolved["validation.jsonl"], artifact_path, cli, reserved)
     stages = manifest["stages"]
@@ -787,9 +830,16 @@ def verify_bundle(path: Path, candidate_executable: Path | None = None, *, cli_p
             fail("probe stage differs from bundled probe")
         if stage.startswith("calibration-"):
             calibration_path = checked_pin(results["outputs"]["generator_manifest"], path.parent)
-            with producer("random_inputs", source_dir=source_dir, source_digests=digests) as frozen:
-                calibration = frozen.check_manifest(calibration_path)
-                frozen.verify(calibration_path, Path(stage_manifest["request"].get("generator_dir", stage_manifest["request"].get("output_dir", ""))))
+            if require_current_sources:
+                with producer("random_inputs", source_dir=source_dir, source_digests=digests) as frozen:
+                    calibration = frozen.check_manifest(calibration_path)
+                    frozen.verify(calibration_path, Path(stage_manifest["request"].get(
+                        "generator_dir", stage_manifest["request"].get("output_dir", ""))))
+            else:
+                calibration = random_inputs.check_manifest(calibration_path, require_current_sources=False)
+                random_inputs.verify(calibration_path,
+                    Path(stage_manifest["request"].get("generator_dir", stage_manifest["request"].get("output_dir", ""))),
+                    require_current_sources=False)
             if calibration["counts"] != {"train": 4, "validation": 2, "held_out": 2} or calibration["seed"] == generator["seed"]:
                 fail("invalid independent calibration inputs")
             if stage == "calibration-train":
@@ -831,15 +881,12 @@ def prepare_stage(path: Path, stage: str, request: dict, cwd: Path, inputs: list
                 "bounds": {"wall_seconds": wall, "rss_bytes": rss, "sample_seconds": 1}})
 
 
-def verify_for_pilot(bundle_path: Path, receipt_path: Path, candidate_executable: Path | None = None) -> dict:
-    """Require the external bounded final verification receipt before pilot use."""
-    bundle_path, receipt_path = Path(bundle_path).resolve(), Path(receipt_path).resolve()
-    verified = verify_bundle(bundle_path, candidate_executable)
+def _verified_bundle_with_receipt(bundle_path: Path, receipt_path: Path, verified: dict) -> dict:
     original = training.read_json(bundle_path)
     final = verify_stage(receipt_path, original["producer"])
     request, outputs = final["request"], final["result"]["outputs"]
     if final["stage"] != "bundle-verify" or request.get("bundle_manifest") != str(bundle_path):
-        fail("pilot requires the bounded final bundle-verify receipt")
+        fail("bundle consumer requires the bounded final bundle-verify receipt")
     if outputs.get("bundle_manifest") != pin(bundle_path):
         fail("final verification receipt pins a different bundle")
     if pin(Path(request["cli"])) != verified["cli"]["binary"]:
@@ -851,6 +898,22 @@ def verify_for_pilot(bundle_path: Path, receipt_path: Path, candidate_executable
     if reconstructed_report != Path(request["report"]).resolve() or reconstructed_report.read_bytes() != canonical(verified):
         fail("final verification output differs from complete offline reconstruction")
     return {**verified, "bundle_verification_receipt": pin(receipt_path)}
+
+
+def verify_for_pilot(bundle_path: Path, receipt_path: Path,
+                     candidate_executable: Path | None = None) -> dict:
+    """Require strict producer-source verification before bounded pilot use."""
+    bundle_path, receipt_path = Path(bundle_path).resolve(), Path(receipt_path).resolve()
+    verified = verify_bundle(bundle_path, candidate_executable)
+    return _verified_bundle_with_receipt(bundle_path, receipt_path, verified)
+
+
+def verify_for_production_cycle(bundle_path: Path, receipt_path: Path,
+                                candidate_executable: Path | None = None) -> dict:
+    """Verify a completed input bundle for 0019 without requiring its producer checkout."""
+    bundle_path, receipt_path = Path(bundle_path).resolve(), Path(receipt_path).resolve()
+    verified = verify_bundle(bundle_path, candidate_executable, require_current_sources=False)
+    return _verified_bundle_with_receipt(bundle_path, receipt_path, verified)
 
 
 def finalize(args) -> None:

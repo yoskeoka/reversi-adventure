@@ -188,6 +188,101 @@ class InputBundleTests(unittest.TestCase):
         finally:
             receipt.write_bytes(original)
 
+    def test_production_cycle_accepts_source_drift_but_keeps_receipt_and_input_pins(self):
+        receipt = self.path.parent / "stages/bundle-verify/report.json"
+        original_sha256 = training.sha256_file
+        active_sources = {(bundle.ROOT / name).resolve() for name in bundle.PRODUCERS}
+
+        def changed_source_hash(path):
+            resolved = Path(path).resolve()
+            if resolved in active_sources:
+                return "0" * 64
+            return original_sha256(path)
+
+        with patch.object(training, "sha256_file", side_effect=changed_source_hash):
+            with self.assertRaises(training.TrainingError):
+                bundle.verify_for_pilot(self.path, receipt)
+            with patch.object(bundle, "git", side_effect=AssertionError("producer checkout Git access")):
+                verified = bundle.verify_for_production_cycle(self.path, receipt)
+        self.assertEqual(verified["bundle_verification_receipt"], bundle.pin(receipt))
+
+        original_receipt = receipt.read_bytes()
+        try:
+            failed = training.read_json(receipt)
+            failed["status"] = "wall-limit"
+            receipt.write_bytes(bundle.canonical(failed))
+            with self.assertRaises(training.TrainingError):
+                bundle.verify_for_production_cycle(self.path, receipt)
+        finally:
+            receipt.write_bytes(original_receipt)
+
+        pinned_inputs = [
+            self.path,
+            Path(self.completion["cli"]["binary"]["path"]),
+            Path(self.completion["baseline_artifact"]["path"]),
+            Path(self.completion["corpus_outputs"]["corpus.jsonl"]["path"]),
+            Path(self.completion["oracle_outputs"]["golden.jsonl"]["path"]),
+            Path(self.completion["generator_outputs"]["validation.jsonl"]["path"]),
+            Path(self.completion["generator_outputs"]["held_out.jsonl"]["path"]),
+        ]
+        for pinned_path in pinned_inputs:
+            with self.subTest(path=pinned_path.name):
+                original = pinned_path.read_bytes()
+                try:
+                    pinned_path.write_bytes(original + (b"\n" if pinned_path == self.path else b"tampered"))
+                    with self.assertRaises(training.TrainingError):
+                        bundle.verify_for_production_cycle(self.path, receipt)
+                finally:
+                    pinned_path.write_bytes(original)
+
+    def test_raw_oracle_receipt_source_drift_is_production_relaxed_only(self):
+        oracle = bundle.load_oracle()
+        original_dir = Path(self.completion["oracle_outputs"]["evidence.json"]["path"]).parent
+        oracle_dir = self.path.parent / "oracle-with-runtime-receipt"
+        shutil.copytree(original_dir, oracle_dir)
+        records = training.read_jsonl(Path(self.completion["corpus_outputs"]["corpus.jsonl"]["path"]))
+        evidence_path = oracle_dir / "evidence.json"
+        evidence = json.loads(evidence_path.read_bytes())
+        archive_path = self.path.parent / "oracle-runtime-source.tar.gz"
+        archive_path.write_bytes(b"fixture archive")
+        source_tree_sha256 = "a" * 64
+        runtime_receipt = {
+            "version": oracle.RUNTIME_RECEIPT_VERSION,
+            "status": "complete",
+            "oracle_version": oracle.ORACLE_VERSION,
+            "source_url": oracle.SOURCE_URL,
+            "source_archive": {"path": str(archive_path.resolve()), "sha256": oracle.SOURCE_SHA256},
+            "source_tree_sha256": source_tree_sha256,
+            "build_recipe": oracle.RUNTIME_BUILD_RECIPE,
+            "producer_sha256": "0" * 64,
+            "profile": oracle.profile_metadata(oracle.STRONG_ENGINE_HCAP_V1),
+            "runtime": evidence["runtime_before"],
+        }
+        receipt_path = self.path.parent / "oracle-runtime-receipt.json"
+        receipt_path.write_bytes(oracle.raw_canonical(runtime_receipt))
+        evidence["runtime_receipt"] = oracle.raw_pin(receipt_path)
+        evidence_path.write_bytes(oracle.raw_canonical(evidence))
+
+        original_sha256 = oracle.sha256_file
+        active_source = Path(oracle.__file__).resolve()
+
+        def changed_source_hash(path):
+            resolved = Path(path).resolve()
+            if resolved == active_source:
+                return "f" * 64
+            if resolved == archive_path.resolve():
+                return oracle.SOURCE_SHA256
+            return original_sha256(path)
+
+        with patch.object(oracle, "sha256_file", side_effect=changed_source_hash), \
+             patch.object(oracle, "archive_source_tree_sha256", return_value=source_tree_sha256):
+            with self.assertRaises(oracle.OracleError):
+                oracle.verify_raw_golden(records, oracle_dir)
+            verified = oracle.verify_raw_golden(records, oracle_dir, require_current_source=False)
+        self.assertEqual([row["position_id"] for row in verified],
+                         [row["position_id"] for row in training.read_jsonl(
+                             Path(self.completion["corpus_outputs"]["corpus.jsonl"]["path"]))])
+
     def test_resealed_baseline_report_and_added_verified_flag_rejected(self):
         report = Path(self.completion["baseline_report"]["path"])
         original = report.read_bytes()
