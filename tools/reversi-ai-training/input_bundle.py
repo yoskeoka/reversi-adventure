@@ -778,13 +778,14 @@ def verify_bundle(path: Path, candidate_executable: Path | None = None, *, cli_p
     if actual_names != set(oracle_files) or any(p != (oracle_dir / name).resolve() for name, p in oracle_paths.items()):
         fail("Oracle file closure differs from bundle")
     oracle = load_oracle()
-    oracle.verify_raw_golden(training.read_jsonl(corpus_paths["corpus.jsonl"]), oracle_dir)
+    oracle.verify_raw_golden(training.read_jsonl(corpus_paths["corpus.jsonl"]), oracle_dir,
+                             require_current_source=require_current_sources)
     raw_evidence = training.read_json(oracle_paths["evidence.json"])
     oracle_receipt_pin = raw_evidence.get("runtime_receipt")
     runtime_verified = False
     if oracle_receipt_pin is not None:
         receipt = checked_pin(oracle_receipt_pin, oracle_dir)
-        oracle.verify_runtime_receipt(receipt)
+        oracle.verify_runtime_receipt(receipt, require_current_source=require_current_sources)
         runtime_verified = True
     cli = verify_cli(manifest["cli"], manifest["producer"], path.parent,
                      candidate_executable or cli_path, require_current_sources=require_current_sources)

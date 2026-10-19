@@ -330,9 +330,11 @@ The production path is one human-operated `pattern-reinforcement-execute`
 invocation implemented by extending `pilot.py execute`. It consumes the
 verified 0051 bundle and its successful `bundle-verify` receipt using the
 current verifier, without requiring the producer checkout or matching active
-code to producer source hashes. It verifies the bundle, receipt, candidate CLI,
-baseline, corpus, golden, validation, and held-out artifacts by digest and
-semantic consistency. Producer commit and source hashes remain provenance
+code to producer source hashes, including the Oracle preparation receipt's
+producer digest. It verifies the bundle, receipt, candidate CLI, baseline,
+corpus, golden, validation, and held-out artifacts by digest and semantic
+consistency; the Oracle source archive, saved runtime identity, and raw evidence
+remain validated. Producer commits and source hashes remain provenance
 metadata only. The command records the execution checkout's commit
 (`git rev-parse HEAD`) in the run manifest, along with executable identities,
 baseline artifact, validation input, search and update settings, seed, resource limits,

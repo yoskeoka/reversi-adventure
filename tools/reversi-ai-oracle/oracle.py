@@ -1640,7 +1640,7 @@ def prepare_saved_runtime(output_dir, timeout=300):
         raise
 
 
-def verify_runtime_receipt(receipt_path):
+def verify_runtime_receipt(receipt_path, *, require_current_source=True):
     """Validate source archive and saved build/runtime identity without processes."""
     try:
         receipt_path = Path(receipt_path)
@@ -1651,7 +1651,10 @@ def verify_runtime_receipt(receipt_path):
                 or receipt["version"] != RUNTIME_RECEIPT_VERSION or receipt["status"] != "complete"
                 or receipt["oracle_version"] != ORACLE_VERSION or receipt["source_url"] != SOURCE_URL
                 or receipt["build_recipe"] != RUNTIME_BUILD_RECIPE
-                or receipt["producer_sha256"] != sha256_file(Path(__file__))
+                or not isinstance(receipt["producer_sha256"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", receipt["producer_sha256"])
+                or (require_current_source
+                    and receipt["producer_sha256"] != sha256_file(Path(__file__)))
                 or receipt["profile"] != profile_metadata(STRONG_ENGINE_HCAP_V1)):
             die("Oracle runtime preparation identity mismatch")
         archive_pin = receipt["source_archive"]
@@ -1820,15 +1823,16 @@ def generate_saved_golden(records, binary, cwd, output_dir, *, timeout=300, prog
     return golden
 
 
-def verify_raw_golden(records, output_dir, *, compare_golden=True):
+def verify_raw_golden(records, output_dir, *, compare_golden=True, require_current_source=True):
     """Rebuild with the existing parser and board/sign logic, without live solves."""
     try:
-        return _verify_raw_golden(records, output_dir, compare_golden=compare_golden)
+        return _verify_raw_golden(records, output_dir, compare_golden=compare_golden,
+                                  require_current_source=require_current_source)
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
         die(f"saved Oracle evidence malformed or missing: {error}")
 
 
-def _verify_raw_golden(records, output_dir, *, compare_golden=True):
+def _verify_raw_golden(records, output_dir, *, compare_golden=True, require_current_source=True):
     validate_corpus(records)
     output_dir = Path(output_dir)
     raw = (output_dir / "evidence.json").read_bytes()
@@ -1850,7 +1854,7 @@ def _verify_raw_golden(records, output_dir, *, compare_golden=True):
         receipt_pin = evidence["runtime_receipt"]
         if not isinstance(receipt_pin, dict) or set(receipt_pin) != {"path", "sha256"} or raw_pin(receipt_pin["path"]) != receipt_pin:
             die("saved Oracle preparation receipt pin mismatch")
-        if verify_runtime_receipt(receipt_pin["path"])["runtime"] != identity:
+        if verify_runtime_receipt(receipt_pin["path"], require_current_source=require_current_source)["runtime"] != identity:
             die("saved Oracle runtime differs from preparation receipt")
     query_count = sum(not item["terminal"] for record in records for item in query_mapping(record))
     if query_count != evidence["total_queries"] or query_count > 192:
