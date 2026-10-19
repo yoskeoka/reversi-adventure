@@ -406,6 +406,17 @@ starts the production command in a separate terminal. An AI agent may prepare
 the immutable inputs and validate completed outputs, but does not start,
 wait for, poll, monitor, or claim completion of the production run.
 
+The Oracle runtime projection measures the first frozen Oracle-match opening,
+an ordinary midgame target at 30 occupied squares, and a late-game target at
+48 occupied squares. A target reached before game end uses that exact legal
+position. If deterministic replay ends before a target, the projection uses
+the most advanced nonterminal position reached from that opening where the
+side to move has a legal move. It never measures a terminal board. Each
+representative measurement reports both its requested and actual occupied
+square counts so a fallback is visible; failure to obtain a legal position
+for any representative stops the estimate before the expensive production
+phases.
+
 ### Random-game input batch progress
 
 The existing random-input `generate` and `verify` commands can process up to
