@@ -412,10 +412,14 @@ an ordinary midgame target at 30 occupied squares, and a late-game target at
 position. If deterministic replay ends before a target, the projection uses
 the most advanced nonterminal position reached from that opening where the
 side to move has a legal move. It never measures a terminal board. Each
-representative measurement reports both its requested and actual occupied
-square counts so a fallback is visible; failure to obtain a legal position
-for any representative stops the estimate before the expensive production
-phases.
+representative measurement in `representative_searches` reports
+`requested_occupied_count` and `actual_occupied_count` alongside the existing
+`opening`, `midgame`, or `endgame` phase and Oracle/candidate timings. The
+opening's requested count is its frozen occupied count. Forced passes change
+the side to move without advancing the occupied count. Failure to obtain a
+legal position for any representative stops the estimate before starting any
+Oracle or candidate search. Representative selection does not mutate the
+frozen opening or change the three measured profiles.
 
 ### Random-game input batch progress
 
