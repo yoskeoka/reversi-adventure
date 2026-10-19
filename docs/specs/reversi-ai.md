@@ -328,13 +328,17 @@ bytes, and cannot make a failed or interrupted cycle valid.
 
 The production path is one human-operated `pattern-reinforcement-execute`
 invocation implemented by extending `pilot.py execute`. It consumes the
-verified 0051 bundle and its successful `bundle-verify` receipt, then freezes
-the bundle and receipt identities, source commit and producer digests, executable identities, baseline
-artifact, validation input, search and update settings, seed, resource limits,
-pairing rules, and requested game counts in a new manifest. Its run root is a
-new absolute path outside the source checkout. The command refuses to replace
-an existing run root. `pattern-pilot-execute` retains its bounded pilot counts
-and behavior.
+verified 0051 bundle and its successful `bundle-verify` receipt using the
+current verifier, without requiring the producer checkout or matching active
+code to producer source hashes. It verifies the bundle, receipt, candidate CLI,
+baseline, corpus, golden, validation, and held-out artifacts by digest and
+semantic consistency. Producer commit and source hashes remain provenance
+metadata only. The command records the execution checkout's commit
+(`git rev-parse HEAD`) in the run manifest, along with executable identities,
+baseline artifact, validation input, search and update settings, seed, resource limits,
+pairing rules, and requested game counts. Its run root is a new absolute path
+outside the source checkout. The command refuses to replace an existing run
+root. `pattern-pilot-execute` retains its bounded pilot counts and behavior.
 
 The production Make defaults are 64 self-play games, 200 baseline-comparison
 games, and 20 direct Oracle-match games. Their Make variables are
@@ -361,12 +365,15 @@ the baseline. Validation remains disjoint from self-play tuning and 0018
 openings and does not become a substitute for the match gate.
 
 `--resume-from PHASE` accepts only the phase names above. It requires the
-existing manifest to remain unchanged and verifies its digest plus every
+existing manifest to remain unchanged, the current checkout commit to equal
+the manifest's execution commit, and verifies its digest plus every
 predecessor receipt and output before reuse. A retry writes to a new numbered
 attempt directory and preserves the previous attempt. Changed counts, inputs,
-or any other frozen setting require a new manifest and run root. Reusing a
-partial file or report without a matching successful phase receipt is an
-error.
+execution commit, or any other frozen setting require a new manifest and run
+root. Offline verification checks that the final report records the same
+execution commit as the manifest; it does not require the verifier checkout to
+remain at that commit. Reusing a partial file or report without a matching
+successful phase receipt is an error.
 
 The direct Oracle match runs the raw updated candidate whether or not it is
 selected, against `oracle-0018-acceptance-v1`: Oracle 6/6/6 with exact solving

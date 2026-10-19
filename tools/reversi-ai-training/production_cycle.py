@@ -18,7 +18,7 @@ oracle_module = pilot.oracle
 
 PHASES = ("input-verification", "self-play", "candidate-update", "baseline-match",
           "candidate-selection", "corpus-regret", "oracle-match", "offline-verification")
-VERSION = "reversi-ai-0019-production-cycle-v1"
+VERSION = "reversi-ai-0019-production-cycle-v2"
 UPDATE_RULE = {"name": "bounded_td_v1", "normalization_divisor": 64}
 SELF_PLAY_CONFIG = {"opening_depth": 8, "midgame_depth": 8, "endgame_depth": 8,
                     "exact_solver_empty_squares": 16}
@@ -51,18 +51,6 @@ def source_commit() -> str:
     require(bool(re.fullmatch(r"[0-9a-f]{40}", commit)),
             "could not identify the 0019 source commit")
     return commit
-
-
-def source_hashes() -> dict:
-    paths = {
-        "production_cycle.py": Path(__file__),
-        "pilot.py": Path(pilot.__file__),
-        "reinforcement.py": Path(rf.__file__),
-        "training.py": Path(training.__file__),
-        "oracle.py": Path(oracle_module.__file__),
-        "input_bundle.py": Path(__file__).with_name("input_bundle.py"),
-    }
-    return {name: training.sha256_file(path) for name, path in paths.items()}
 
 
 def rotate_coordinate(move: str, rotation: int) -> str:
@@ -136,11 +124,11 @@ def opening_root_set(pairs: list[list[dict]]) -> set[str]:
     return {opening_key(opening) for pair in pairs for opening in pair}
 
 
-def make_manifest(args, run_root: Path) -> dict:
+def make_manifest(args, run_root: Path, execution_commit: str) -> dict:
     import input_bundle
 
     require(args.oracle_binary is not None, "0019 requires the pinned Egaroucid executable path")
-    verified = input_bundle.verify_for_pilot(
+    verified = input_bundle.verify_for_production_cycle(
         args.input_bundle, args.bundle_verification_receipt,
         candidate_executable=args.candidate_executable,
     )
@@ -189,11 +177,10 @@ def make_manifest(args, run_root: Path) -> dict:
     require(Path(oracle_binary["path"]).stat().st_mode & 0o111,
             "pinned Oracle binary is not executable")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "producer_version": VERSION,
         "score_contract": training.SCORE_CONTRACT,
-        "source_commit": source_commit(),
-        "sources": source_hashes(),
+        "execution_commit": execution_commit,
         "input_bundle": file_entry(args.input_bundle),
         "bundle_verification_receipt": file_entry(args.bundle_verification_receipt),
         "verified_bundle": verified,
@@ -229,12 +216,12 @@ def make_manifest(args, run_root: Path) -> dict:
 
 def checked_manifest(path: Path) -> dict:
     manifest = training.read_json(path)
-    require(manifest.get("schema_version") == 1 and manifest.get("producer_version") == VERSION
+    require(manifest.get("schema_version") == 2 and manifest.get("producer_version") == VERSION
             and manifest.get("score_contract") == training.SCORE_CONTRACT,
             "unsupported 0019 production manifest")
-    require(manifest.get("sources") == source_hashes(), "0019 producer source digest mismatch")
-    require(manifest.get("source_commit") == source_commit(),
-            "0019 frozen source commit changed")
+    execution_commit = manifest.get("execution_commit")
+    require(isinstance(execution_commit, str) and re.fullmatch(r"[0-9a-f]{40}", execution_commit),
+            "invalid 0019 execution commit")
     require(manifest.get("oracle_profile_id") == ORACLE_PROFILE.name
             and manifest.get("oracle_profile") == oracle_module.profile_metadata(ORACLE_PROFILE)
             and manifest.get("oracle_exact_solver_empty_squares")
@@ -264,7 +251,7 @@ def load_context(manifest_path: Path) -> dict:
     import input_bundle
 
     manifest = checked_manifest(manifest_path)
-    verified = input_bundle.verify_for_pilot(
+    verified = input_bundle.verify_for_production_cycle(
         Path(manifest["input_bundle"]["path"]),
         Path(manifest["bundle_verification_receipt"]["path"]),
         candidate_executable=Path(manifest["candidate_executable"]["path"]),
@@ -442,7 +429,7 @@ def phase_input_verification(context: dict, attempt: Path) -> None:
                 "input_digests": {name: item["sha256"] for name, item in context["manifest"]["inputs"].items()},
                 "candidate_sha256": context["manifest"]["candidate_executable"]["sha256"],
                 "oracle_sha256": context["manifest"]["oracle_binary"]["sha256"],
-                "source_digests": context["manifest"]["sources"]}
+                "execution_commit": context["manifest"]["execution_commit"]}
     rf.atomic_write(attempt, "evidence.json", blob(evidence))
 
 
@@ -632,8 +619,14 @@ def semantic_phase_check(context: dict, phase: str, attempt: Path,
     manifest = context["manifest"]
     if phase == "input-verification":
         evidence = training.read_json(output(attempt, "evidence.json"))
-        require(evidence["bundle_sha256"] == manifest["input_bundle"]["sha256"]
-                and evidence["strength_inputs"] is True, "0019 input verification evidence mismatch")
+        expected = {"schema_version": 1, "bundle_sha256": manifest["input_bundle"]["sha256"],
+                    "receipt_sha256": manifest["bundle_verification_receipt"]["sha256"],
+                    "strength_inputs": True,
+                    "input_digests": {name: item["sha256"] for name, item in manifest["inputs"].items()},
+                    "candidate_sha256": manifest["candidate_executable"]["sha256"],
+                    "oracle_sha256": manifest["oracle_binary"]["sha256"],
+                    "execution_commit": manifest["execution_commit"]}
+        require(evidence == expected, "0019 input verification evidence mismatch")
     elif phase == "self-play":
         games = training.read_jsonl(output(attempt, "games.jsonl"))
         require(len(games) == manifest["requested_counts"]["self_play_games"],
@@ -811,7 +804,8 @@ def semantic_phase_check(context: dict, phase: str, attempt: Path,
                 "0019 Oracle match summary or profile does not replay")
     elif phase == "offline-verification":
         report = training.read_json(output(attempt, "report.json"))
-        require(report["schema_version"] == 1 and report["run_status"] == "complete",
+        require(report["schema_version"] == 2 and report["run_status"] == "complete"
+                and report.get("execution_commit") == manifest["execution_commit"],
                 "0019 final report is incomplete")
         expected = build_final_report(context, predecessors, report["manifest_sha256"])
         require(report == expected, "0019 final report does not reconstruct from verified phase outputs")
@@ -884,12 +878,12 @@ def build_final_report(context: dict, predecessors: dict[str, Path], manifest_di
     candidate_path = output(predecessors["candidate-update"], "candidate-artifact.json")
     selected_digest = candidate_path if selection["selected"] == "candidate" else context["paths"]["baseline_artifact"]
     return {
-        "schema_version": 1, "run_status": "complete", "producer_version": VERSION,
+        "schema_version": 2, "run_status": "complete", "producer_version": VERSION,
         "manifest_sha256": manifest_digest, "score_contract": training.SCORE_CONTRACT,
-        "source_commit": manifest["source_commit"],
+        "execution_commit": manifest["execution_commit"],
         "input_bundle_sha256": manifest["input_bundle"]["sha256"],
         "bundle_verification_receipt_sha256": manifest["bundle_verification_receipt"]["sha256"],
-        "sources": manifest["sources"], "candidate_executable_sha256": manifest["candidate_executable"]["sha256"],
+        "candidate_executable_sha256": manifest["candidate_executable"]["sha256"],
         "baseline_artifact_sha256": manifest["inputs"]["baseline_artifact"]["sha256"],
         "candidate_artifact_sha256": training.sha256_file(candidate_path),
         "selected_artifact_sha256": training.sha256_file(selected_digest),
@@ -976,6 +970,7 @@ def runtime_estimate(context: dict) -> dict:
 
 def execute(args) -> dict:
     require(args.oracle_binary is not None, "0019 requires the pinned Egaroucid executable path")
+    execution_commit = source_commit()
     run_root = args.run_root.resolve()
     repository_root = Path(pilot.__file__).resolve().parents[2]
     require(args.run_root.is_absolute() and run_root != repository_root
@@ -985,6 +980,8 @@ def execute(args) -> dict:
     if args.resume_from:
         require(run_root.is_dir() and manifest_path.is_file(), "resume requires an existing 0019 run root")
         manifest = checked_manifest(manifest_path)
+        require(manifest["execution_commit"] == execution_commit,
+                "0019 resume checkout commit differs from the frozen run; use a new run root")
         expected = {"self_play_games": args.self_play_games,
                     "baseline_comparison_games": args.baseline_comparison_games,
                     "oracle_match_games": args.oracle_match_games}
@@ -1020,7 +1017,7 @@ def execute(args) -> dict:
         require(args.oracle_match_games > 0, "0019 Oracle match must contain at least one color-swapped pair")
         run_root.mkdir(parents=True, exist_ok=False)
         try:
-            manifest = make_manifest(args, run_root)
+            manifest = make_manifest(args, run_root, execution_commit)
             rf.atomic_write(run_root, "manifest.json", blob(manifest))
         except BaseException:
             try:

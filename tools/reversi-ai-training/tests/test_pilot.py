@@ -132,7 +132,8 @@ class PilotTests(unittest.TestCase):
             "cli": {"adapter_test": True}, "bundle_verification_receipt": pilot.entry(receipt)}
         verifier = mock.Mock(return_value=verified)
         self.addCleanup(mock.patch.stopall)
-        mock.patch.dict(sys.modules, {"input_bundle": SimpleNamespace(verify_for_pilot=verifier)}).start()
+        mock.patch.dict(sys.modules, {"input_bundle": SimpleNamespace(
+            verify_for_pilot=verifier, verify_for_production_cycle=verifier)}).start()
         self.args.manifest.unlink()
         fixture_cli = ROOT / "fixtures" / ("fake-production-candidate-v1.py" if profiled
                                              else "fake-self-play-v1.py")
@@ -288,6 +289,13 @@ class PilotTests(unittest.TestCase):
             reports.append(report)
         self.assertEqual(snapshots[0], snapshots[1])
         self.assertEqual(reports[0], reports[1])
+        manifest = training.read_json(self.root / "production-one" / "manifest.json")
+        self.assertEqual(reports[0]["execution_commit"], manifest["execution_commit"])
+        self.assertNotIn("sources", manifest)
+        self.assertNotIn("sources", reports[0])
+        with mock.patch.object(production_cycle, "source_commit", return_value="f" * 40):
+            context = production_cycle.load_context(self.root / "production-one" / "manifest.json")
+        self.assertEqual(context["manifest"]["execution_commit"], manifest["execution_commit"])
 
     def test_0019_resume_verifies_predecessors_and_retries_selected_phase(self):
         self.bundle_stub(production=True, profiled=True)
@@ -303,6 +311,9 @@ class PilotTests(unittest.TestCase):
         root = args.run_root
         self.assertTrue((root / "phases" / "baseline-match" / "attempt-0001" / "failure.json").is_file())
         args.resume_from = "baseline-match"
+        with mock.patch.object(production_cycle, "source_commit", return_value="f" * 40):
+            with self.assertRaisesRegex(training.TrainingError, "resume checkout commit differs"):
+                pilot.execute(args)
         args.baseline_comparison_games += 2
         with self.assertRaisesRegex(training.TrainingError, "resume arguments differ"):
             pilot.execute(args)
