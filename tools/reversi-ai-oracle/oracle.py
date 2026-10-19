@@ -232,6 +232,14 @@ WHOLE_GAME_DEPTH_12_EXACT_20 = whole_game_threshold_profile(12, 20)
 WHOLE_GAME_DEPTH_8_EXACT_20 = whole_game_threshold_profile(8, 20)
 WHOLE_GAME_DEPTH_12_EXACT_24 = whole_game_threshold_profile(12, 24)
 WHOLE_GAME_DEPTH_8_EXACT_24 = whole_game_threshold_profile(8, 24)
+ORACLE_0018_ACCEPTANCE_V1 = OracleProfile(
+    name="oracle-0018-acceptance-v1",
+    hash_level=25,
+    depth_ranges=(DepthProbabilityRange(1, 48, 6, "100"),
+                  DepthProbabilityRange(49, 60, 12, "100")),
+    candidate_depth=12,
+    candidate_exact_solver_empty_squares=16,
+)
 PROFILES = {
     profile.name: profile
     for profile in (
@@ -245,6 +253,7 @@ PROFILES = {
         WHOLE_GAME_DEPTH_8_EXACT_20,
         WHOLE_GAME_DEPTH_12_EXACT_24,
         WHOLE_GAME_DEPTH_8_EXACT_24,
+        ORACLE_0018_ACCEPTANCE_V1,
     )
 }
 
@@ -313,6 +322,13 @@ def profile_depth_at(profile: OracleProfile, occupied_discs: int) -> int:
         if item.move_start <= move_number <= item.move_end:
             return item.depth
     die(f"profile {profile.name!r} has no depth for decision move {move_number}")
+
+
+def profile_exact_threshold(profile: OracleProfile) -> int:
+    """Return the largest empty-square count solved by the pinned Oracle depth ranges."""
+    exact_counts = [empty for empty in range(1, 61)
+                    if profile_depth_at(profile, 64 - empty) >= empty]
+    return max(exact_counts, default=0)
 
 
 def oracle_argv(binary: Path, profile: OracleProfile, *, solve_path: Path | None = None,
@@ -2251,6 +2267,148 @@ def run_match(
         "summary": counts,
         "results": game_reports,
     }
+
+
+def run_profiled_match(
+    binary: Path,
+    cwd: Path,
+    candidate,
+    opening_pairs: list[tuple[dict, dict]],
+    profile: OracleProfile,
+    candidate_config: dict,
+    timeout: float,
+    progress_every: int = 1,
+    on_game=None,
+) -> dict[str, object]:
+    """Play pinned Oracle games and retain actual search telemetry per decision."""
+    validate_profile(profile)
+    validate_budget(1, timeout)
+    if not opening_pairs or progress_every < 1:
+        die("profiled match requires opening pairs and a positive progress interval")
+    progress = Progress(progress_every)
+    stage = progress.stage_start("match")
+    results: list[dict[str, object]] = []
+    oracle_exact = profile_exact_threshold(profile)
+    oracle_search = {**profile_metadata(profile)["oracle"],
+                     "profile": profile.name,
+                     "exact_solver_empty_squares": oracle_exact}
+    for pair_index, pair in enumerate(opening_pairs):
+        if len(pair) != 2:
+            die("profiled match opening pair must contain two members")
+        for member, opening in enumerate(pair):
+            game_index = pair_index * 2 + member
+            game_started = time.monotonic()
+            board, side = str(opening["board"]), str(opening["side"])
+            if not BOARD_RE.fullmatch(board) or side not in ("B", "W"):
+                die("profiled match opening has an invalid board or side")
+            candidate_side = "B" if member == 0 else "W"
+            game_id = f"oracle-match-p{pair_index}-m{member}"
+            candidate.new_game(game_id)
+            history = list(opening["moves"])
+            decisions: list[dict[str, object]] = []
+            passes = 0
+            while True:
+                legal = legal_moves(board, side)
+                if not legal and not legal_moves(board, other(side)):
+                    break
+                if len(decisions) >= 120:
+                    die(f"profiled match game exceeded the decision cap: {game_id}")
+                root_board = board
+                identifier = f"{game_id}-t{len(decisions)}"
+                empty = board.count(".")
+                if side == candidate_side:
+                    move, telemetry = candidate.choose_with_diagnostic(identifier, board, side)
+                    if legal and move not in legal or not legal and move != "pass":
+                        die(f"candidate selected an illegal move in {identifier}")
+                    if telemetry is None:
+                        die(f"candidate omitted search telemetry in {identifier}")
+                    candidate_exact = int(candidate_config["exact_solver_empty_squares"])
+                    if "node_limit" in candidate_config and int(candidate_config["node_limit"]) < telemetry["nodes"]:
+                        die(f"candidate exceeded its node limit in {identifier}")
+                    if "time_limit_ms" in candidate_config and int(candidate_config["time_limit_ms"]) * 1000 < telemetry["elapsed_us"]:
+                        die(f"candidate exceeded its time limit in {identifier}")
+                    if legal and empty <= candidate_exact and not telemetry["exact"]:
+                        die(f"candidate did not complete a required exact solve in {identifier}")
+                    occupied = board.count("B") + board.count("W")
+                    depth_name = "opening_depth" if occupied < 24 else (
+                        "endgame_depth" if empty <= candidate_exact else "midgame_depth")
+                    configured_depth = int(candidate_config[depth_name])
+                    exact_threshold = candidate_exact
+                    configured_search = dict(candidate_config)
+                elif legal:
+                    configured_depth = profile_depth_at(profile, board.count("B") + board.count("W"))
+                    exact_threshold = oracle_exact
+                    configured_search = oracle_search
+                    telemetry = run_solve([(board, side)], binary, cwd, profile, timeout,
+                                          child_query=False)[0]
+                    move = str(telemetry["move"])
+                    if move not in legal:
+                        die(f"Oracle selected an illegal move in {identifier}")
+                    if empty <= exact_threshold and not telemetry["exact"]:
+                        die(f"Oracle did not complete a required exact solve in {identifier}")
+                else:
+                    move = "pass"
+                    configured_depth, exact_threshold = 0, oracle_exact
+                    telemetry = {"completed_depth": 0, "exact": False}
+                    configured_search = oracle_search if side != candidate_side else dict(candidate_config)
+
+                if legal:
+                    passes = 0
+                    board = apply_move(board, side, move)
+                    history.append(move)
+                else:
+                    passes += 1
+                    if passes > 1:
+                        die(f"profiled match reached consecutive passes before termination in {identifier}")
+                    history.append("PS")
+                decisions.append({
+                    "id": identifier, "board": root_board,
+                    "side": side, "actor": "candidate" if side == candidate_side else "oracle",
+                    "move": move, "configured_depth": configured_depth,
+                    "configured_search": configured_search,
+                    "exact_solver_empty_squares": exact_threshold,
+                    "completed_depth": int(telemetry["completed_depth"]),
+                    "exact": bool(telemetry["exact"]),
+                })
+                if side == candidate_side:
+                    decisions[-1]["search_telemetry"] = {
+                        name: telemetry[name] for name in ("elapsed_us", "nodes", "outcome")
+                    }
+                side = other(side)
+            candidate_score = terminal_score(board, candidate_side)
+            oracle_score = terminal_score(board, other(candidate_side))
+            result = "draw" if candidate_score == oracle_score else (
+                "candidate_win" if candidate_score > oracle_score else "oracle_win")
+            record: dict[str, object] = {
+                "game": game_index + 1, "pair": pair_index, "member": member,
+                "candidate_side": candidate_side, "oracle_side": other(candidate_side),
+                "rotation": opening.get("rotation", 0),
+                "opening": opening["moves"], "start_board": opening["board"],
+                "start_side": opening["side"], "black": board.count("B"),
+                "white": board.count("W"), "terminal_board": board,
+                "candidate_score": candidate_score, "oracle_score": oracle_score,
+                "result": result, "moves": sum(move != "PS" for move in history),
+                "game_record": "".join(history), "decisions": decisions,
+            }
+            identity = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("ascii")
+            record["game_digest"] = hashlib.sha256(identity).hexdigest()
+            results.append(record)
+            if on_game is not None:
+                on_game(record)
+            completed = game_index + 1
+            total = len(opening_pairs) * 2
+            if completed % progress_every == 0 or completed == total:
+                print(f"progress oracle-match pair={pair_index} member={member} "
+                      f"game={completed}/{total} game={time.monotonic() - game_started:.1f}s "
+                      f"elapsed={time.monotonic() - progress.started:.1f}s",
+                      file=sys.stderr, flush=True)
+    progress.stage_done("match", stage)
+    summary = {name: sum(item["result"] == name for item in results)
+               for name in ("candidate_win", "oracle_win", "draw")}
+    summary["games"] = len(results)
+    summary["match_points"] = summary["candidate_win"] + summary["draw"] * 0.5
+    return {"schema_version": 1, "profile": profile_metadata(profile),
+            "games": len(results), "summary": summary, "results": results}
 
 
 def repo_root() -> Path:

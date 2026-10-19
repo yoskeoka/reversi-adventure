@@ -15,6 +15,20 @@
 
 > **Dependency**: 0019 now selects its candidate under the version-2 direct-match contract and does not require source/seed replay. Freeze its opening suite only after that selected candidate is independently verified. This plan's Oracle is `oracle-0018-acceptance-v1` (6/6/6, exact12); the project candidate uses 12/12/12, exact16.
 
+> **0019 handoff contract**: Before freezing an 0018 candidate or opening suite,
+> receive the human-operated 0019 run-root, manifest, and completed
+> `report.json`, then independently replay the phase receipts and offline
+> verification. Record the report file digest, its `source_commit`, the selected
+> artifact path and SHA-256 (resolve `selected_artifact_relative_path` against
+> the run-root; for `input:baseline_artifact`, use the pinned baseline path in
+> the manifest), and the candidate-update artifact digest. The 0019 report's
+> `exposure_keys` are the minimum collision-check input: union its `opening`,
+> `decision`, `terminal`, `validation`, and `corpus` keys with the verified
+> 0051 and 0037 keys and reconstructed 0019 game positions. Check D4-equivalent
+> board-and-side roots before freezing the 0018 suite. The raw 0019
+> `oracle-match/match.json` and its phase receipt remain diagnostic evidence;
+> they do not select the 0018 candidate or replace the final acceptance test.
+
 ## Objective and completion boundary
 
 Run the final held-out evidence suite for the project-owned strong engine under
@@ -58,8 +72,10 @@ with unrestricted world-class engines.
 2. Use legal, diverse opening prefixes; pair each with reversed colors and
    symmetry rotations where applicable. No opening or position used for 0019
    self-play tuning or artifact selection may enter this suite; check its
-   canonical board-and-side keys against the frozen 0019 report's validation
-   keys and its replayed game positions before the first acceptance game.
+   canonical board-and-side keys against every key class in the independently
+   verified 0019 report and its replayed game positions before the first
+   acceptance game. Resolve the selected artifact from the report and verify
+   its digest against the frozen manifest before using it.
    0051の検証済みbundleに含まれるtrain/validation/held_outとOracle root/child、
    0037 pilotのopening/decision/terminal、0019の学習/評価keysも原本から再構成して
    開局rootとのD4衝突を検査する。`input_bundle.check_acceptance_roots`を利用する。
