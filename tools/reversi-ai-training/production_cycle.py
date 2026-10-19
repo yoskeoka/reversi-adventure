@@ -910,28 +910,33 @@ def build_final_report(context: dict, predecessors: dict[str, Path], manifest_di
     }
 
 
-def runtime_estimate(context: dict) -> dict:
-    """Measure three bounded Oracle roots, then project the requested match."""
-    openings = context["manifest"]["openings"]["oracle-match"]
-    candidates = [openings[0][0]]
-    # Add deterministic midgame and late-game positions from the first opening.
-    board, side = candidates[0]["board"], candidates[0]["side"]
-    for target in (30, 48):
-        while board.count("B") + board.count("W") < target:
+def runtime_representatives(opening: dict) -> list[dict]:
+    """Replay the opening, keeping only positions with a legal move."""
+    board, side = opening["board"], opening["side"]
+    candidates = []
+    last_legal = None
+    for target in (board.count("B") + board.count("W"), 30, 48):
+        while True:
             legal = rf.legal_moves(board, side)
             if not legal:
                 side = rf.other(side)
                 legal = rf.legal_moves(board, side)
                 if not legal:
                     break
-            move = legal[0]
-            board, side = rf.apply_move(board, side, move), rf.other(side)
-        candidates.append({"board": board, "side": side})
-    for item in candidates:
-        if not rf.legal_moves(item["board"], item["side"]):
-            item["side"] = rf.other(item["side"])
-        require(rf.legal_moves(item["board"], item["side"]),
+            occupied = board.count("B") + board.count("W")
+            last_legal = {"board": board, "side": side, "actual_occupied_count": occupied}
+            if occupied >= target:
+                break
+            board, side = rf.apply_move(board, side, legal[0]), rf.other(side)
+        require(last_legal is not None,
                 "runtime estimate could not select a legal representative position")
+        candidates.append({**last_legal, "requested_occupied_count": target})
+    return candidates
+
+
+def runtime_estimate(context: dict) -> dict:
+    """Measure three bounded Oracle roots, then project the requested match."""
+    candidates = runtime_representatives(context["manifest"]["openings"]["oracle-match"][0][0])
     samples, project_samples = [], []
     binary = Path(context["manifest"]["oracle_binary"]["path"])
     project = rf.Candidate(Path(context["manifest"]["candidate_executable"]["path"]),
@@ -957,10 +962,13 @@ def runtime_estimate(context: dict) -> dict:
                    991.8 * requested["self_play_games"] / 6)
     core_low, core_high = min(core_scales), max(core_scales)
     oracle_seconds = (average + project_average) * 29 * requested["oracle_match_games"]
-    measurements = [{"phase": phase, "oracle_seconds": round(oracle_seconds, 3),
+    measurements = [{"phase": phase,
+                     "requested_occupied_count": item["requested_occupied_count"],
+                     "actual_occupied_count": item["actual_occupied_count"],
+                     "oracle_seconds": round(oracle_seconds, 3),
                      "candidate_seconds": round(candidate_seconds, 3)}
-                    for phase, oracle_seconds, candidate_seconds in zip(
-                        ("opening", "midgame", "endgame"), samples, project_samples)]
+                    for phase, item, oracle_seconds, candidate_seconds in zip(
+                        ("opening", "midgame", "endgame"), candidates, samples, project_samples)]
     return {"core_seconds": [round(core_low, 1), round(core_high, 1)],
             "representative_searches": measurements,
             "estimated_oracle_decisions_per_game": 29,

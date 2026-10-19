@@ -20,6 +20,120 @@ import production_cycle
 from types import SimpleNamespace
 
 
+class RuntimeEstimateTests(unittest.TestCase):
+    def failing_opening(self):
+        # First Oracle opening from production seed 20261014.
+        board, side = rf.INITIAL, "B"
+        moves = "c4 c3 e6 f4 d3 b4".split()
+        for move in moves:
+            self.assertIn(move, rf.legal_moves(board, side))
+            board, side = rf.apply_move(board, side, move), rf.other(side)
+        return {"board": board, "side": side, "moves": moves, "rotation": 0}
+
+    def legal_replay(self, opening):
+        board, side = opening["board"], opening["side"]
+        positions = []
+        while True:
+            legal = rf.legal_moves(board, side)
+            if not legal:
+                side = rf.other(side)
+                legal = rf.legal_moves(board, side)
+            if not legal:
+                return positions, board
+            positions.append((board, side))
+            board, side = rf.apply_move(board, side, legal[0]), rf.other(side)
+
+    def context(self, opening):
+        return {"manifest": {
+            "openings": {"oracle-match": [[opening]]},
+            "oracle_binary": {"path": "/fixture/oracle"},
+            "candidate_executable": {"path": "/fixture/candidate"},
+            "match_config": dict(production_cycle.MATCH_CONFIG),
+            "decision_timeout_seconds": 30,
+            "requested_counts": {"self_play_games": 6,
+                                 "baseline_comparison_games": 40, "oracle_match_games": 2}},
+            "paths": {"baseline_artifact": "/fixture/baseline.json"}}
+
+    def test_seed_20261014_uses_last_legal_position_before_terminal_41(self):
+        opening = self.failing_opening()
+        original = copy.deepcopy(opening)
+        positions, terminal = self.legal_replay(opening)
+        self.assertEqual(64 - terminal.count("."), 41)
+        self.assertFalse(rf.legal_moves(terminal, "B"))
+        self.assertFalse(rf.legal_moves(terminal, "W"))
+
+        representatives = production_cycle.runtime_representatives(opening)
+        self.assertEqual([item["requested_occupied_count"] for item in representatives], [10, 30, 48])
+        self.assertEqual([item["actual_occupied_count"] for item in representatives], [10, 30, 40])
+        self.assertEqual((representatives[-1]["board"], representatives[-1]["side"]), positions[-1])
+        for item in representatives:
+            self.assertNotEqual(item["board"], terminal)
+            self.assertTrue(rf.legal_moves(item["board"], item["side"]))
+        self.assertEqual(opening, original)
+
+    def test_ordinary_replay_selects_exact_target_positions(self):
+        opening = {"board": rf.INITIAL, "side": "B"}
+        positions, _ = self.legal_replay(opening)
+        representatives = production_cycle.runtime_representatives(opening)
+        for item, target in zip(representatives, (4, 30, 48)):
+            expected = next(position for position in positions if 64 - position[0].count(".") == target)
+            self.assertEqual((item["board"], item["side"]), expected)
+            self.assertEqual(item["requested_occupied_count"], target)
+            self.assertEqual(item["actual_occupied_count"], target)
+
+    def test_forced_pass_at_target_selects_legal_side_without_mutating_opening(self):
+        opening = {"board": "BW." + "B" * 61, "side": "W"}
+        original = dict(opening)
+        self.assertFalse(rf.legal_moves(opening["board"], "W"))
+        self.assertEqual(rf.legal_moves(opening["board"], "B"), ["c1"])
+        representatives = production_cycle.runtime_representatives(opening)
+        self.assertEqual(representatives[0], {"board": opening["board"], "side": "B",
+                         "requested_occupied_count": 63, "actual_occupied_count": 63})
+        self.assertEqual(opening, original)
+
+    def test_terminal_opening_fails_before_starting_search_processes(self):
+        context = self.context({"board": "B" * 64, "side": "B"})
+        original = copy.deepcopy(context)
+        with mock.patch.object(rf, "Candidate") as candidate, \
+             mock.patch.object(production_cycle.oracle_module, "run_solve") as solve:
+            with self.assertRaisesRegex(training.TrainingError, "could not select a legal representative"):
+                production_cycle.runtime_estimate(context)
+        candidate.assert_not_called()
+        solve.assert_not_called()
+        self.assertEqual(context, original)
+
+    def test_estimate_measures_three_legal_profiles_and_preserves_projection(self):
+        context = self.context(self.failing_opening())
+        original = copy.deepcopy(context)
+        representatives = production_cycle.runtime_representatives(
+            context["manifest"]["openings"]["oracle-match"][0][0])
+        with mock.patch.object(rf, "Candidate") as candidate, \
+             mock.patch.object(production_cycle.oracle_module, "run_solve") as solve, \
+             mock.patch.object(production_cycle.time, "monotonic", side_effect=range(12)):
+            estimate = production_cycle.runtime_estimate(context)
+        project = candidate.return_value
+        self.assertEqual(solve.call_count, 3)
+        self.assertEqual(project.new_game.call_args_list,
+                         [mock.call(f"0019-runtime-estimate-{index}") for index in range(3)])
+        self.assertEqual(project.choose_with_diagnostic.call_args_list,
+                         [mock.call(f"0019-runtime-estimate-{index}", item["board"], item["side"])
+                          for index, item in enumerate(representatives)])
+        for call, item in zip(solve.call_args_list, representatives):
+            self.assertEqual(call.args[0], [(item["board"], item["side"])])
+            self.assertEqual(call.args[3], production_cycle.ORACLE_PROFILE)
+            self.assertEqual(call.kwargs, {"child_query": False})
+        project.close.assert_called_once_with()
+        self.assertEqual(estimate["representative_searches"], [
+            {"phase": phase, "requested_occupied_count": requested, "actual_occupied_count": actual,
+             "oracle_seconds": 1, "candidate_seconds": 1}
+            for phase, requested, actual in (("opening", 10, 10), ("midgame", 30, 30), ("endgame", 48, 40))])
+        self.assertEqual(estimate["core_seconds"], [991.8, 1983.6])
+        self.assertEqual(estimate["estimated_oracle_decisions_per_game"], 29)
+        self.assertEqual(estimate["oracle_match_seconds"], 116)
+        self.assertEqual(estimate["combined_seconds"], [1107.8, 2099.6])
+        self.assertEqual(context, original)
+
+
 class PilotTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
