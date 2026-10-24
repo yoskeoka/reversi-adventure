@@ -134,8 +134,28 @@ class RuntimeEstimateTests(unittest.TestCase):
         self.assertEqual(context, original)
 
 
+class ProductionSourceTests(unittest.TestCase):
+    def test_dirty_checkout_is_rejected_even_with_a_full_commit(self):
+        with mock.patch.object(production_cycle.subprocess, "run", side_effect=[
+                SimpleNamespace(stdout="a" * 40 + "\n"),
+                SimpleNamespace(stdout=" M tools/reversi-ai-training/production_cycle.py\n")]):
+            with self.assertRaisesRegex(training.TrainingError, "clean source checkout"):
+                production_cycle.source_commit()
+
+    def test_missing_short_or_uppercase_commit_is_rejected_before_status(self):
+        for value in ("", "a" * 39, "A" * 40):
+            with self.subTest(commit=value), mock.patch.object(
+                    production_cycle.subprocess, "run", return_value=SimpleNamespace(stdout=value)) as run:
+                with self.assertRaisesRegex(training.TrainingError, "source commit"):
+                    production_cycle.source_commit()
+                self.assertEqual(run.call_count, 1)
+
+
 class PilotTests(unittest.TestCase):
     def setUp(self):
+        commit_patch = mock.patch.object(production_cycle, "source_commit", return_value="a" * 40)
+        self.execution_commit = commit_patch.start()
+        self.addCleanup(commit_patch.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -425,13 +445,9 @@ class PilotTests(unittest.TestCase):
         root = args.run_root
         self.assertTrue((root / "phases" / "baseline-match" / "attempt-0001" / "failure.json").is_file())
         args.resume_from = "baseline-match"
-        with mock.patch.object(production_cycle, "source_commit", return_value="f" * 40):
-            with self.assertRaisesRegex(training.TrainingError, "resume checkout commit differs"):
-                pilot.execute(args)
+        self.execution_commit.return_value = "f" * 40
         args.baseline_comparison_games += 2
-        with self.assertRaisesRegex(training.TrainingError, "resume arguments differ"):
-            pilot.execute(args)
-        args.baseline_comparison_games -= 2
+        args.decision_timeout_seconds = 45
 
         self_play = root / "phases" / "self-play" / "attempt-0001" / "games.jsonl"
         original = self_play.read_bytes()
@@ -459,6 +475,186 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(report["run_status"], "complete")
         self.assertTrue((root / "phases" / "baseline-match" / "attempt-0002" / "receipt.json").is_file())
         self.assertTrue((root / "phases" / "baseline-match" / "attempt-0001" / "failure.json").is_file())
+        provenance = training.read_json(root / "phases" / "baseline-match" / "attempt-0002" / "provenance.json")
+        self.assertEqual(provenance["execution_commit"], "f" * 40)
+        self.assertEqual(provenance["effective_settings"]["decision_timeout_seconds"], 45)
+        self.assertEqual(provenance["effective_settings"]["requested_counts"]["baseline_comparison_games"],
+                         args.baseline_comparison_games)
+
+    @staticmethod
+    def fixture_oracle_move(queries, _binary, _cwd, profile, _timeout, **_kwargs):
+        board, side = queries[0]
+        module = production_cycle.oracle_module
+        depth = module.profile_depth_at(profile, 64 - board.count("."))
+        return [{"move": module.legal_moves(board, side)[0],
+                 "completed_depth": min(board.count("."), depth),
+                 "exact": board.count(".") <= module.profile_exact_threshold(profile)}]
+
+    def run_production_fixture(self, args, *, fail_after=None, emitted=None):
+        real_match = production_cycle.oracle_module.run_profiled_match
+        def match(*positional, **kwargs):
+            save_game = kwargs["on_game"]
+            def save(game):
+                save_game(game)
+                if emitted is not None:
+                    emitted.append(game["game"])
+                if game["game"] == fail_after:
+                    raise training.TrainingError("fixture Oracle timeout")
+            kwargs["on_game"] = save
+            return real_match(*positional, **kwargs)
+        with mock.patch.object(production_cycle, "runtime_estimate", return_value={"fixture": True}), \
+             mock.patch.object(production_cycle.oracle_module, "run_solve", side_effect=self.fixture_oracle_move), \
+             mock.patch.object(production_cycle.oracle_module, "run_profiled_match", side_effect=match), \
+             redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+            return pilot.execute(args)
+
+    def test_0019_legacy_seven_game_prefix_retries_twice_without_rewriting_evidence(self):
+        self.bundle_stub(production=True, profiled=True)
+        args = self.production_args(self.root / "legacy-production")
+        args.oracle_match_games = 20
+        with self.assertRaisesRegex(training.TrainingError, "fixture Oracle timeout"):
+            self.run_production_fixture(args, fail_after=7)
+        root = args.run_root
+        # Model the unmodified schema-2 predecessor receipts and failure output
+        # emitted by the previous executor, before attempt provenance existed.
+        for phase in production_cycle.PHASES:
+            for attempt in production_cycle.phase_dirs(root, phase):
+                for name in ("provenance.json", "game-provenance.jsonl"):
+                    (attempt / name).unlink(missing_ok=True)
+                receipt_path = attempt / "receipt.json"
+                if receipt_path.exists():
+                    receipt = training.read_json(receipt_path)
+                    receipt.pop("receipt_digest")
+                    receipt["schema_version"] = 1
+                    receipt["outputs"].pop("provenance.json", None)
+                    receipt["receipt_digest"] = training.digest(receipt)
+                    receipt_path.write_bytes(pilot.blob(receipt))
+                failure_path = attempt / "failure.json"
+                if failure_path.exists():
+                    failure = training.read_json(failure_path)
+                    failure["schema_version"] = 1
+                    failure.pop("failure_digest", None)
+                    failure.pop("outputs", None)
+                    failure_path.write_bytes(pilot.blob(failure))
+        original = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        legacy_games_path = root / "phases/oracle-match/attempt-0001/games.jsonl"
+        legacy_games = training.read_jsonl(legacy_games_path)
+        context = production_cycle.load_context(root / "manifest.json")
+        predecessors = production_cycle.require_predecessors(
+            root, "oracle-match", training.sha256_file(root / "manifest.json"))
+        wrong_digest = copy.deepcopy(legacy_games)
+        wrong_digest[2]["game_digest"] = "0" * 64
+        for broken in (legacy_games[:2] + legacy_games[3:],
+                       legacy_games[:2] + legacy_games[1:2] + legacy_games[2:],
+                       legacy_games[:2] + [legacy_games[3], legacy_games[2]] + legacy_games[4:],
+                       wrong_digest):
+            legacy_games_path.write_bytes(pilot.lines(broken))
+            games, _ = production_cycle.oracle_prefix(
+                context, predecessors, root / "phases/oracle-match/attempt-0002")
+            self.assertEqual(games, legacy_games[:2])
+        legacy_games_path.write_bytes(original[legacy_games_path])
+        args.resume_from = "oracle-match"
+        args.decision_timeout_seconds = 45
+        self.execution_commit.return_value = "b" * 40
+        emitted = []
+        with self.assertRaisesRegex(training.TrainingError, "fixture Oracle timeout"):
+            self.run_production_fixture(args, fail_after=9, emitted=emitted)
+        self.assertEqual(emitted, [8, 9])
+        second = root / "phases/oracle-match/attempt-0002"
+        production_cycle.verify_failure(second)
+        second_snapshot = {path: path.read_bytes() for path in second.iterdir() if path.is_file()}
+        args.decision_timeout_seconds = 60
+        self.execution_commit.return_value = "c" * 40
+        emitted = []
+        report = self.run_production_fixture(args, emitted=emitted)
+        self.assertEqual(emitted, list(range(10, 21)))
+        self.assertEqual(report["run_status"], "complete")
+        self.assertEqual(report["actual_counts"]["oracle_match_games"], 20)
+        third = root / "phases/oracle-match/attempt-0003"
+        games = training.read_jsonl(third / "games.jsonl")
+        self.assertEqual([game["game"] for game in games], list(range(1, 21)))
+        origins = training.read_jsonl(third / "game-provenance.jsonl")
+        self.assertEqual([row["provenance"]["execution_commit"] for row in origins],
+                         ["a" * 40] * 7 + ["b" * 40] * 2 + ["c" * 40] * 11)
+        self.assertEqual([row["provenance"]["effective_settings"]["decision_timeout_seconds"] for row in origins],
+                         [30] * 7 + [45] * 2 + [60] * 11)
+        for path, content in {**original, **second_snapshot}.items():
+            self.assertEqual(path.read_bytes(), content, str(path))
+        # A fresh offline verifier must reconstruct mixed-commit attempts from
+        # disk without execute() supplying the current invocation context.
+        manifest_path = root / "manifest.json"
+        context = production_cycle.load_context(manifest_path)
+        manifest_digest = training.sha256_file(manifest_path)
+        predecessors = production_cycle.require_predecessors(root, "offline-verification", manifest_digest)
+        with mock.patch.object(rf, "Candidate", side_effect=AssertionError("offline candidate")), \
+             mock.patch.object(production_cycle.oracle_module, "run_solve", side_effect=AssertionError("offline Oracle")):
+            for phase, attempt in predecessors.items():
+                production_cycle.semantic_phase_check(context, phase, attempt, predecessors)
+            self.assertEqual(production_cycle.build_final_report(context, predecessors, manifest_digest), report)
+
+    def test_0019_upstream_settings_require_earliest_phase_before_search(self):
+        self.bundle_stub(production=True, profiled=True)
+        args = self.production_args(self.root / "upstream-boundary")
+        with self.assertRaisesRegex(training.TrainingError, "fixture Oracle timeout"):
+            self.run_production_fixture(args, fail_after=1)
+        args.resume_from = "oracle-match"
+        args.self_play_games += 2
+        with mock.patch.object(production_cycle, "runtime_estimate") as estimate, \
+             mock.patch.object(rf, "Candidate") as candidate:
+            with self.assertRaisesRegex(training.TrainingError, "resume-from self-play"):
+                pilot.execute(args)
+        estimate.assert_not_called()
+        candidate.assert_not_called()
+
+    def test_0019_failed_attempt_provenance_tampering_is_detected(self):
+        self.bundle_stub(production=True, profiled=True)
+        args = self.production_args(self.root / "tamper-production")
+        with self.assertRaisesRegex(training.TrainingError, "fixture Oracle timeout"):
+            self.run_production_fixture(args, fail_after=1)
+        attempt = args.run_root / "phases/oracle-match/attempt-0001"
+        path = attempt / "provenance.json"
+        original = path.read_bytes()
+        failure_path = attempt / "failure.json"
+        original_failure = failure_path.read_bytes()
+        provenance = training.read_json(path)
+        provenance["execution_commit"] = "bad"
+        path.write_bytes(pilot.blob(provenance))
+        with self.assertRaisesRegex(training.TrainingError, "output digest mismatch"):
+            production_cycle.verify_failure(attempt)
+        with self.assertRaisesRegex(training.TrainingError, "execution commit"):
+            production_cycle.validate_provenance(provenance, "oracle-match")
+        provenance.pop("execution_commit")
+        with self.assertRaisesRegex(training.TrainingError, "execution commit"):
+            production_cycle.validate_provenance(provenance, "oracle-match")
+        path.write_bytes(original)
+        production_cycle.verify_failure(attempt)
+        context = production_cycle.load_context(args.run_root / "manifest.json")
+        for mutate in (
+                lambda p: p["effective_settings"].update(decision_timeout_seconds=0),
+                lambda p: p["effective_settings"]["openings"]["oracle-match"][0][0].update(rotation=7),
+                lambda p: p["input_identities"]["oracle_binary"].update(sha256="0" * 64),
+                lambda p: p["predecessors"].update({"self-play": "0" * 64})):
+            provenance = training.read_json(path)
+            mutate(provenance)
+            path.write_bytes(pilot.blob(provenance))
+            failure = training.read_json(failure_path)
+            failure["outputs"]["provenance.json"] = training.sha256_file(path)
+            failure.pop("failure_digest")
+            failure["failure_digest"] = training.digest(failure)
+            failure_path.write_bytes(pilot.blob(failure))
+            with self.assertRaises(training.TrainingError):
+                production_cycle.verify_failed_attempts(args.run_root, context)
+            path.write_bytes(original)
+            failure_path.write_bytes(original_failure)
+        path.unlink()
+        with self.assertRaisesRegex(training.TrainingError, "output digest mismatch"):
+            production_cycle.verify_failure(attempt)
+        path.write_bytes(original)
+        failure = training.read_json(failure_path)
+        failure["error"] = "modified failure text"
+        failure_path.write_bytes(pilot.blob(failure))
+        with self.assertRaisesRegex(training.TrainingError, "failure record digest mismatch"):
+            production_cycle.verify_failure(attempt)
 
     def test_bundle_gate_is_derived_again_not_taken_from_context(self):
         verified, verifier = self.bundle_stub(production=True)

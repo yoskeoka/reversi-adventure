@@ -2283,15 +2283,33 @@ def run_profiled_match(
     timeout: float,
     progress_every: int = 1,
     on_game=None,
+    *,
+    initial_games=None,
 ) -> dict[str, object]:
     """Play pinned Oracle games and retain actual search telemetry per decision."""
     validate_profile(profile)
     validate_budget(1, timeout)
     if not opening_pairs or progress_every < 1:
         die("profiled match requires opening pairs and a positive progress interval")
+    results: list[dict[str, object]] = list(initial_games or [])
+    if len(results) > len(opening_pairs) * 2:
+        die("profiled match completed prefix exceeds requested games")
+    for index, game in enumerate(results):
+        if not isinstance(game, dict):
+            die("profiled match completed prefix has an invalid game")
+        expected = dict(game)
+        saved_digest = expected.pop("game_digest", None)
+        digest = hashlib.sha256(json.dumps(expected, sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()
+        opening = opening_pairs[index // 2][index % 2]
+        if (saved_digest != digest or game.get("game") != index + 1
+                or game.get("pair") != index // 2 or game.get("member") != index % 2
+                or game.get("opening") != opening["moves"]
+                or game.get("start_board") != opening["board"]
+                or game.get("start_side") != opening["side"]):
+            die("profiled match completed prefix identity or digest mismatch")
     progress = Progress(progress_every)
     stage = progress.stage_start("match")
-    results: list[dict[str, object]] = []
+    prefix_count = len(results)
     oracle_exact = profile_exact_threshold(profile)
     oracle_search = {**profile_metadata(profile)["oracle"],
                      "profile": profile.name,
@@ -2301,6 +2319,8 @@ def run_profiled_match(
             die("profiled match opening pair must contain two members")
         for member, opening in enumerate(pair):
             game_index = pair_index * 2 + member
+            if game_index < prefix_count:
+                continue
             game_started = time.monotonic()
             board, side = str(opening["board"]), str(opening["side"])
             if not BOARD_RE.fullmatch(board) or side not in ("B", "W"):

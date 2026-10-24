@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pilot
 import reinforcement as rf
@@ -50,7 +52,181 @@ def source_commit() -> str:
     commit = result.stdout.strip()
     require(bool(re.fullmatch(r"[0-9a-f]{40}", commit)),
             "could not identify the 0019 source commit")
+    status = subprocess.run(["git", "-C", str(repository_root), "status", "--porcelain", "--untracked-files=normal"],
+                            check=True, capture_output=True, text=True)
+    require(not status.stdout.strip(), "0019 execution requires a clean source checkout")
     return commit
+
+
+SETTING_KEYS = ("seed", "opening_plies", "requested_counts", "self_play_config",
+                "match_config", "decision_timeout_seconds", "max_decisions", "openings")
+
+
+def settings(manifest: dict) -> dict:
+    return {key: copy.deepcopy(manifest[key]) for key in SETTING_KEYS}
+
+
+def input_identities(manifest: dict) -> dict:
+    return {key: manifest[key] for key in ("input_bundle", "bundle_verification_receipt",
+            "candidate_executable", "oracle_binary", "inputs", "oracle_profile")}
+
+
+def validate_provenance(value: dict, phase: str) -> None:
+    require(value.get("phase") == phase and value.get("schema_version") == 1,
+            "attempt provenance identity mismatch")
+    require(isinstance(value.get("execution_commit"), str)
+            and re.fullmatch(r"[0-9a-f]{40}", value["execution_commit"]),
+            "invalid attempt execution commit")
+    require(type(value.get("progress_every", 1)) is int and value.get("progress_every", 1) > 0,
+            "invalid attempt progress interval")
+    require(value.get("resume_from") is None or value.get("resume_from") in PHASES,
+            "invalid attempt resume source")
+    require(set(value.get("effective_settings", {})) == set(SETTING_KEYS)
+            and isinstance(value.get("predecessors"), dict)
+            and isinstance(value.get("input_identities"), dict), "incomplete attempt provenance")
+
+
+def attempt_context(context: dict, attempt: Path, phase: str) -> dict:
+    path = attempt / "provenance.json"
+    if not path.exists():
+        return {**context, "manifest": context.get("original_manifest", context["manifest"])}
+    value = training.read_json(path)
+    validate_provenance(value, phase)
+    require(value["input_identities"] == input_identities(context["manifest"]),
+            "attempt input identities differ")
+    manifest = {**context["manifest"], **value["effective_settings"],
+                "execution_commit": value["execution_commit"]}
+    validate_settings_context({**context, "manifest": manifest})
+    return {**context, "manifest": manifest}
+
+
+def validate_settings_context(context: dict) -> None:
+    manifest = context["manifest"]
+    for key, minimum, maximum in (("seed", 0, 2**64 - 1), ("opening_plies", 4, 20),
+                                  ("decision_timeout_seconds", 1, 3600)):
+        training.require_int(manifest[key], key, minimum, maximum)
+    counts = manifest["requested_counts"]
+    require(set(counts) == {"self_play_games", "baseline_comparison_games", "oracle_match_games"},
+            "invalid attempt requested count fields")
+    for field, maximum in (("self_play_games", 64), ("baseline_comparison_games", 200),
+                           ("oracle_match_games", 200)):
+        training.require_int(counts[field], field, 2, maximum)
+        require(counts[field] % 2 == 0, "attempt counts must contain complete pairs")
+    config = manifest["self_play_config"]
+    training.require_int(config["time_limit_ms"], "time limit", 1)
+    training.require_int(config["node_limit"], "node limit", 1)
+    require(manifest["decision_timeout_seconds"] * 1000 > config["time_limit_ms"],
+            "decision timeout must exceed the candidate search limit")
+    require(config == {**SELF_PLAY_CONFIG, "time_limit_ms": config["time_limit_ms"],
+                       "node_limit": config["node_limit"]}
+            and manifest["match_config"] == {**MATCH_CONFIG, "time_limit_ms": config["time_limit_ms"],
+                                             "node_limit": config["node_limit"]},
+            "attempt search configuration mismatch")
+    args = SimpleNamespace(seed=manifest["seed"], opening_plies=manifest["opening_plies"],
+        decision_timeout_seconds=manifest["decision_timeout_seconds"], **counts,
+        time_limit_ms=config["time_limit_ms"], node_limit=config["node_limit"])
+    expected = invocation_context(context, args, {})["manifest"]
+    require(settings(manifest) == settings(expected), "attempt settings/openings do not reproduce")
+
+
+def attempt_provenance(context: dict, phase: str, predecessors: dict[str, Path]) -> dict:
+    manifest = context["manifest"]
+    return {"schema_version": 1, "phase": phase,
+            "resume_from": context.get("resume_from"),
+            "execution_commit": context.get("execution_commit", manifest["execution_commit"]),
+            "effective_settings": settings(manifest),
+            "progress_every": context.get("progress_every", 1),
+            "input_identities": input_identities(manifest),
+            "predecessors": {name: training.read_json(path / "receipt.json")["receipt_digest"]
+                             for name, path in predecessors.items()}}
+
+
+def verify_failure(attempt: Path) -> dict:
+    value = training.read_json(attempt / "failure.json")
+    if "failure_digest" not in value:
+        require(value.get("schema_version") == 1 and not (attempt / "provenance.json").exists(),
+                "unsealed attempt failure")
+        return value
+    unsigned = dict(value)
+    digest = unsigned.pop("failure_digest")
+    require(digest == training.digest(unsigned), "failure record digest mismatch")
+    actual = {path.name: training.sha256_file(path) for path in attempt.iterdir()
+              if path.is_file() and path.name != "failure.json"}
+    require(value.get("outputs") == actual, "failed attempt output digest mismatch")
+    require(value.get("phase") == attempt.parent.name and value.get("attempt") == attempt.name
+            and value.get("status") == "failed", "failure record identity mismatch")
+    validate_provenance(training.read_json(attempt / "provenance.json"), attempt.parent.name)
+    return value
+
+
+def check_dependencies(context: dict, predecessors: dict[str, Path]) -> None:
+    for phase, attempt in predecessors.items():
+        path = attempt / "provenance.json"
+        if path.exists():
+            value = training.read_json(path)
+            validate_provenance(value, phase)
+            expected = {name: training.read_json(prior / "receipt.json")["receipt_digest"]
+                        for name, prior in predecessors.items()
+                        if PHASES.index(name) < PHASES.index(phase)}
+            require(value["predecessors"] == expected, f"{phase} predecessor receipt chain mismatch")
+
+
+def verify_failed_attempts(run_root: Path, context: dict) -> None:
+    for phase in PHASES:
+        for attempt in phase_dirs(run_root, phase):
+            if (attempt / "failure.json").exists():
+                value = verify_failure(attempt)
+                if (attempt / "provenance.json").exists():
+                    attempt_context(context, attempt, phase)
+                    require(value.get("manifest_sha256") == training.sha256_file(context["manifest_path"]),
+                            "failed attempt manifest identity differs")
+                    provenance = training.read_json(attempt / "provenance.json")
+                    required = set(PHASES[:PHASES.index(phase)])
+                    require(set(provenance["predecessors"]) == required,
+                            "failed attempt predecessor phases differ")
+                    for prior, digest in provenance["predecessors"].items():
+                        matches = [path for path in phase_dirs(run_root, prior)
+                                   if (path / "receipt.json").exists()
+                                   and training.read_json(path / "receipt.json").get("receipt_digest") == digest]
+                        require(len(matches) == 1, "failed attempt predecessor receipt missing")
+                        verify_receipt(matches[0], prior, value["manifest_sha256"])
+
+
+def invocation_context(context: dict, args, predecessors: dict[str, Path]) -> dict:
+    original = context["manifest"]
+    manifest = copy.deepcopy(original)
+    manifest["execution_commit"] = context.get("execution_commit", original["execution_commit"])
+    manifest.update(seed=args.seed, opening_plies=args.opening_plies,
+                    decision_timeout_seconds=args.decision_timeout_seconds)
+    manifest["requested_counts"] = {"self_play_games": args.self_play_games,
+        "baseline_comparison_games": args.baseline_comparison_games,
+        "oracle_match_games": args.oracle_match_games}
+    for key in ("self_play_config", "match_config"):
+        manifest[key].update(time_limit_ms=args.time_limit_ms, node_limit=args.node_limit)
+    affected = {"self-play": ("seed", "opening_plies", "self_play_config"),
+                "baseline-match": ("match_config",), "oracle-match": ()}
+    count_keys = {"self-play": "self_play_games", "baseline-match": "baseline_comparison_games",
+                  "oracle-match": "oracle_match_games"}
+    for phase, attempt in predecessors.items():
+        if phase not in affected:
+            continue
+        previous = attempt_context(context, attempt, phase)["manifest"]
+        keys = affected[phase]
+        field = count_keys[phase]
+        require(all(manifest[key] == previous[key] for key in keys)
+                and manifest["requested_counts"][field] == previous["requested_counts"][field],
+                f"changed settings require --resume-from {phase} or an earlier phase")
+    forbidden = context["baseline_keys"] | context["reserved"] | context["corpus_keys"]
+    forbidden |= {pilot.key(row["board"], row["side"]) for row in context["validation"] + context["held_out"]}
+    for name in ("train", "validation", "held_out", "oracle_root", "oracle_child"):
+        forbidden |= set(context["verified"]["exposure_keys"].get(name, []))
+    for phase, field in count_keys.items():
+        pairs = opening_pairs(manifest["seed"], manifest["opening_plies"],
+                              manifest["requested_counts"][field] // 2, forbidden, "0019-" + phase)
+        manifest["openings"][phase] = pairs
+        forbidden |= opening_root_set(pairs)
+    manifest["max_decisions"] = sum(manifest["requested_counts"].values()) * 120 + len(context["corpus"]) * 2
+    return {**context, "manifest": manifest}
 
 
 def rotate_coordinate(move: str, rotation: int) -> str:
@@ -296,7 +472,8 @@ def load_context(manifest_path: Path) -> dict:
         require(manifest["openings"].get(name) == expected_openings[name],
                 f"0019 frozen {name} openings do not reproduce")
         forbidden |= opening_root_set(expected_openings[name])
-    return {"manifest": manifest, "verified": verified, "paths": paths,
+    return {"manifest": manifest, "original_manifest": copy.deepcopy(manifest),
+            "verified": verified, "paths": paths,
             "baseline": baseline, "baseline_keys": baseline_keys, "validation": validation,
             "held_out": held_out, "reserved": reserved, "corpus": corpus,
             "golden": golden, "corpus_keys": corpus_keys,
@@ -321,6 +498,7 @@ def verify_receipt(attempt: Path, phase: str, manifest_digest: str) -> dict:
     require(receipt.get("phase") == phase and receipt.get("status") == "complete"
             and receipt.get("manifest_sha256") == manifest_digest,
             f"{phase} receipt identity mismatch")
+    require(receipt.get("schema_version") in (1, 2), "unsupported phase receipt")
     outputs = receipt.get("outputs")
     require(isinstance(outputs, dict) and outputs, f"{phase} receipt has no outputs")
     for name, digest in outputs.items():
@@ -329,6 +507,10 @@ def verify_receipt(attempt: Path, phase: str, manifest_digest: str) -> dict:
                 f"{phase} output digest mismatch: {name}")
     actual = {path.name for path in attempt.iterdir() if path.is_file() and path.name not in ("receipt.json",)}
     require(actual == set(outputs), f"{phase} attempt contains unreceipted outputs")
+    require(receipt["schema_version"] != 2 or "provenance.json" in outputs,
+            "missing attempt provenance")
+    if "provenance.json" in outputs:
+        validate_provenance(training.read_json(attempt / "provenance.json"), phase)
     return receipt
 
 
@@ -338,8 +520,8 @@ def latest_success(run_root: Path, phase: str, manifest_digest: str) -> tuple[Pa
             continue
         try:
             return attempt, verify_receipt(attempt, phase, manifest_digest)
-        except training.TrainingError:
-            continue
+        except training.TrainingError as error:
+            raise training.TrainingError(f"invalid predecessor phase {phase}: {error}") from error
     return None
 
 
@@ -352,18 +534,21 @@ def require_predecessors(run_root: Path, target_phase: str, manifest_digest: str
     return result
 
 
-def write_attempt(run_root: Path, phase: str, manifest_digest: str, action) -> Path:
+def write_attempt(run_root: Path, phase: str, manifest_digest: str, action, provenance=None) -> Path:
     parent = run_root / "phases" / phase
     parent.mkdir(parents=True, exist_ok=True)
     attempts = phase_dirs(run_root, phase)
     attempt = parent / f"attempt-{len(attempts) + 1:04d}"
     attempt.mkdir()
     try:
+        if provenance is not None:
+            validate_provenance(provenance, phase)
+            rf.atomic_write(attempt, "provenance.json", blob(provenance))
         action(attempt)
         outputs = {path.name: training.sha256_file(path) for path in sorted(attempt.iterdir())
                    if path.is_file() and path.name != "receipt.json"}
         require(bool(outputs), f"{phase} produced no outputs")
-        receipt = {"schema_version": 1, "phase": phase, "status": "complete",
+        receipt = {"schema_version": 2 if provenance is not None else 1, "phase": phase, "status": "complete",
                    "attempt": attempt.name, "manifest_sha256": manifest_digest,
                    "outputs": outputs}
         receipt["receipt_digest"] = training.digest(receipt)
@@ -371,8 +556,13 @@ def write_attempt(run_root: Path, phase: str, manifest_digest: str, action) -> P
         verify_receipt(attempt, phase, manifest_digest)
         return attempt
     except BaseException as error:
-        failure = {"schema_version": 1, "phase": phase, "attempt": attempt.name,
+        failure = {"schema_version": 2 if provenance is not None else 1, "phase": phase, "attempt": attempt.name,
                    "status": "failed", "error": str(error)}
+        if provenance is not None:
+            failure["manifest_sha256"] = manifest_digest
+            failure["outputs"] = {path.name: training.sha256_file(path) for path in attempt.iterdir()
+                                  if path.is_file() and path.name != "failure.json"}
+            failure["failure_digest"] = training.digest(failure)
         try:
             rf.atomic_write(attempt, "failure.json", blob(failure))
         except OSError:
@@ -591,31 +781,206 @@ def phase_corpus_regret(context: dict, predecessors: dict[str, Path], attempt: P
     rf.atomic_write(attempt, "report.json", blob(report))
 
 
+def game_origin(context: dict, source: Path, game: dict) -> dict:
+    path = source / "provenance.json"
+    provenance = (training.read_json(path) if path.exists() else
+                  {"schema_version": 1, "phase": "oracle-match", "resume_from": None,
+                   "execution_commit": context.get("original_manifest", context["manifest"])["execution_commit"],
+                   "effective_settings": settings(context.get("original_manifest", context["manifest"])),
+                   "input_identities": input_identities(context["manifest"]), "predecessors": {}})
+    validate_provenance(provenance, "oracle-match")
+    return {"game": game["game"], "game_digest": game["game_digest"],
+            "source_attempt": source.name, "provenance": provenance,
+            "provenance_digest": training.digest(provenance)}
+
+
+def verify_game_origin(context: dict, attempt: Path, game: dict, origin: dict) -> dict:
+    require(origin.get("game") == game["game"] and origin.get("game_digest") == game["game_digest"],
+            "Oracle game provenance identity mismatch")
+    source_name = origin.get("source_attempt", "")
+    require(bool(re.fullmatch(r"attempt-[0-9]{4,}", source_name)), "invalid Oracle source attempt")
+    source = attempt.parent / source_name
+    require(source.name <= attempt.name, "Oracle provenance points to a later attempt")
+    expected = game_origin(context, source, game)
+    require(origin == expected, "Oracle game provenance mismatch")
+    source_lines = output(source, "games.jsonl").read_text(encoding="utf-8").splitlines()
+    require(len(source_lines) >= game["game"]
+            and json.loads(source_lines[game["game"] - 1]) == game,
+            "Oracle source game differs")
+    value = origin["provenance"]
+    current_path = attempt / "provenance.json"
+    if current_path.exists():
+        current_update = training.read_json(current_path)["predecessors"].get("candidate-update")
+        source_update = value["predecessors"].get("candidate-update")
+        if (source / "provenance.json").exists():
+            require(current_update == source_update, "Oracle game candidate predecessor differs")
+        else:
+            original_update = attempt.parents[2] / "phases" / "candidate-update" / "attempt-0001" / "receipt.json"
+            require(original_update.is_file()
+                    and current_update == training.read_json(original_update)["receipt_digest"],
+                    "legacy Oracle game candidate predecessor differs")
+    validate_settings_context({**context, "manifest": {**context["manifest"], **value["effective_settings"]}})
+    require(value["input_identities"] == input_identities(context["manifest"]),
+            "Oracle source input identities differ")
+    return {**context["manifest"], **value["effective_settings"],
+            "execution_commit": value["execution_commit"]}
+
+
+def oracle_prefix(context: dict, predecessors: dict[str, Path], attempt: Path) -> tuple[list, list]:
+    previous = [path for path in phase_dirs(attempt.parents[2], "oracle-match") if path < attempt]
+    if not previous or not (previous[-1] / "failure.json").exists():
+        return [], []
+    source = previous[-1]
+    verify_failure(source)
+    if not (source / "games.jsonl").exists():
+        return [], []
+    prior_context = attempt_context(context, source, "oracle-match")
+    prior_manifest = prior_context["manifest"]
+    # A changed candidate artifact invalidates the old match, even when the executable is unchanged.
+    provenance_path = source / "provenance.json"
+    if provenance_path.exists():
+        prior_update = training.read_json(provenance_path)["predecessors"].get("candidate-update")
+        if prior_update != training.read_json(predecessors["candidate-update"] / "receipt.json")["receipt_digest"]:
+            return [], []
+    elif predecessors["candidate-update"].name != "attempt-0001":
+        return [], []
+    games, origins = [], []
+    origin_path = source / "game-provenance.jsonl"
+    old_origins = training.read_jsonl(origin_path) if origin_path.exists() else None
+    # Parse line by line so a broken tail never discards a validated completed prefix.
+    for index, line in enumerate((source / "games.jsonl").read_text(encoding="utf-8").splitlines()):
+        try:
+            if index >= context["manifest"]["requested_counts"]["oracle_match_games"]:
+                break
+            game = json.loads(line)
+            origin = old_origins[index] if old_origins is not None else game_origin(context, source, game)
+            origin_manifest = verify_game_origin(context, source, game, origin)
+            validate_oracle_game(origin_manifest, game, index)
+            require(context["manifest"]["match_config"] == origin_manifest["match_config"],
+                    "Oracle retry candidate configuration differs")
+            require(context["manifest"]["openings"]["oracle-match"][index // 2][index % 2]
+                    == origin_manifest["openings"]["oracle-match"][index // 2][index % 2],
+                    "Oracle retry opening differs")
+            require(prior_manifest["oracle_profile"] == context["manifest"]["oracle_profile"],
+                    "Oracle retry profile differs")
+        except (training.TrainingError, ValueError, KeyError, IndexError, TypeError):
+            break
+        games.append(game)
+        origins.append(origin)
+    return games, origins
+
+
 def phase_oracle_match(context: dict, predecessors: dict[str, Path], attempt: Path,
                        progress_every: int) -> None:
     manifest = context["manifest"]
     candidate_artifact = output(predecessors["candidate-update"], "candidate-artifact.json")
+    completed, origins = oracle_prefix(context, predecessors, attempt)
     candidate = rf.Candidate(Path(manifest["candidate_executable"]["path"]), candidate_artifact,
         manifest["match_config"], manifest["decision_timeout_seconds"], capture_diagnostics=True)
     try:
         pairs = [(pair[0], pair[1]) for pair in manifest["openings"]["oracle-match"]]
-        completed = []
+        rf.atomic_write(attempt, "games.jsonl", b"".join(blob(item) for item in completed))
+        rf.atomic_write(attempt, "game-provenance.jsonl", b"".join(blob(item) for item in origins))
         def save_game(game):
             completed.append(game)
+            origins.append(game_origin(context, attempt, game))
             rf.atomic_write(attempt, "games.jsonl", b"".join(blob(item) for item in completed))
+            rf.atomic_write(attempt, "game-provenance.jsonl", b"".join(blob(item) for item in origins))
         report = oracle_module.run_profiled_match(
             Path(manifest["oracle_binary"]["path"]),
             Path(manifest["oracle_binary"]["path"]).parent,
             candidate, pairs, ORACLE_PROFILE, manifest["match_config"],
-            manifest["decision_timeout_seconds"], progress_every, on_game=save_game,
+            manifest["decision_timeout_seconds"], progress_every, on_game=save_game, initial_games=completed,
         )
     finally:
         candidate.close()
     rf.atomic_write(attempt, "match.json", blob(report))
 
 
+def validate_oracle_game(manifest: dict, game: dict, index: int) -> None:
+    opening = manifest["openings"]["oracle-match"][index // 2][index % 2]
+    require(game["game"] == index + 1 and game["pair"] == index // 2
+            and game["member"] == index % 2 and game["rotation"] == opening["rotation"]
+            and game["opening"] == opening["moves"] and game["start_board"] == opening["board"]
+            and game["start_side"] == opening["side"]
+            and game["candidate_side"] == ("B" if index % 2 == 0 else "W"),
+            "0019 Oracle match pair differs from frozen opening")
+    expected = dict(game)
+    digest = expected.pop("game_digest")
+    require(digest == hashlib.sha256(json.dumps(expected, sort_keys=True,
+            separators=(",", ":")).encode("ascii")).hexdigest(),
+            "0019 Oracle match game digest mismatch")
+    board, side = game["start_board"], game["start_side"]
+    for decision in game["decisions"]:
+        root_empty = board.count(".")
+        root_occupied = board.count("B") + board.count("W")
+        require(decision["board"] == board and decision["side"] == side,
+                "0019 Oracle match decision state mismatch")
+        require(decision.get("actor") == ("candidate" if side == game["candidate_side"] else "oracle"),
+                "0019 Oracle match actor does not match the frozen seat")
+        legal = oracle_module.legal_moves(board, side)
+        if legal:
+            require(decision["move"] in legal, "0019 Oracle match contains an illegal move")
+            board = oracle_module.apply_move(board, side, decision["move"])
+        else:
+            require(decision["move"] == "pass" and oracle_module.legal_moves(board, oracle_module.other(side)),
+                    "0019 Oracle match pass is invalid")
+        require(type(decision["completed_depth"]) is int and type(decision["exact"]) is bool,
+                "0019 Oracle telemetry is incomplete")
+        if decision["actor"] == "candidate":
+            telemetry = decision.get("search_telemetry", {})
+            configured = decision["configured_search"]
+            depth_name = "opening_depth" if root_occupied < 24 else (
+                "endgame_depth" if root_empty <= manifest["match_config"][
+                    "exact_solver_empty_squares"] else "midgame_depth")
+            require(configured == manifest["match_config"]
+                    and decision["configured_depth"] == manifest["match_config"][depth_name]
+                    and decision["exact_solver_empty_squares"]
+                        == manifest["match_config"]["exact_solver_empty_squares"],
+                    "0019 candidate Oracle-match profile mismatch")
+            require(type(telemetry.get("nodes")) is int and type(telemetry.get("elapsed_us")) is int
+                    and telemetry.get("outcome") in ("move", "pass", "game_over")
+                    and telemetry["nodes"] <= configured["node_limit"]
+                    and telemetry["elapsed_us"] <= configured["time_limit_ms"] * 1000,
+                    "0019 candidate exceeded or omitted its search resource evidence")
+        else:
+            expected_depth = oracle_module.profile_depth_at(
+                ORACLE_PROFILE, root_occupied) if legal else 0
+            oracle_search = {**manifest["oracle_profile"]["oracle"],
+                             "profile": manifest["oracle_profile_id"],
+                             "exact_solver_empty_squares": manifest[
+                                 "oracle_exact_solver_empty_squares"]}
+            require(decision["configured_search"] == oracle_search
+                    and decision["configured_depth"] == expected_depth
+                    and decision["exact_solver_empty_squares"]
+                        == manifest["oracle_exact_solver_empty_squares"],
+                    "0019 Oracle search profile mismatch")
+        if decision["move"] != "pass" and root_empty <= decision["exact_solver_empty_squares"]:
+            require(decision["exact"], "0019 Oracle match omitted a required exact solve")
+        side = oracle_module.other(side)
+    require(board == game["terminal_board"] and not oracle_module.legal_moves(board, side)
+            and not oracle_module.legal_moves(board, oracle_module.other(side)),
+            "0019 Oracle game does not reach its recorded terminal board")
+    candidate_score = oracle_module.terminal_score(board, game["candidate_side"])
+    oracle_score = oracle_module.terminal_score(board, game["oracle_side"])
+    expected_result = "draw" if candidate_score == oracle_score else (
+        "candidate_win" if candidate_score > oracle_score else "oracle_win")
+    require(game["candidate_score"] == candidate_score and game["oracle_score"] == oracle_score
+            and game["result"] == expected_result,
+            "0019 Oracle match score does not replay")
+    expected_record = "".join(opening["moves"] + [
+        "PS" if decision["move"] == "pass" else decision["move"]
+        for decision in game["decisions"]])
+    require(game["game_record"] == expected_record
+            and game["moves"] == len(opening["moves"]) + sum(
+                decision["move"] != "pass" for decision in game["decisions"])
+            and game["black"] == board.count("B") and game["white"] == board.count("W"),
+            "0019 Oracle match record or terminal counts do not replay")
+
+
 def semantic_phase_check(context: dict, phase: str, attempt: Path,
                          predecessors: dict[str, Path]) -> None:
+    context = attempt_context(context, attempt, phase)
     manifest = context["manifest"]
     if phase == "input-verification":
         evidence = training.read_json(output(attempt, "evidence.json"))
@@ -716,86 +1081,21 @@ def semantic_phase_check(context: dict, phase: str, attempt: Path,
                 and saved_games == report["results"],
                 "0019 Oracle match game count mismatch")
         expected_summary = {name: 0 for name in ("candidate_win", "oracle_win", "draw")}
-        expected_pairs = manifest["openings"]["oracle-match"]
+        origins_path = attempt / "game-provenance.jsonl"
+        origins = training.read_jsonl(origins_path) if origins_path.exists() else None
+        require((origins is not None or not (attempt / "provenance.json").exists())
+                and (origins is None or len(origins) == expected_games), "Oracle game provenance count mismatch")
         for index, game in enumerate(report["results"]):
-            opening = expected_pairs[index // 2][index % 2]
-            require(game["game"] == index + 1 and game["pair"] == index // 2
-                    and game["member"] == index % 2 and game["rotation"] == opening["rotation"]
-                    and game["opening"] == opening["moves"] and game["start_board"] == opening["board"]
-                    and game["start_side"] == opening["side"]
-                    and game["candidate_side"] == ("B" if index % 2 == 0 else "W"),
-                    "0019 Oracle match pair differs from frozen opening")
-            expected = dict(game)
-            digest = expected.pop("game_digest")
-            require(digest == hashlib.sha256(json.dumps(expected, sort_keys=True,
-                    separators=(",", ":")).encode("ascii")).hexdigest(),
-                    "0019 Oracle match game digest mismatch")
-            board, side = game["start_board"], game["start_side"]
-            for decision in game["decisions"]:
-                root_empty = board.count(".")
-                root_occupied = board.count("B") + board.count("W")
-                require(decision["board"] == board and decision["side"] == side,
-                        "0019 Oracle match decision state mismatch")
-                require(decision.get("actor") == ("candidate" if side == game["candidate_side"] else "oracle"),
-                        "0019 Oracle match actor does not match the frozen seat")
-                legal = oracle_module.legal_moves(board, side)
-                if legal:
-                    require(decision["move"] in legal, "0019 Oracle match contains an illegal move")
-                    board = oracle_module.apply_move(board, side, decision["move"])
-                else:
-                    require(decision["move"] == "pass" and oracle_module.legal_moves(board, oracle_module.other(side)),
-                            "0019 Oracle match pass is invalid")
-                require(type(decision["completed_depth"]) is int and type(decision["exact"]) is bool,
-                        "0019 Oracle telemetry is incomplete")
-                if decision["actor"] == "candidate":
-                    telemetry = decision.get("search_telemetry", {})
-                    configured = decision["configured_search"]
-                    depth_name = "opening_depth" if root_occupied < 24 else (
-                        "endgame_depth" if root_empty <= manifest["match_config"][
-                            "exact_solver_empty_squares"] else "midgame_depth")
-                    require(configured == manifest["match_config"]
-                            and decision["configured_depth"] == manifest["match_config"][depth_name]
-                            and decision["exact_solver_empty_squares"]
-                                == manifest["match_config"]["exact_solver_empty_squares"],
-                            "0019 candidate Oracle-match profile mismatch")
-                    require(type(telemetry.get("nodes")) is int and type(telemetry.get("elapsed_us")) is int
-                            and telemetry.get("outcome") in ("move", "pass", "game_over")
-                            and telemetry["nodes"] <= configured["node_limit"]
-                            and telemetry["elapsed_us"] <= configured["time_limit_ms"] * 1000,
-                            "0019 candidate exceeded or omitted its search resource evidence")
-                else:
-                    expected_depth = oracle_module.profile_depth_at(
-                        ORACLE_PROFILE, root_occupied) if legal else 0
-                    oracle_search = {**manifest["oracle_profile"]["oracle"],
-                                     "profile": manifest["oracle_profile_id"],
-                                     "exact_solver_empty_squares": manifest[
-                                         "oracle_exact_solver_empty_squares"]}
-                    require(decision["configured_search"] == oracle_search
-                            and decision["configured_depth"] == expected_depth
-                            and decision["exact_solver_empty_squares"]
-                                == manifest["oracle_exact_solver_empty_squares"],
-                            "0019 Oracle search profile mismatch")
-                if decision["move"] != "pass" and root_empty <= decision["exact_solver_empty_squares"]:
-                    require(decision["exact"], "0019 Oracle match omitted a required exact solve")
-                side = oracle_module.other(side)
-            require(board == game["terminal_board"] and not oracle_module.legal_moves(board, side)
-                    and not oracle_module.legal_moves(board, oracle_module.other(side)),
-                    "0019 Oracle game does not reach its recorded terminal board")
-            candidate_score = oracle_module.terminal_score(board, game["candidate_side"])
-            oracle_score = oracle_module.terminal_score(board, game["oracle_side"])
-            expected_result = "draw" if candidate_score == oracle_score else (
-                "candidate_win" if candidate_score > oracle_score else "oracle_win")
-            require(game["candidate_score"] == candidate_score and game["oracle_score"] == oracle_score
-                    and game["result"] == expected_result,
-                    "0019 Oracle match score does not replay")
-            expected_record = "".join(opening["moves"] + [
-                "PS" if decision["move"] == "pass" else decision["move"]
-                for decision in game["decisions"]])
-            require(game["game_record"] == expected_record
-                    and game["moves"] == len(opening["moves"]) + sum(
-                        decision["move"] != "pass" for decision in game["decisions"])
-                    and game["black"] == board.count("B") and game["white"] == board.count("W"),
-                    "0019 Oracle match record or terminal counts do not replay")
+            game_manifest = manifest
+            if origins is not None:
+                origin = origins[index]
+                game_manifest = verify_game_origin(context, attempt, game, origin)
+            require(game_manifest["match_config"] == manifest["match_config"],
+                    "Oracle game origin candidate configuration differs")
+            require(game_manifest["openings"]["oracle-match"][index // 2][index % 2]
+                    == manifest["openings"]["oracle-match"][index // 2][index % 2],
+                    "Oracle game origin opening differs from attempt")
+            validate_oracle_game(game_manifest, game, index)
             expected_summary[game["result"]] += 1
         expected_summary["games"] = expected_games
         expected_summary["match_points"] = expected_summary["candidate_win"] + expected_summary["draw"] * 0.5
@@ -805,7 +1105,7 @@ def semantic_phase_check(context: dict, phase: str, attempt: Path,
     elif phase == "offline-verification":
         report = training.read_json(output(attempt, "report.json"))
         require(report["schema_version"] == 2 and report["run_status"] == "complete"
-                and report.get("execution_commit") == manifest["execution_commit"],
+                and report.get("execution_commit") == context.get("original_manifest", manifest)["execution_commit"],
                 "0019 final report is incomplete")
         expected = build_final_report(context, predecessors, report["manifest_sha256"])
         require(report == expected, "0019 final report does not reconstruct from verified phase outputs")
@@ -838,19 +1138,31 @@ def run_phase(context: dict, run_root: Path, manifest_digest: str, phase: str,
                 require(found is not None, f"offline verification requires completed phase {prior}")
                 verify_receipt(found[0], prior, manifest_digest)
                 all_predecessors[prior] = found[0]
+            check_dependencies(context, all_predecessors)
+            verify_failed_attempts(run_root, context)
             for prior in PHASES[:-1]:
                 semantic_phase_check(context, prior, all_predecessors[prior], all_predecessors)
             report = build_final_report(context, all_predecessors, manifest_digest)
             rf.atomic_write(attempt, "report.json", blob(report))
         semantic_phase_check(context, phase, attempt, predecessors)
 
-    attempt = write_attempt(run_root, phase, manifest_digest, action)
+    attempt = write_attempt(run_root, phase, manifest_digest, action,
+                            attempt_provenance(context, phase, predecessors))
     progress.stage_done(phase, started)
     return attempt
 
 
 def build_final_report(context: dict, predecessors: dict[str, Path], manifest_digest: str) -> dict:
-    manifest = context["manifest"]
+    manifest = copy.deepcopy(context["manifest"])
+    for phase, field in (("self-play", "self_play_games"), ("baseline-match", "baseline_comparison_games"),
+                         ("oracle-match", "oracle_match_games")):
+        phase_manifest = attempt_context(context, predecessors[phase], phase)["manifest"]
+        manifest["requested_counts"][field] = phase_manifest["requested_counts"][field]
+        manifest["openings"][phase] = phase_manifest["openings"][phase]
+        if phase == "oracle-match":
+            manifest["match_config"] = phase_manifest["match_config"]
+    manifest["max_decisions"] = sum(manifest["requested_counts"].values()) * 120 + len(context["corpus"]) * 2
+    manifest["execution_commit"] = context.get("original_manifest", manifest)["execution_commit"]
     selection = training.read_json(output(predecessors["candidate-selection"], "selection.json"))
     regret = training.read_json(output(predecessors["corpus-regret"], "report.json"))
     oracle_report = training.read_json(output(predecessors["oracle-match"], "match.json"))
@@ -905,8 +1217,23 @@ def build_final_report(context: dict, predecessors: dict[str, Path], manifest_di
                              "oracle_exact_solver_empty_squares"],
                          "candidate_config": manifest["match_config"]},
         "exposure_keys": {name: sorted(values) for name, values in exposures.items()},
-        "phase_receipts": {phase: latest_success(context["manifest_path"].parent, phase, manifest_digest)[1]["receipt_digest"]
+        "phase_receipts": {phase: verify_receipt(predecessors[phase], phase, manifest_digest)["receipt_digest"]
                            for phase in PHASES[:-1]},
+        "phase_provenance": {phase: (training.read_json(path / "provenance.json")
+                              if (path / "provenance.json").exists() else
+                              {"legacy_manifest_sha256": manifest_digest,
+                               "execution_commit": context.get("original_manifest", manifest)["execution_commit"],
+                               "effective_settings": settings(context.get("original_manifest", manifest))})
+                             for phase, path in predecessors.items() if phase != "offline-verification"},
+        "failed_attempts": {str(path.relative_to(context["manifest_path"].parent)):
+                            {"failure_sha256": training.sha256_file(path / "failure.json"),
+                             "provenance": training.read_json(path / "provenance.json")
+                                if (path / "provenance.json").exists() else
+                                {"legacy_manifest_sha256": manifest_digest}}
+                            for phase in PHASES for path in phase_dirs(context["manifest_path"].parent, phase)
+                            if (path / "failure.json").exists()},
+        "oracle_game_provenance": (training.read_jsonl(predecessors["oracle-match"] / "game-provenance.jsonl")
+                                   if (predecessors["oracle-match"] / "game-provenance.jsonl").exists() else []),
     }
 
 
@@ -979,6 +1306,22 @@ def runtime_estimate(context: dict) -> dict:
 def execute(args) -> dict:
     require(args.oracle_binary is not None, "0019 requires the pinned Egaroucid executable path")
     execution_commit = source_commit()
+    require(isinstance(execution_commit, str) and re.fullmatch(r"[0-9a-f]{40}", execution_commit),
+            "invalid 0019 execution commit")
+    training.require_int(args.seed, "seed", 0, 2**64 - 1)
+    training.require_int(args.opening_plies, "opening plies", 4, 20)
+    training.require_int(args.time_limit_ms, "time limit", 1)
+    training.require_int(args.node_limit, "node limit", 1)
+    training.require_int(args.decision_timeout_seconds, "decision timeout", 1, 3600)
+    require(args.decision_timeout_seconds * 1000 > args.time_limit_ms,
+            "decision timeout must exceed the candidate search limit")
+    training.require_int(args.progress_every, "progress interval", 1)
+    count_limits = {"self_play_games": 64, "baseline_comparison_games": 200,
+                    "oracle_match_games": 200}
+    for name, maximum in count_limits.items():
+        value = training.require_int(getattr(args, name), name, 2, maximum)
+        require(value % 2 == 0, f"{name} must contain complete color-swapped pairs")
+    require(args.oracle_match_games > 0, "0019 Oracle match must contain at least one color-swapped pair")
     run_root = args.run_root.resolve()
     repository_root = Path(pilot.__file__).resolve().parents[2]
     require(args.run_root.is_absolute() and run_root != repository_root
@@ -988,41 +1331,15 @@ def execute(args) -> dict:
     if args.resume_from:
         require(run_root.is_dir() and manifest_path.is_file(), "resume requires an existing 0019 run root")
         manifest = checked_manifest(manifest_path)
-        require(manifest["execution_commit"] == execution_commit,
-                "0019 resume checkout commit differs from the frozen run; use a new run root")
-        expected = {"self_play_games": args.self_play_games,
-                    "baseline_comparison_games": args.baseline_comparison_games,
-                    "oracle_match_games": args.oracle_match_games}
-        require(manifest["requested_counts"] == expected and manifest["seed"] == args.seed
-                and manifest["opening_plies"] == args.opening_plies,
-                "resume arguments differ from the frozen 0019 manifest; use a new run root")
         require(manifest["input_bundle"] == file_entry(args.input_bundle)
                 and manifest["bundle_verification_receipt"] == file_entry(args.bundle_verification_receipt)
                 and manifest["candidate_executable"] == file_entry(args.candidate_executable)
                 and manifest["oracle_binary"] == file_entry(args.oracle_binary),
                 "resume input identities differ from the frozen 0019 manifest")
-        require(manifest["self_play_config"]["time_limit_ms"] == args.time_limit_ms
-                and manifest["self_play_config"]["node_limit"] == args.node_limit
-                and manifest["decision_timeout_seconds"] == args.decision_timeout_seconds,
-                "resume resource settings differ from the frozen 0019 manifest")
         require(not (run_root / "report.json").exists(),
                 "0019 run is already complete and cannot be resumed")
     else:
         require(not run_root.exists(), "0019 run root already exists; resume it or choose a fresh path")
-        training.require_int(args.seed, "seed", 0, 2**64 - 1)
-        training.require_int(args.opening_plies, "opening plies", 4, 20)
-        training.require_int(args.time_limit_ms, "time limit", 1)
-        training.require_int(args.node_limit, "node limit", 1)
-        training.require_int(args.decision_timeout_seconds, "decision timeout", 1, 3600)
-        require(args.decision_timeout_seconds * 1000 > args.time_limit_ms,
-                "decision timeout must exceed the candidate search limit")
-        training.require_int(args.progress_every, "progress interval", 1)
-        count_limits = {"self_play_games": 64, "baseline_comparison_games": 200,
-                        "oracle_match_games": 200}
-        for name, maximum in count_limits.items():
-            value = training.require_int(getattr(args, name), name, 2, maximum)
-            require(value % 2 == 0, f"{name} must contain complete color-swapped pairs")
-        require(args.oracle_match_games > 0, "0019 Oracle match must contain at least one color-swapped pair")
         run_root.mkdir(parents=True, exist_ok=False)
         try:
             manifest = make_manifest(args, run_root, execution_commit)
@@ -1035,18 +1352,26 @@ def execute(args) -> dict:
             raise
     manifest = checked_manifest(manifest_path)
     context = load_context(manifest_path)
+    context["original_manifest"] = copy.deepcopy(manifest)
+    context["execution_commit"] = execution_commit
+    context["resume_from"] = args.resume_from
+    context["progress_every"] = args.progress_every
     manifest_digest = training.sha256_file(manifest_path)
     start = args.resume_from or PHASES[0]
     require(start in PHASES, "invalid --resume-from phase")
     if args.resume_from:
         predecessors = require_predecessors(run_root, start, manifest_digest)
+        check_dependencies(context, predecessors)
+        verify_failed_attempts(run_root, context)
         for phase, attempt in predecessors.items():
             semantic_phase_check(context, phase, attempt, predecessors)
     else:
         predecessors = {}
+    context = invocation_context(context, args, predecessors)
     # Print the bounded representative-search estimate before expensive phases.
-    estimate = runtime_estimate(context)
-    print("0019 runtime estimate " + json.dumps(estimate, sort_keys=True), file=sys.stderr, flush=True)
+    if not args.resume_from:
+        estimate = runtime_estimate(context)
+        print("0019 runtime estimate " + json.dumps(estimate, sort_keys=True), file=sys.stderr, flush=True)
     for phase in PHASES[PHASES.index(start):]:
         if phase == "candidate-update":
             predecessors.update({"self-play": latest_success(run_root, "self-play", manifest_digest)[0]})
