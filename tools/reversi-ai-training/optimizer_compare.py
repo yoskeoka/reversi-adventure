@@ -53,6 +53,10 @@ class Progress:
         self.batches = math.ceil(teacher_count/config['batch'])*config['epochs']
         self.started = time.monotonic()
 
+    def requested(self):
+        print(f"optimizer-compare requested_epochs={self.config['epochs']} "
+              f'maximum_batches={self.batches} comparison_games=20 oracle_games=20', file=sys.stderr, flush=True)
+
     def emit(self, phase, state=None, games=0, total=40):
         state = state or {}
         print(f"optimizer-compare phase={phase} epoch={state.get('epoch', 0)}/{self.config['epochs']} "
@@ -77,6 +81,9 @@ def prepare(args):
     adam.require(not root.exists(), 'comparison run root exists; resume or choose a new root')
     config = adam.settings(learning_rate=args.learning_rate, batch=args.batch, epochs=args.epochs,
                            seed=args.seed, patience=args.patience)
+    progress = Progress(config, 3364)
+    progress.requested()
+    progress.emit('prepare')
     context = inputs.load_source(args.source_manifest)
     setting = matches.prepare(context, args.seed, args.candidate_executable,
                               args.oracle_binary, args.decision_timeout_seconds)
@@ -316,13 +323,15 @@ def verify(root, *, publishing=False):
 
 def run(args):
     root = args.run_root.resolve()
+    preview = unseal(root/'manifest.json')
+    progress = Progress(adam.settings(**preview['optimizer']), 3364, args.progress_every)
+    progress.requested()
+    progress.emit('input-verification')
     manifest, context = load(root)
     adam.require(manifest['sources'] == source_hashes(), 'trainer source changed; use a new comparison root')
     adam.require(manifest['execution_commit'] == cycle.source_commit(), 'execution commit changed; use a new comparison root')
     adam.require(not (root/'offline-verification.receipt.json').exists(), 'comparison already completed; use verify')
-    progress = Progress(manifest['optimizer'], len(context['teachers']), args.progress_every)
-    print(f"optimizer-compare requested_epochs={manifest['optimizer']['epochs']} "
-          f'maximum_batches={progress.batches} comparison_games=20 oracle_games=20', file=sys.stderr, flush=True)
+    progress.batches = math.ceil(len(context['teachers'])/manifest['optimizer']['batch'])*manifest['optimizer']['epochs']
     start = args.resume_from or PHASES[0]
     for phase in PHASES[:PHASES.index(start)]:
         adam.require((root/(phase+'.receipt.json')).is_file(), f'resume missing predecessor {phase}')
