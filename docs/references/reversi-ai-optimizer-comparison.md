@@ -41,6 +41,11 @@ candidate CLI/Oracleを起動せず、完成出力を書き換えない。
 split独立性・対戦gate・timeout時の完成prefix保持・offline replayを検証する。
 これらは実モデル改善やplaying strengthの証拠ではない。
 
+2026-10-25のtooling検証では、Python training suite130件（新規比較fixture26件を含む）、
+engine28件・AI124件のRustテスト、workspace Clippy、GDExtension build、
+`cargo fmt --all -- --check`、workflow lint、diff checkが通過した。
+最終orchestrator修正後にも該当fixtureを再実行して通過した。
+
 人間の完成出力が提供されたら、固定manifestと全receipt/checkpoint/ゲーム/指標をoffline
 検証して、この文書へrun-root・report SHA-256・best epoch・A/B指標・各gate・実対戦数・
 改善/不成立と次の判断を追記する。その後に0052を削除する。
