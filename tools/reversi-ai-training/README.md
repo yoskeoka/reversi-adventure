@@ -663,7 +663,7 @@ rtk cargo build --release -p reversi-ai --bin reversi-ai-cli
 # オペレーターが新しいroot・Oracle path・timeoutを選択する。
 # timeoutは301..3600秒（candidateの300秒より大きい値）。
 export COMPARISON_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0052-20261025-01
-export COMPARISON_ORACLE=/absolute/path/from/0019/manifest/to/Egaroucid
+export COMPARISON_ORACLE=/home/yoske/.cache/reversi-adventure/egaroucid/7.8.1/bin/Egaroucid_for_Console.out
 export COMPARISON_TIMEOUT=1800
 
 rtk make pattern-optimizer-prepare \

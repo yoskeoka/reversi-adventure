@@ -46,6 +46,13 @@ engine28件・AI124件のRustテスト、workspace Clippy、GDExtension build、
 `cargo fmt --all -- --check`、workflow lint、diff checkが通過した。
 最終orchestrator修正後にも該当fixtureを再実行して通過した。
 
+保存原本のread-only再構成では、0019全phase/reportの検証、Aの重み再現、
+採用identity、64自己対戦局・教師3,364行・validation13,401行・corpus12局面の
+一致、held-outのnonempty/disjoint検査まで通過した。
+この検証processは修正前のpin収集関数をimport済みだったため、最後のOracle resourceの
+論理path解決で停止した。修正済みcollectorは`resolved_path`を使い、別途163ファイルの
+identity照合と対応regression testを通過している。新しい学習・対戦・Oracle solveは実行していない。
+
 人間の完成出力が提供されたら、固定manifestと全receipt/checkpoint/ゲーム/指標をoffline
 検証して、この文書へrun-root・report SHA-256・best epoch・A/B指標・各gate・実対戦数・
 改善/不成立と次の判断を追記する。その後に0052を削除する。
