@@ -347,8 +347,8 @@ games, and 20 direct Oracle-match games. Their Make variables are
 `REINFORCEMENT_SELF_PLAY_GAMES`, `REINFORCEMENT_COMPARISON_GAMES`, and
 `REINFORCEMENT_ORACLE_GAMES`. Counts must form complete color-swapped pairs,
 with caps of 64 self-play, 200 comparison, and 200 Oracle-match games; the
-production Oracle-match count must be positive. The frozen manifest records
-requested counts; phase receipts and the final report record actual
+production Oracle-match count must be positive. The immutable manifest records
+initial requested counts; phase receipts and the final report record actual
 counts, including the 50-game early-stop result. Each pair uses legal openings with the
 declared D4 rotation and color swap; every game, decision, pass, terminal
 score, failure, and digest is retained. A timeout, malformed response,
@@ -366,16 +366,35 @@ predeclared baseline-versus-candidate match gate; a tie or failed gate selects
 the baseline. Validation remains disjoint from self-play tuning and 0018
 openings and does not become a substitute for the match gate.
 
-`--resume-from PHASE` accepts only the phase names above. It requires the
-existing manifest to remain unchanged, the current checkout commit to equal
-the manifest's execution commit, and verifies its digest plus every
-predecessor receipt and output before reuse. A retry writes to a new numbered
-attempt directory and preserves the previous attempt. Changed counts, inputs,
-execution commit, or any other frozen setting require a new manifest and run
-root. Offline verification checks that the final report records the same
-execution commit as the manifest; it does not require the verifier checkout to
-remain at that commit. Reusing a partial file or report without a matching
-successful phase receipt is an error.
+`--resume-from PHASE` accepts only the phase names above. The immutable
+schema version 2 manifest identifies the original inputs and initial settings;
+it remains readable without migration. Each new attempt records its phase,
+resume source, effective settings, input identities, predecessor receipt digests,
+and the actual clean checkout commit (40 lowercase hexadecimal characters) in
+`provenance.json` before expensive work. A different clean commit is allowed.
+Missing or invalid commits and dirty checkouts are rejected before execution.
+Receipts and failure records bind this provenance and all partial outputs by
+digest. Prior attempts and the manifest are never rewritten.
+
+Operators choose timeout, resource limits, progress interval, seed and counts
+at invocation time. Retained predecessor outputs are verified using their own
+settings and commit, receipt digests and semantic replay. A change affecting a
+retained predecessor requires resuming from the earliest affected phase; input
+identity changes require a new run root. Offline verification checks the entire
+receipt dependency chain and failed-attempt digests, and exposes per-phase
+settings/commits and per-game Oracle provenance in the final report.
+
+An Oracle retry validates the immediately preceding failed attempt and carries
+only its contiguous completed game prefix. Game, pair and member numbers remain
+global; the interrupted game restarts at its opening with the new timeout.
+Each carried game retains its originating attempt, commit, settings, input
+identities and game digest in a separate provenance record. Legacy schema
+version 2 attempts derive this information from their original manifest.
+Invalid, missing, duplicated or out-of-order games end the reusable prefix;
+subsequent games are replayed. The new attempt produces a complete game list
+and report; the old failure and partial output remain unchanged. This includes
+human run `0019-20261020-02` and its seven completed Oracle games. Starting,
+resuming and monitoring production runs remain human-operated.
 
 The direct Oracle match runs the raw updated candidate whether or not it is
 selected, against `oracle-0018-acceptance-v1`: Oracle 6/6/6 with exact solving
@@ -1508,17 +1527,13 @@ prepare/run/verify or Oracle-match commands and does not regenerate the 0051
 production input bundle.
 
 For `--resume-from PHASE`, the operator supplies the existing run root and
-unchanged counts/settings. Supported phases are `input-verification`,
-`self-play`, `candidate-update`, `baseline-match`, `candidate-selection`,
-`corpus-regret`, `oracle-match`, and `offline-verification`; the selected phase
-is the first phase to execute. The runner verifies the frozen manifest and
-every completed predecessor phase receipt and output digest before continuing;
-it rejects missing, altered, incomplete, or mismatched evidence. It reuses
-only complete phase-verified outputs and writes a retry of the selected phase
-to a new attempt directory. A changed count or other frozen setting requires
-a new manifest and run root, and cannot reuse old outputs as a resume. Make
-exposes the same option as `REINFORCEMENT_RESUME_FROM`. The one-command path
-still performs final offline verification before publishing the report.
+the desired settings. Supported phases are `input-verification`, `self-play`,
+`candidate-update`, `baseline-match`, `candidate-selection`, `corpus-regret`,
+`oracle-match`, and `offline-verification`. Make exposes the same option as
+`REINFORCEMENT_RESUME_FROM`. Changed settings apply to the selected and later
+phases; changes affecting retained outputs require an earlier resume phase.
+Oracle timeout retries preserve verified completed games and restart the first
+unfinished game. Final offline verification precedes report publication.
 
 Progress is flushed on stderr with `stage <name> start/done elapsed=<seconds>s`
 and `progress <kind> pair=<n> member=<n> <done>/<total> game=<seconds>s

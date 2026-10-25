@@ -488,16 +488,63 @@ The raw updated candidate always plays the diagnostic Oracle match, regardless
 of selection.
 
 Every successful phase writes a receipt over its outputs. A failure retains its
-partial files and failure record. To retry a phase, use the same run root,
-counts, inputs, binary paths, seed, and resource settings, and set
+partial files and failure record. To retry a phase, keep the same run root and
+verified input and executable identities, and set
 `REINFORCEMENT_RESUME_FROM` to one of `input-verification`, `self-play`,
 `candidate-update`, `baseline-match`, `candidate-selection`, `corpus-regret`,
 `oracle-match`, or `offline-verification`. The selected phase gets a new
-numbered attempt directory. The runner verifies the frozen manifest and every
-predecessor receipt before reuse. Changed counts or inputs require a new run
-root.
+numbered attempt directory. The runner verifies each predecessor's receipt,
+outputs and original settings before reuse. The manifest remains unchanged;
+each new attempt records its effective settings, input and predecessor digests,
+and the complete 40-character execution commit SHA. Successful receipts and
+failure records both bind that provenance. A different clean source commit may
+resume the run; a dirty checkout is rejected before searches start.
 
-The manifest pins the current source commit and producer-file digests. The final
+Choose settings on each invocation. `PILOT_DECISION_TIMEOUT_SECONDS` and
+`PILOT_PROGRESS_EVERY` apply from the selected phase onward without rerunning
+successful predecessors. Other changes require the following earliest phase:
+
+| Changed setting | Earliest resume phase |
+| --- | --- |
+| `PILOT_SEED`, `PILOT_OPENING_PLIES`, `REINFORCEMENT_SELF_PLAY_GAMES` | `self-play` |
+| `REINFORCEMENT_COMPARISON_GAMES` | `baseline-match` |
+| `REINFORCEMENT_ORACLE_GAMES` | `oracle-match` |
+| Shared `PILOT_TIME_LIMIT_MS` or `PILOT_NODE_LIMIT` | `self-play` |
+
+When several settings change, select the earliest affected phase. Changing
+verified input or executable identities requires a new run root.
+
+For an Oracle timeout, resume at `oracle-match` with the chosen new timeout.
+The runner checks the immediately preceding failed attempt's contiguous
+completed game prefix against its openings, profiles, input identities and
+game digests. It copies verified completed games into the new attempt and
+starts the first unfinished game from its opening. Global game, pair and
+member numbers stay unchanged. Each game's provenance identifies the attempt,
+commit and effective settings that produced it, including carried games;
+the new timeout applies to newly played games. The old attempt and its partial
+outputs remain unchanged, including after repeated failures.
+
+The preserved schema-2 run `0019-20261020-02` can use this path with its original
+successful predecessors and seven completed Oracle games. After setting
+`ORACLE_RETRY_TIMEOUT_SECONDS` to the operator's chosen positive timeout
+(greater than the candidate search limit), a human can run the following from
+a clean checkout containing this implementation:
+
+```sh
+rtk make pattern-reinforcement-execute \
+  REINFORCEMENT_RUN_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0019-20261020-02 \
+  REINFORCEMENT_INPUT_BUNDLE=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0051-20261017-02/completion/bundle.json \
+  REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0051-20261017-02/stages/bundle-verify/report.json \
+  REINFORCEMENT_CANDIDATE_EXECUTABLE=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.worktrees/reversi-adventure@feat-reversi-ai-winner-empty-input-run-retry/target/release/reversi-ai-cli \
+  REINFORCEMENT_ORACLE_BINARY=/home/yoske/.cache/reversi-adventure/egaroucid/7.8.1/bin/Egaroucid_for_Console.out \
+  REINFORCEMENT_SELF_PLAY_GAMES=64 REINFORCEMENT_COMPARISON_GAMES=200 REINFORCEMENT_ORACLE_GAMES=20 \
+  PILOT_SEED=20261014 PILOT_OPENING_PLIES=6 PILOT_TIME_LIMIT_MS=300000 PILOT_NODE_LIMIT=10000000 \
+  PILOT_DECISION_TIMEOUT_SECONDS="${ORACLE_RETRY_TIMEOUT_SECONDS:?Set the retry timeout in seconds}" \
+  REINFORCEMENT_RESUME_FROM=oracle-match
+```
+
+The manifest preserves the original source commit and frozen input identities;
+attempt provenance records the commit actually used for each phase. The final
 `report.json` is published only after offline replay succeeds. It contains the
 selected artifact digest and relative path, actual game counts,
 validation and corpus-regret metrics, the baseline comparison, Oracle match
@@ -510,8 +557,10 @@ Corpus rows that overlap training, reserved roots or played boards are excluded
 with IDs; at least one separate legal root must remain.
 Validation and held-out exclusions also cover the random opening moves.
 
-Use the manifest's pinned source checkout for the offline check.
-Source changes fail the digest check, so preserve the original hashes.
+Offline verification reconstructs outputs with each producing attempt's settings
+and commit provenance, checks predecessor and game provenance digests, and
+rejects mismatches. Legacy schema-2 receipts retain their manifest-derived
+settings and commit; their bytes and digests are preserved during resume.
 
 Progress goes to stderr and shows each completed game by default.
 Set a positive `PILOT_PROGRESS_EVERY=N` to print less often; the final unit always prints.

@@ -697,12 +697,15 @@ def main(argv: list[str]) -> int:
     execute_command.add_argument("--baseline-comparison-games", type=int, required=True)
     execute_command.add_argument("--oracle-match-games", type=int, required=True)
     execute_command.add_argument("--resume-from", choices=("input-verification", "self-play", "candidate-update",
-        "baseline-match", "candidate-selection", "corpus-regret", "oracle-match", "offline-verification"))
+        "baseline-match", "candidate-selection", "corpus-regret", "oracle-match", "offline-verification"),
+        help="create new phase attempts with this invocation's settings and clean execution commit; "
+             "choose the earliest phase affected by changed upstream settings")
     execute_command.add_argument("--seed", type=int, default=20261014)
     execute_command.add_argument("--opening-plies", type=int, default=6)
     execute_command.add_argument("--time-limit-ms", type=int, default=300000)
     execute_command.add_argument("--node-limit", type=int, default=10000000)
-    execute_command.add_argument("--decision-timeout-seconds", type=int, default=310)
+    execute_command.add_argument("--decision-timeout-seconds", type=int, default=310,
+        help="decision timeout for new attempts, including Oracle retries; recorded per attempt")
     execute_command.add_argument("--progress-every", type=rf.positive_interval, default=1)
     args = parser.parse_args(argv)
     try:

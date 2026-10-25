@@ -161,6 +161,10 @@ REINFORCEMENT_ORACLE_BINARY ?=
 REINFORCEMENT_SELF_PLAY_GAMES ?= 64
 REINFORCEMENT_COMPARISON_GAMES ?= 200
 REINFORCEMENT_ORACLE_GAMES ?= 20
+# Resume creates a new attempt and preserves earlier evidence. Timeout/progress
+# apply from this phase onward. Seed/opening/self-play count/shared time or node
+# changes require self-play; comparison count requires baseline-match; Oracle
+# count requires oracle-match. The checkout must be clean; its SHA is recorded.
 REINFORCEMENT_RESUME_FROM ?=
 
 .PHONY: pattern-pilot-prepare pattern-pilot-run pattern-pilot-verify pattern-pilot-execute
@@ -194,7 +198,7 @@ pattern-pilot-execute:
 
 .PHONY: pattern-reinforcement-execute
 pattern-reinforcement-execute:
-	@test -n "$(REINFORCEMENT_RUN_ROOT)" || (echo "Set REINFORCEMENT_RUN_ROOT to a new absolute path outside the checkout" >&2; exit 2)
+	@test -n "$(REINFORCEMENT_RUN_ROOT)" || (echo "Set REINFORCEMENT_RUN_ROOT to an absolute path outside the checkout; use REINFORCEMENT_RESUME_FROM for an existing run" >&2; exit 2)
 	@test -n "$(REINFORCEMENT_INPUT_BUNDLE)" || (echo "Set REINFORCEMENT_INPUT_BUNDLE to the verified 0051 bundle" >&2; exit 2)
 	@test -n "$(REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT)" || (echo "Set REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT to the successful bundle-verify receipt" >&2; exit 2)
 	@test -n "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" || (echo "Set REINFORCEMENT_CANDIDATE_EXECUTABLE to the CLI pinned by the bundle" >&2; exit 2)
