@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = ROOT / "tools" / "reversi-ai-playground"
 ORACLE = ROOT / "tools" / "reversi-ai-oracle" / "oracle.py"
 TRAINER = ROOT / "tools" / "reversi-ai-training" / "training.py"
-FIXTURE = ROOT / "tools" / "reversi-ai-training" / "fixtures" / "tiny-winner-empty-manifest.json"
+ADOPTED_ARTIFACT = ROOT / "models" / "trained" / "0019-20261020-02.json"
+ADOPTED_SHA256 = "13e8bdf59553746ba32ce47b53a09c011eb79223cabf4ddefb224b2640d283de"
 
 
 def setup_directory() -> Path:
@@ -55,40 +57,60 @@ def oracle_paths() -> tuple[Path, Path]:
         raise ValueError(f"invalid Oracle setup result: {error}") from error
 
 
-def install() -> None:
-    directory = setup_directory()
-    directory.mkdir(parents=True, exist_ok=True)
-    binary, data_dir = oracle_paths()
-    artifact = directory / "demo-trained-artifact.json"
-    report = directory / "demo-trained-report.json"
-    with tempfile.TemporaryDirectory(prefix=".training-", dir=directory) as temporary:
-        temporary_dir = Path(temporary)
-        candidate = temporary_dir / "artifact.json"
-        candidate_report = temporary_dir / "report.json"
-        subprocess.run([sys.executable, str(TRAINER), "train", "--manifest", str(FIXTURE),
-                        "--artifact", str(candidate), "--report", str(candidate_report)],
-                       cwd=ROOT, check=True)
-        subprocess.run([sys.executable, str(TRAINER), "validate", "--artifact", str(candidate)],
-                       cwd=ROOT, check=True)
-        os.replace(candidate, artifact)
-        os.replace(candidate_report, report)
-    prepared = {"trained": {"artifact": str(artifact), "demo": True},
-                "oracle": {"binary": str(binary), "dataDir": str(data_dir)}}
+def adopted_trained(directory: Path) -> dict:
+    source = ADOPTED_ARTIFACT.read_bytes()
+    if hashlib.sha256(source).hexdigest() != ADOPTED_SHA256:
+        raise ValueError("adopted trained artifact SHA-256 mismatch")
+    artifact = directory / ADOPTED_ARTIFACT.name
+    if not artifact.is_file() or hashlib.sha256(artifact.read_bytes()).hexdigest() != ADOPTED_SHA256:
+        with tempfile.NamedTemporaryFile(dir=directory, prefix=".adopted-", delete=False) as stream:
+            candidate = Path(stream.name)
+            stream.write(source)
+        try:
+            subprocess.run([sys.executable, str(TRAINER), "validate", "--artifact", str(candidate)],
+                           cwd=ROOT, check=True)
+            os.replace(candidate, artifact)
+        finally:
+            candidate.unlink(missing_ok=True)
+    return {"artifact": str(artifact), "demo": False}
+
+
+def publish_prepared(directory: Path, prepared: dict) -> Path:
     config = directory / "prepared.json"
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
                                      prefix=".prepared-", delete=False) as stream:
         temporary_config = Path(stream.name)
         json.dump(prepared, stream, sort_keys=True)
         stream.write("\n")
-    os.replace(temporary_config, config)
+    try:
+        os.replace(temporary_config, config)
+    finally:
+        temporary_config.unlink(missing_ok=True)
+    return config
+
+
+def install() -> None:
+    directory = setup_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    binary, data_dir = oracle_paths()
+    trained = adopted_trained(directory)
+    config = publish_prepared(directory, {"trained": trained,
+                                        "oracle": {"binary": str(binary), "dataDir": str(data_dir)}})
     print(f"playground prepared: {config}")
-    print("TrainedEvaluator uses the tiny fixture demo artifact; playing strength is unverified.")
+    print("TrainedEvaluator uses the adopted 0019-20261020-02 model; 0018 strength acceptance remains pending.")
 
 
 def start() -> None:
-    config = setup_directory() / "prepared.json"
+    directory = setup_directory()
+    config = directory / "prepared.json"
     if not config.is_file() or not (PACKAGE / "node_modules").is_dir():
         raise ValueError("playground is not installed; run make playground-install first")
+    prepared = json.loads(config.read_text())
+    if not isinstance(prepared, dict):
+        raise ValueError("prepared configuration must be a JSON object; run make playground-install")
+    trained = adopted_trained(directory)
+    if prepared.get("trained") != trained:
+        publish_prepared(directory, {**prepared, "trained": trained})
     env = dict(os.environ, PLAYGROUND_PREPARED_CONFIG=str(config))
     os.execvpe("pnpm", ["pnpm", "--dir", str(PACKAGE), "dev"], env)
 
