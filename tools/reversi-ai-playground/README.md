@@ -30,6 +30,10 @@ The manifest and pnpm lockfile belong in `tools/reversi-ai-playground`. Its `nod
 
 ## Optional local players
 
+現在採用するTrainedEvaluatorのartifact pathとdigestは
+[0019モデル採用記録](../../docs/references/reversi-ai-0019-adopted-model.md)を参照する。
+下記`trained.artifact`へそのpathを指定する。
+
 Put a JSON file outside the checkout, for example `/tmp/reversi-playground.json`:
 
 ```json

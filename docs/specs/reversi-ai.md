@@ -152,6 +152,10 @@ the explanatory evaluator or its explanation path.
 
 ### Trained evaluator runtime
 
+現在採用する学習済みモデルは、0019 run `0019-20261020-02`のselected candidateとする。
+artifact path・digest・独立検証・採用境界は[現行モデル記録](../references/reversi-ai-0019-adopted-model.md)に固定する。
+これは0018の最終勝率受け入れとは別のモデル採用である。
+
 `TrainedEvaluator` loads only the canonical JSON artifact emitted by the
 project-owned training tool.  Loading validates the complete feature contract,
 safe non-empty provenance, all 64 feature bounds, the sparse 60-phase table
