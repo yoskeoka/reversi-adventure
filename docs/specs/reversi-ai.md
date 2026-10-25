@@ -215,6 +215,78 @@ and neither its datasets nor caches are runtime dependencies.
   artifact and report digests. Corruption, NaN, overflow, or a contract-mismatched
   artifact fails closed.
 
+### Frozen optimizer comparison (0052)
+
+The offline `pilot.py optimizer-compare` entrypoint compares the original
+`bounded_td_v1` update (A) with `project_adam_v1` (B), starting from the same
+0019 initial baseline, never from the adopted candidate. It has prepare, run
+and verify operations and a matching Make entrypoint. Preparation pins the
+completed 0019 manifest/report/all phase receipts, 0051 bundle/receipt, source
+teacher rows, validation and held-out records, baseline/adopted artifacts,
+candidate executable and Oracle identities. Source roots are read-only.
+Only project-owned self-play terminal winner-empty targets become teachers;
+external games, scores, weights and acceptance-0018 inputs are excluded.
+Production requires exactly 3,364 teacher rows and 13,401 validation rows.
+Validation and held-out are reconstructed with the original exclusions and
+checked against teachers by canonical absolute-color D4 board and side keys.
+Empty or overlapping splits fail closed. Original/admitted rows and excluded
+keys retain source/game/score-perspective provenance. A must reproduce the
+adopted candidate's weights and weight digest before B may start.
+
+B uses f64 weights and zero-initialized Adam m/v/global step, MSE averaged over
+each batch, gradient `sum(2*(prediction-target)/batch_rows)` for each active
+parameter, bias correction, and projection to [-1,1] after every step.
+Defaults are learning rate .01, beta1 .9, beta2 .999, epsilon 1e-8, L2 0,
+batch 256, seed 20261025, at most 20 epochs, patience 5. Learning rate, batch,
+epochs, seed, patience and per-decision timeout are explicit operator controls.
+Feature extraction occurs once in stable row order; each epoch uses a
+deterministic shuffle. Unseen weights retain their baseline values. Each
+epoch exports sparse format2 integers with half-away-from-zero rounding;
+zero entries are omitted and each feature bound remains one (aggregate 64).
+The explicit new trainer/provenance is validated by Python and Rust without
+claiming the legacy optimizer identity. Non-finite state or invalid bounds
+fail closed. Integer validation MSE selects the earliest best epoch; patience
+counts epochs without strict improvement. Float checkpoints, optimizer state
+and integer artifacts have separate digests.
+
+Receipts cover prepare, input revalidation, control reproduction, optimization,
+integer selection, matches and offline verification. Every completed batch and
+epoch boundary is an atomic checkpoint containing weights, m/v, step, epoch,
+shuffle/RNG state, next cursor, best epoch and patience. Resume verifies prior
+phase outputs and restarts only unfinished work; changed learning settings
+require a new attempt. Failure preserves completed checkpoints and diagnostics.
+Progress is `optimizer-compare phase=... epoch=E/Emax batch=B/Btotal
+games=G/Gtotal elapsed_seconds=S`; batch interval defaults to 10 and is
+selectable with `--progress-every`. Phase boundaries and completed games always
+emit progress. The requested epochs, maximum batch and game counts are printed
+before execution. Limits are 20 epochs, 3,364 teachers and 20 games per match.
+
+Reports record A/B training seconds, phase counts, changed/nonzero/saturated
+weights, float and exported train/validation MSE and parameters whose changes
+disappear in rounding. Held-out is fixed before optimization and evaluated
+only for final selection, never for tuning. If exported validation MSE does
+not strictly beat A, matches are `not-run` with a reason and zero completed
+games. Otherwise B plays adopted A on ten unused, disjoint openings with
+swapped colors (20 games), both bookless 12/12/12, exact16, turn cache,
+300000ms/10000000 nodes. Only B match points >10/20 unlock at most 20 Oracle
+games with separate new openings. Oracle is the pinned 0019 Egaroucid 7.8.1
+binary/source with `oracle-0018-acceptance-v1` (6/6/6, exact12, no book,
+one thread, hash25). Effective timeout and both executable SHA-256 identities
+are frozen before each attempt. The existing twelve-position saved corpus
+golden is diagnostic only. Improvement requires strict exported validation
+improvement, final held-out MSE and corpus mean regret within 10% of A
+(zero must remain zero), and B match points >10/20. Skipped games are never
+counted as completed. No result automatically replaces the adopted model or
+claims general strength or 0018 acceptance.
+
+A human starts long-running comparisons. Agents do not start or monitor them.
+Offline verify launches neither training, candidate CLI nor Oracle: it
+reconstructs artifacts, metrics, gates and verdict from saved immutable
+inputs/state/outputs and rejects tampering. Tooling/fixture verification and
+human production comparison are recorded separately; 0052 stays active until
+the completed human outputs have been independently verified and their result
+and next decision recorded, including a valid negative result.
+
 ### Bounded pattern reinforcement cycle
 
 New production baseline and validation inputs must be generated from complete,

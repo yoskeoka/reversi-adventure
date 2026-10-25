@@ -78,6 +78,42 @@ class PatternTrainingTests(unittest.TestCase):
         self.assertEqual(vector[:8], [0, 0, 0, 2349, 0, 3645, 0, 0])
         self.assertEqual(training.catalog_digest(), "4d75868b40ab5aed")
 
+    def test_adam_export_requires_its_own_trainer_and_integer_runtime_contract(self):
+        manifest, records = self.load_fixture()
+        original = training.artifact_from(manifest, records, training.digest(manifest))
+        versions = (training.TRAINER_VERSION, training.REINFORCEMENT_VERSION,
+                    training.OPTIMIZER_COMPARISON_VERSION)
+        optimizers = ("sparse_mean_v1", "bounded_td_v1", "project_adam_v1")
+        for trainer_index, version in enumerate(versions):
+            for optimizer_index, optimizer in enumerate(optimizers):
+                with self.subTest(trainer=version, optimizer=optimizer):
+                    artifact = copy.deepcopy(original)
+                    artifact["provenance"]["trainer_version"] = version
+                    artifact["provenance"]["optimizer"]["name"] = optimizer
+                    artifact["artifact_digest"] = training.digest({key: value for key, value in artifact.items() if key != "artifact_digest"})
+                    if trainer_index == optimizer_index:
+                        training.validate_artifact(artifact)
+                    else:
+                        with self.assertRaises(training.TrainingError):
+                            training.validate_artifact(artifact)
+
+        for mutation in ("fractional", "divisor", "extra-optimizer-field"):
+            with self.subTest(mutation=mutation):
+                artifact = copy.deepcopy(original)
+                artifact["provenance"]["trainer_version"] = training.OPTIMIZER_COMPARISON_VERSION
+                artifact["provenance"]["optimizer"]["name"] = "project_adam_v1"
+                if mutation == "fractional":
+                    artifact["weights"] = {"0": [{"0": 0.5}] + [{} for _ in range(63)]}
+                    artifact["feature_max_abs"] = [1] + [0] * 63
+                elif mutation == "divisor":
+                    artifact["provenance"]["optimizer"]["normalization_divisor"] = 32
+                else:
+                    artifact["provenance"]["optimizer"]["learning_rate"] = 0.01
+                artifact["weight_digest"] = training.digest(artifact["weights"])
+                artifact["artifact_digest"] = training.digest({key: value for key, value in artifact.items() if key != "artifact_digest"})
+                with self.assertRaises(training.TrainingError):
+                    training.validate_artifact(artifact)
+
 
 if __name__ == "__main__":
     unittest.main()

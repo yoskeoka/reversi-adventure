@@ -18,6 +18,7 @@ use crate::eval::pattern::{
 const TRAINED_EVALUATOR_VERSION: u64 = 2;
 const TRAINER_VERSION: &str = "reversi-ai-pattern-training-v2";
 const REINFORCEMENT_VERSION: &str = "reversi-ai-pattern-reinforcement-v4";
+const OPTIMIZER_COMPARISON_VERSION: &str = "reversi-ai-pattern-optimizer-comparison-v1";
 
 #[derive(Debug)]
 pub enum TrainedEvaluatorError {
@@ -214,8 +215,10 @@ fn validate_feature_contract(value: &Value) -> Result<(), TrainedEvaluatorError>
 fn validate_provenance(value: &Value) -> Result<(), TrainedEvaluatorError> {
     let provenance = object(value, "provenance")?;
     let trainer_version = string(provenance, "trainer_version")?;
-    if !matches!(trainer_version, TRAINER_VERSION | REINFORCEMENT_VERSION)
-        || u64_value(provenance, "seed").is_err()
+    if !matches!(
+        trainer_version,
+        TRAINER_VERSION | REINFORCEMENT_VERSION | OPTIMIZER_COMPARISON_VERSION
+    ) || u64_value(provenance, "seed").is_err()
     {
         return invalid("provenance is incomplete");
     }
@@ -224,13 +227,15 @@ fn validate_provenance(value: &Value) -> Result<(), TrainedEvaluatorError> {
         "input manifest digest",
     )?;
     let optimizer = object(object_value(provenance, "optimizer")?, "optimizer")?;
-    let expected_optimizer = if trainer_version == TRAINER_VERSION {
-        "sparse_mean_v1"
-    } else {
-        "bounded_td_v1"
+    let expected_optimizer = match trainer_version {
+        TRAINER_VERSION => "sparse_mean_v1",
+        REINFORCEMENT_VERSION => "bounded_td_v1",
+        OPTIMIZER_COMPARISON_VERSION => "project_adam_v1",
+        _ => return invalid("provenance has an unsupported trainer"),
     };
     if string(optimizer, "name")? != expected_optimizer
         || u64_value(optimizer, "normalization_divisor")? != PATTERN_FEATURE_COUNT as u64
+        || (trainer_version == OPTIMIZER_COMPARISON_VERSION && optimizer.len() != 2)
     {
         return invalid("provenance has an unsupported optimizer");
     }
@@ -406,6 +411,55 @@ mod tests {
         let artifact_digest = digest(&value);
         value["artifact_digest"] = json!(artifact_digest);
         assert!(TrainedEvaluator::from_json_value(value).is_ok());
+    }
+
+    #[test]
+    fn adam_export_requires_its_own_trainer_and_integer_runtime_contract() {
+        let versions = [
+            TRAINER_VERSION,
+            REINFORCEMENT_VERSION,
+            OPTIMIZER_COMPARISON_VERSION,
+        ];
+        let optimizers = ["sparse_mean_v1", "bounded_td_v1", "project_adam_v1"];
+        for (trainer_index, version) in versions.iter().enumerate() {
+            for (optimizer_index, optimizer) in optimizers.iter().enumerate() {
+                let mut value = artifact(1);
+                value["provenance"]["trainer_version"] = json!(version);
+                value["provenance"]["optimizer"]["name"] = json!(optimizer);
+                value.as_object_mut().unwrap().remove("artifact_digest");
+                value["artifact_digest"] = json!(digest(&value));
+                assert_eq!(
+                    TrainedEvaluator::from_json_value(value).is_ok(),
+                    trainer_index == optimizer_index,
+                    "trainer={version} optimizer={optimizer}",
+                );
+            }
+        }
+        for mutation in ["fractional", "divisor", "extra-optimizer-field"] {
+            let mut value = artifact(1);
+            value["provenance"]["trainer_version"] = json!(OPTIMIZER_COMPARISON_VERSION);
+            value["provenance"]["optimizer"]["name"] = json!("project_adam_v1");
+            match mutation {
+                "fractional" => {
+                    let code = extract_features(&Board::new(), Color::Black)
+                        .unwrap()
+                        .values[0]
+                        .to_string();
+                    value["weights"]["0"][0][code] = json!(0.5);
+                }
+                "divisor" => {
+                    value["provenance"]["optimizer"]["normalization_divisor"] = json!(32);
+                }
+                _ => value["provenance"]["optimizer"]["learning_rate"] = json!(0.01),
+            }
+            value["weight_digest"] = json!(digest(&value["weights"]));
+            value.as_object_mut().unwrap().remove("artifact_digest");
+            value["artifact_digest"] = json!(digest(&value));
+            assert!(
+                TrainedEvaluator::from_json_value(value).is_err(),
+                "{mutation}"
+            );
+        }
     }
 
     #[test]

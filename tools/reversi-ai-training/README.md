@@ -643,3 +643,75 @@ checks its checkout ancestry and complete output bytes.
 
 Keep the original manifest and digests intact. A source directory with different
 producer bytes is rejected; `--legacy-source-dir` requires `--legacy-offline`.
+
+## 0052 optimizer comparison
+
+採用済み0019を再開せず、完了した原本から自前教師3,364行を再構成し、同じ初期baselineで
+一回整数更新Aとprojected Adam Bを比較する。人間が長時間runを開始する。
+agentは起動・監視せず、完成後にoffline検証する。
+[実行記録](../../docs/references/reversi-ai-optimizer-comparison.md)にはtoolingと実比較を分けて残す。
+
+以下はtoolingがマージされたclean checkoutで行う。新CLIは新optimizer provenanceを読み込むため、
+比較用にbuildして原本0019のCLIを上書きしない。Oracleは0019 manifestの`oracle_binary.path`と
+同じbinaryを使う。新run-rootには既存の0019/0051 rootを指定しない。
+
+```sh
+rtk git pull --ff-only
+rtk git status --short
+rtk cargo build --release -p reversi-ai --bin reversi-ai-cli
+
+# オペレーターが新しいroot・Oracle path・timeoutを選択する。
+# timeoutは301..3600秒（candidateの300秒より大きい値）。
+export COMPARISON_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0052-20261025-01
+export COMPARISON_ORACLE=/absolute/path/from/0019/manifest/to/Egaroucid
+export COMPARISON_TIMEOUT=1800
+
+rtk make pattern-optimizer-prepare \
+  OPTIMIZER_RUN_ROOT="$COMPARISON_ROOT" \
+  OPTIMIZER_SOURCE_MANIFEST=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0019-20261020-02/manifest.json \
+  OPTIMIZER_CANDIDATE_EXECUTABLE="$PWD/target/release/reversi-ai-cli" \
+  OPTIMIZER_ORACLE_BINARY="$COMPARISON_ORACLE" \
+  OPTIMIZER_TIMEOUT_SECONDS="$COMPARISON_TIMEOUT" \
+  OPTIMIZER_LEARNING_RATE=0.01 OPTIMIZER_BATCH=256 OPTIMIZER_EPOCHS=20 \
+  OPTIMIZER_SEED=20261025 OPTIMIZER_PATIENCE=5
+
+# 人間が開始する。prepare時と同じclean commitから実行する。
+rtk make pattern-optimizer-run OPTIMIZER_RUN_ROOT="$COMPARISON_ROOT" \
+  OPTIMIZER_PROGRESS_EVERY=10
+
+# 完成出力だけを独立検証する。CLI/Oracle/学習コマンドを起動しない。
+rtk make pattern-optimizer-verify OPTIMIZER_RUN_ROOT="$COMPARISON_ROOT"
+```
+
+同じ操作は`rtk python3 tools/reversi-ai-training/pilot.py optimizer-compare prepare|run|verify`
+から利用できる。各operationの`--help`で引数を確認できる。
+prepareは0051と0019の保存証跡を再構成するため、対戦を起動しなくても時間がかかる。
+run開始前にrequested epochs・既知最大batch数・比較/Oracle予定局数を表示する。
+進捗形式は`optimizer-compare phase=... epoch=E/Emax batch=B/Btotal games=G/Gtotal elapsed_seconds=S`。
+batch出力の既定間隔は10で、phase境界・epoch境界・完成局は必ず出力する。
+
+上限は20epochs・教師3,364行・B vs A20局・B vs Oracle最大20局。patience既定5で
+整数validation MSEの改善なしなら停止する。整数exportがAのvalidationを厳密に改善しなければ
+両対戦を`not-run`とし、B vs Aのmatch pointsが10を超えなければOracleを`not-run`とする。
+対戦設定は両project AIとも12/12/12・exact16・turn・bookなし・300000ms/10000000 nodesで固定する。
+Oracleも0019と同じbinary/source/profileへ固定する。
+held-outとcorpusの悪化10%以内（基準0は0を維持）を含む全gateを満たしたときだけ`improved`になる。
+`not-improved`も有効な比較結果で、現行モデルは自動置換しない。
+
+失敗したら同じroot・commit・設定のまま、最後の完成batch/局から再開する。
+`OPTIMIZER_RESUME_FROM`には`input-verification`、`control-reproduction`、`optimization`、
+`integer-selection`、`matches`、`offline-verification`を指定できる。
+指定phase以前の完成receiptが必要で、保存済みphase/checkpoint/完成局は毎回検証する。
+不完全batch/局だけをやり直し、完成出力・失敗証跡は削除しない。
+
+```sh
+rtk make pattern-optimizer-run OPTIMIZER_RUN_ROOT="$COMPARISON_ROOT" \
+  OPTIMIZER_RESUME_FROM=optimization OPTIMIZER_PROGRESS_EVERY=10
+```
+
+学習設定・timeout・binary・source commitを変更した実験は別rootでprepareする。
+完成rootはrunで再開せずverifyする。`manifest.json`、`prepare.receipt.json`、split snapshots/
+audit、phase receipts、`checkpoints/`、`epochs/`、`control.json`、`selection.json`、
+`candidate-artifact.json`、`matches/`、`report.json`、`failure-*.json`を保管する。
+全完成batchのweights/m/vを保存するため、checkpoint用のディスク領域も確保する。
+完成後のreport identity・実指標と判断を記録するまで0052計画を残す。
