@@ -11,7 +11,9 @@ make playground-install
 make start-playground
 ```
 
-`make playground` remains an alias for `make start-playground`. Install resolves pnpm dependencies in this package, downloads/builds and verifies the pinned external Egaroucid Oracle, and generates a TrainedEvaluator demo artifact from the checked-in tiny fixture. It saves the verified paths in `~/.cache/reversi-adventure/playground/prepared.json` (or under `XDG_CACHE_HOME`, if set). Oracle setup failures fail the install. The demo artifact is for trying the UI; its playing strength is unverified. Run install again to refresh the prepared paths and demo artifact. `REVERSI_ADVENTURE_PLAYGROUND_SETUP_DIR` selects a different absolute setup directory outside the checkout for both commands.
+`make playground` remains an alias for `make start-playground`. Install resolves pnpm dependencies in this package, downloads/builds and verifies the pinned external Egaroucid Oracle, and copies the [adopted 0019 trained model](../../models/trained/README.md) into the external setup cache after SHA-256 and artifact validation. It saves the verified paths in `~/.cache/reversi-adventure/playground/prepared.json` (or under `XDG_CACHE_HOME`, if set). Oracle setup or model verification failures fail the install. `REVERSI_ADVENTURE_PLAYGROUND_SETUP_DIR` selects a different absolute setup directory outside the checkout for both commands.
+
+Selecting **Trained** as a player or Advisor uses model `0019-20261020-02` by default. Existing installs that used the tiny demo model are updated automatically by `make start-playground`; no reinstall or training run is needed. Oracle settings are preserved, and an explicit `PLAYGROUND_CONFIG.trained` override still takes precedence. The adopted model improves on its old baseline but has not passed the 0018 strength target.
 
 The direct package commands are available after install:
 
