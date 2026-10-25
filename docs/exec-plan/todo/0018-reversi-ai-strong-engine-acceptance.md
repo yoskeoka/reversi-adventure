@@ -2,12 +2,14 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
-> **2026-10-25 handoff**: 0019 run `0019-20261020-02`の全phase・原本・artifact・指標を
+> **2026-10-26 handoff**: 0019 run `0019-20261020-02`の全phase・原本・artifact・指標を
 > 独立再検証し、selected candidateを現在のTrainedEvaluatorモデルとして人間が採用した。
 > [完了記録](../../references/reversi-ai-0019-adopted-model.md)を参照する。
 > Oracle診断は0勝20敗であり、本計画の受け入れ試験は未実施。
-> 次は[0052の更新方式比較](0052-trained-model-adoption-and-learning-followup.md)を先に行う。
-> 0018 suiteは引き続き未選定とし、0052の学習・checkpoint選択・手法選択に使用しない。
+> [0052実比較記録](../../references/reversi-ai-optimizer-comparison.md)のとおり、
+> 人間操作の更新方式比較は`not-improved`で完了し、新しい候補は選定されなかった。
+> 採用済み0019 artifactは変更せず、0018受け入れも実施していない。
+> 0018 suiteは引き続き未選定・未使用。次の候補選定には別の実行可能計画が必要。
 > 0019の完了済みcycleは再開しない。
 
 > **0047 score移行後の境界**: 新規AI/教師値は `winner-empty-v1`、artifact format2、
@@ -101,10 +103,10 @@ with unrestricted world-class engines.
 
 ## If the acceptance gate misses
 
-現在は[0052更新方式比較](0052-trained-model-adoption-and-learning-followup.md)の
-toolingを実装済みで、人間操作の比較結果を待つ。
-[比較記録](../../references/reversi-ai-optimizer-comparison.md)のfixture結果を
-候補選定・0018の受け入れ証拠に数えない。0018開局のfreezeは後続候補選定後とする。
+人間操作の0052比較は`not-improved`で完了した
+([比較記録](../../references/reversi-ai-optimizer-comparison.md))。新しい候補は未選定であり、
+この方法比較やそのheld-out指標を0018受け入れ証拠に数えない。0018 suiteは後続候補選定まで
+未選定のまま保持し、次候補の選定は別の実行可能計画で行う。
 
 Keep the frozen 0018 result as evidence. Diagnose the miss using the 0019
 validation metrics, its selected-artifact decision, the corpus-regret report,

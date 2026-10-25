@@ -2,9 +2,9 @@
 
 ## 現在の状態
 
-0052の比較toolingを実装した。fixtureによる検証と人間操作の実比較を区別する。
-実比較は未実行で、改善・不成立の実結果はまだない。0052計画を残し、採用済み0019
-artifactと0018受け入れ候補は変更しない。
+比較toolingと人間操作の実比較が完了した。2026-10-26の結果は`not-improved`で、
+offline verifierも完了reportを再構成して検証した。結果を本記録に固定し、0052計画を
+closeoutする。採用済み0019 artifactは変更せず、0018受け入れも実施していない。
 
 ## 入力と方法
 
@@ -53,8 +53,40 @@ engine28件・AI124件のRustテスト、workspace Clippy、GDExtension build、
 論理path解決で停止した。修正済みcollectorは`resolved_path`を使い、別途163ファイルの
 identity照合と対応regression testを通過している。新しい学習・対戦・Oracle solveは実行していない。
 
-人間の完成出力が提供されたら、固定manifestと全receipt/checkpoint/ゲーム/指標をoffline
-検証して、この文書へrun-root・report SHA-256・best epoch・A/B指標・各gate・実対戦数・
-改善/不成立と次の判断を追記する。その後に0052を削除する。
-float改善が整数化で失われた場合は、固定小数点/量子化を次の独立計画の候補とする。
-自前複数cycle・opening多様化・phase偏り補正・探索強度の検討も実結果を受けた別計画とする。
+## 2026-10-26 人間操作の比較結果
+
+人間がrunを完了し、`optimizer-compare verify`が成功した。A/Bは同じ0019初期baselineと
+3,364行の自前教師で比較した。新しい教師対局は生成していない。
+
+| identity | 値 |
+| --- | --- |
+| run root | `/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0052-20261026-01` |
+| execution commit | `725bf637402c3ba6c037f20dc93ca8fd97453215` |
+| manifest digest | `9df3d46b2c9ec9d3cf44c051f57238d1ac336c0d29876eb139529ab7fc59c224` |
+| manifest file SHA-256 | `f75e0d34af7a96d507fbf381318f7804d2ec5642c6f5bcc015fe5d7db7aab334` |
+| report canonical digest | `6a96a4e115603cb49884f4a8b9007c95be8c1b0bcdbf740422ac9db4101687c0` |
+| report file SHA-256 | `3cd323ef29649d8c59a62267cb933a3d73db0ce56c9e00b1ac9a2e1e6a970d43` |
+| candidate artifact file SHA-256 | `e77d333d8c3f5591dfa8161e1f2f8acbf393b76ad1172bab670705f2596a56d8` |
+| candidate artifact digest / weight digest | `1bfe822be189a117c6a1bdc5886812c24ba3eddc7f7ef2bf74fc69a7a04ddfed` / `04acdcba8b2c8240d2802f5780bf40612440a279e807483e4586a922e6d183d9` |
+| offline verification | `optimizer-compare offline verified digest=6a96a4e115603cb49884f4a8b9007c95be8c1b0bcdbf740422ac9db4101687c0` |
+
+The manifest fixes learning rate `0.01`, beta1 `0.9`, beta2 `0.999`, epsilon `1e-8`, L2 `0`,
+batch `256`, maximum `20` epochs, seed `20261025`, patience `5`, and decision timeout `1800` seconds.
+The selected integer export was epoch 13 of 18; Adam training took `729.3688` seconds.
+
+| metric | A: one integer update | B: projected Adam, selected integer export |
+| --- | ---: | ---: |
+| train MSE | `220.75862068965517` | `715.7951843043995` |
+| validation MSE | `321.5026490560406` | `321.8856055518245` |
+| held-out MSE | `268.0373419142408` | `266.51118760757316` |
+
+Held-out contained 13,363 records and its gate passed. The validation gate did not pass because
+B's integer validation MSE was higher than A's. At epoch 13, float validation MSE was
+`323.55768953600483`, also higher than A; this result does not show a float improvement erased
+only by integer export.
+
+The report outcome is `not-improved`, a complete valid comparison result. The comparison match,
+corpus diagnostic, and Oracle match all have status `not-run` with reason
+`integer validation MSE did not strictly improve`; zero games or positions were counted as
+completed. The adopted model was not replaced, and this run is not 0018 strength-acceptance
+evidence. Any further optimizer settings or update method require a separate plan and manifest.
