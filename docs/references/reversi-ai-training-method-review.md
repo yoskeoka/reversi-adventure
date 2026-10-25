@@ -1,5 +1,28 @@
 # 学習方法の一次資料調査と0037の選択
 
+## 2026-10-25の採用状態と次の比較
+
+0037の同方式pilotに続き、0019の64局cycleは完走・独立検証を終え、
+candidateを現在のTrainedEvaluatorモデルとして採用した
+（[identityと実成績](reversi-ai-0019-adopted-model.md)）。
+Oracle診断は0勝20敗で、別方式の実行可能な後続計画はこの時点で存在しなかった。
+既存の0008はStrategicEvaluator向け、0037は同じ更新方式のpipeline検証である。
+
+ユーザーの選択は、まず自前の同じ教師で更新方式を比較すること。
+[0052](../exec-plan/todo/0052-trained-model-adoption-and-learning-followup.md)では
+整数一回更新とf64 Adamの反復更新を、同じ初期baseline・同じ0019教師行で比較する。
+推論形式は維持し、float改善と整数export後の改善を区別する。
+現方式の丸め・各重み`[-1,1]`制約を弱さの確定原因とはせず、実験で評価する。
+
+2026-10-25に[公式技術解説](https://www.egaroucid.nyanyan.dev/ja/technology/explanation/)と
+[v7.8.1のoptimizer](https://github.com/Nyanyan/Egaroucid/blob/v7.8.1/src/tools/evaluation/eval_optimizer_cuda.cu)を再確認した。
+参考にできるのは反復最適化、validationによる停止、局面分布の多様化などの方法である。
+教師データはproject-owned生成に固定し、Egaroucid/Edaxの対局・公開棋譜・評価値・重みは教師にしない。
+既存Oracle corpus/goldenは診断・正しさの検証に限る。
+自己対局の複数cycleや多様なopening、phase別件数の改善は、更新方式の実結果の後に別計画で扱う。
+
+## 0037で採用した方法の調査記録
+
 2026-10-14に公開資料と下記固定sourceを確認した。学習方法の参考であり、
 上流の重み・データ・runtimeを製品やGDExtensionへ取り込むものではない。
 Egaroucid/Edaxは引き続きMake/scripts/CI側の外部ツールとする。

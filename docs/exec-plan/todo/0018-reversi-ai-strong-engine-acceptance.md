@@ -2,6 +2,14 @@
 
 > **Execution**: Use `/execute-task` to implement this plan. After implementation is complete, use `/review-task` to prepare and create the PR.
 
+> **2026-10-25 handoff**: 0019 run `0019-20261020-02`の全phase・原本・artifact・指標を
+> 独立再検証し、selected candidateを現在のTrainedEvaluatorモデルとして人間が採用した。
+> [完了記録](../../references/reversi-ai-0019-adopted-model.md)を参照する。
+> Oracle診断は0勝20敗であり、本計画の受け入れ試験は未実施。
+> 次は[0052の更新方式比較](0052-trained-model-adoption-and-learning-followup.md)を先に行う。
+> 0018 suiteは引き続き未選定とし、0052の学習・checkpoint選択・手法選択に使用しない。
+> 0019の完了済みcycleは再開しない。
+
 > **0047 score移行後の境界**: 新規AI/教師値は `winner-empty-v1`、artifact format2、
 > trainer/record schema2、reinforcement manifest6・report4を使用する。旧schema3/4/5完成証拠と
 > raw差baseline/validationは明示legacy offline検証だけに保持し、新runへ読み替えない。
@@ -9,7 +17,7 @@
 > [移行記録](../../references/reversi-ai-winner-empty-migration.md)を参照する。
 > 0040のreport-pinned producerでの独立root/選択child照合（132 exact positions、252 Oracle queries）・資源観測・
 > 性能判断は2026-10-13に完了した（[結果](../../references/reversi-ai-efficiency8-closeout-2026-10-13.md)）。
-> 0037 pilot、0019の新契約baseline/validationと候補cycle、0018 held-out受け入れは別の未達gateとして残す。
+> 0037 pilot・0019候補cycleは完了済み。後続0052の比較と0018 held-out受け入れは未完了である。
 > higher exact thresholdでのgame-scope採否は0035で保留し、学習方法が必要とした場合に判断する。
 > strong-engine-hcap-v1の12/12/12・exact16とturn policyは維持し、移行だけでproduction freezeを解除しない。
 
@@ -18,7 +26,8 @@
 > **0019 handoff contract**: Before freezing an 0018 candidate or opening suite,
 > receive the human-operated 0019 run-root, manifest, and completed
 > `report.json`, then independently replay the phase receipts and offline
-> verification. Record the report file digest, its `source_commit`, the selected
+> verification. Record the report file digest, its `execution_commit` and
+> per-phase/per-game provenance (legacy `source_commit` only for reports that use it), the selected
 > artifact path and SHA-256 (resolve `selected_artifact_relative_path` against
 > the run-root; for `input:baseline_artifact`, use the pinned baseline path in
 > the manifest), and the candidate-update artifact digest. The 0019 report's
@@ -47,7 +56,7 @@ with unrestricted world-class engines.
 - `docs/exec-plan/todo/0011-reversi-ai-strength-calibration.md:83-97` --
   profile, metric vocabulary, and fixture prerequisite.
 - `docs/exec-plan/todo/0014-reversi-ai-trained-evaluator-runtime.md:1-54`.
-- `docs/exec-plan/todo/0019-reversi-ai-pattern-reinforcement-cycle.md:1-71`.
+- `docs/references/reversi-ai-0019-adopted-model.md` -- completed 0019 evidence and current model.
 - `docs/exec-plan/todo/0016-reversi-ai-exact-solver-16.md:1-40`.
 - `tools/reversi-ai-oracle/oracle.py:1161-1275` -- current match behavior.
 
