@@ -101,6 +101,11 @@ with unrestricted world-class engines.
 
 ## If the acceptance gate misses
 
+現在は[0052更新方式比較](0052-trained-model-adoption-and-learning-followup.md)の
+toolingを実装済みで、人間操作の比較結果を待つ。
+[比較記録](../../references/reversi-ai-optimizer-comparison.md)のfixture結果を
+候補選定・0018の受け入れ証拠に数えない。0018開局のfreezeは後続候補選定後とする。
+
 Keep the frozen 0018 result as evidence. Diagnose the miss using the 0019
 validation metrics, its selected-artifact decision, the corpus-regret report,
 and the 0018 game records. The 0018 opening suite remains held out: do not use

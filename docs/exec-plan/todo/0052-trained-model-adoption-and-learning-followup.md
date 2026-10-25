@@ -123,6 +123,15 @@ Egaroucidから参考にするのは[Adam等の方法](https://github.com/Nyanya
 
 ## 検証
 
+### tooling実装状況
+
+比較entrypoint・固定入力再構成・project_adam_v1・checkpoint/整数export・
+bounded対戦とoffline verifierを実装した。
+[実装・実行記録](../../references/reversi-ai-optimizer-comparison.md)と
+[操作手順](../../../tools/reversi-ai-training/README.md#0052-optimizer-comparison)を参照する。
+実比較は人間による開始・完成出力の独立検証待ちである。
+tooling/fixtureの検証のみでは本計画を完了・削除しない。
+
 - 手計算できる小表でAdamの勾配・bias correction・projection・丸めとbest checkpointを照合する。
 - 現行Aのweight digest再現、同一入力/seedの再現とbatch途中/epoch境界の再開一致、変更設定/欠損state/NaN/境界違反の拒否。
 - 全epochでfloat改善しても整数exportは改善しないfixtureが、改善認定/対戦を許可しないこと。

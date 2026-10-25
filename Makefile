@@ -206,6 +206,31 @@ pattern-reinforcement-execute:
 	$(PYTHON) $(PILOT_TOOL) execute --run-root "$(REINFORCEMENT_RUN_ROOT)" --input-bundle "$(REINFORCEMENT_INPUT_BUNDLE)" --bundle-verification-receipt "$(REINFORCEMENT_BUNDLE_VERIFICATION_RECEIPT)" --candidate-executable "$(REINFORCEMENT_CANDIDATE_EXECUTABLE)" --oracle-binary "$(REINFORCEMENT_ORACLE_BINARY)" --seed $(PILOT_SEED) --opening-plies $(PILOT_OPENING_PLIES) --time-limit-ms $(PILOT_TIME_LIMIT_MS) --node-limit $(PILOT_NODE_LIMIT) --decision-timeout-seconds $(PILOT_DECISION_TIMEOUT_SECONDS) --progress-every $(PILOT_PROGRESS_EVERY) --self-play-games $(REINFORCEMENT_SELF_PLAY_GAMES) --baseline-comparison-games $(REINFORCEMENT_COMPARISON_GAMES) --oracle-match-games $(REINFORCEMENT_ORACLE_GAMES) $(if $(REINFORCEMENT_RESUME_FROM),--resume-from "$(REINFORCEMENT_RESUME_FROM)")
 
 INPUT_BUNDLE_TOOL := tools/reversi-ai-training/input_bundle.py
+OPTIMIZER_RUN_ROOT ?=
+OPTIMIZER_SOURCE_MANIFEST ?=
+OPTIMIZER_CANDIDATE_EXECUTABLE ?=
+OPTIMIZER_ORACLE_BINARY ?=
+OPTIMIZER_LEARNING_RATE ?= 0.01
+OPTIMIZER_BATCH ?= 256
+OPTIMIZER_EPOCHS ?= 20
+OPTIMIZER_SEED ?= 20261025
+OPTIMIZER_PATIENCE ?= 5
+OPTIMIZER_TIMEOUT_SECONDS ?=
+OPTIMIZER_PROGRESS_EVERY ?= 10
+OPTIMIZER_RESUME_FROM ?=
+
+.PHONY: pattern-optimizer-prepare pattern-optimizer-run pattern-optimizer-verify
+pattern-optimizer-prepare:
+	@test -n "$(OPTIMIZER_RUN_ROOT)" && test -n "$(OPTIMIZER_SOURCE_MANIFEST)" && test -n "$(OPTIMIZER_CANDIDATE_EXECUTABLE)" && test -n "$(OPTIMIZER_ORACLE_BINARY)" && test -n "$(OPTIMIZER_TIMEOUT_SECONDS)" || (echo "Set OPTIMIZER_RUN_ROOT, OPTIMIZER_SOURCE_MANIFEST, OPTIMIZER_CANDIDATE_EXECUTABLE, OPTIMIZER_ORACLE_BINARY and OPTIMIZER_TIMEOUT_SECONDS" >&2; exit 2)
+	$(PYTHON) $(PILOT_TOOL) optimizer-compare prepare --run-root "$(OPTIMIZER_RUN_ROOT)" --source-manifest "$(OPTIMIZER_SOURCE_MANIFEST)" --candidate-executable "$(OPTIMIZER_CANDIDATE_EXECUTABLE)" --oracle-binary "$(OPTIMIZER_ORACLE_BINARY)" --learning-rate $(OPTIMIZER_LEARNING_RATE) --batch $(OPTIMIZER_BATCH) --epochs $(OPTIMIZER_EPOCHS) --seed $(OPTIMIZER_SEED) --patience $(OPTIMIZER_PATIENCE) --decision-timeout-seconds $(OPTIMIZER_TIMEOUT_SECONDS)
+
+# Human-operated comparison. Never a prerequisite of a quality gate.
+pattern-optimizer-run:
+	$(PYTHON) $(PILOT_TOOL) optimizer-compare run --run-root "$(OPTIMIZER_RUN_ROOT)" --progress-every $(OPTIMIZER_PROGRESS_EVERY) $(if $(OPTIMIZER_RESUME_FROM),--resume-from "$(OPTIMIZER_RESUME_FROM)")
+
+pattern-optimizer-verify:
+	$(PYTHON) $(PILOT_TOOL) optimizer-compare verify --run-root "$(OPTIMIZER_RUN_ROOT)"
+
 INPUT_BUNDLE_PREPARE_ARGS ?=
 INPUT_BUNDLE_FINALIZE_ARGS ?=
 INPUT_BUNDLE_MANIFEST ?=
