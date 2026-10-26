@@ -218,8 +218,12 @@ OPTIMIZER_PATIENCE ?= 5
 OPTIMIZER_TIMEOUT_SECONDS ?=
 OPTIMIZER_PROGRESS_EVERY ?= 10
 OPTIMIZER_RESUME_FROM ?=
+OPTIMIZER_EVALUATION_ROOT ?=
+OPTIMIZER_SOURCE_RUN_ROOT ?=
+OPTIMIZER_EVALUATION_EXTEND_TO_200 ?=
+OPTIMIZER_EVALUATION_RUN_ORACLE ?=
 
-.PHONY: pattern-optimizer-prepare pattern-optimizer-run pattern-optimizer-verify
+.PHONY: pattern-optimizer-prepare pattern-optimizer-run pattern-optimizer-verify pattern-optimizer-evaluate-prepare pattern-optimizer-evaluate-run pattern-optimizer-evaluate-verify
 pattern-optimizer-prepare:
 	@test -n "$(OPTIMIZER_RUN_ROOT)" && test -n "$(OPTIMIZER_SOURCE_MANIFEST)" && test -n "$(OPTIMIZER_CANDIDATE_EXECUTABLE)" && test -n "$(OPTIMIZER_ORACLE_BINARY)" && test -n "$(OPTIMIZER_TIMEOUT_SECONDS)" || (echo "Set OPTIMIZER_RUN_ROOT, OPTIMIZER_SOURCE_MANIFEST, OPTIMIZER_CANDIDATE_EXECUTABLE, OPTIMIZER_ORACLE_BINARY and OPTIMIZER_TIMEOUT_SECONDS" >&2; exit 2)
 	$(PYTHON) $(PILOT_TOOL) optimizer-compare prepare --run-root "$(OPTIMIZER_RUN_ROOT)" --source-manifest "$(OPTIMIZER_SOURCE_MANIFEST)" --candidate-executable "$(OPTIMIZER_CANDIDATE_EXECUTABLE)" --oracle-binary "$(OPTIMIZER_ORACLE_BINARY)" --learning-rate $(OPTIMIZER_LEARNING_RATE) --batch $(OPTIMIZER_BATCH) --epochs $(OPTIMIZER_EPOCHS) --seed $(OPTIMIZER_SEED) --patience $(OPTIMIZER_PATIENCE) --decision-timeout-seconds $(OPTIMIZER_TIMEOUT_SECONDS)
@@ -230,6 +234,17 @@ pattern-optimizer-run:
 
 pattern-optimizer-verify:
 	$(PYTHON) $(PILOT_TOOL) optimizer-compare verify --run-root "$(OPTIMIZER_RUN_ROOT)"
+
+pattern-optimizer-evaluate-prepare:
+	@test -n "$(OPTIMIZER_SOURCE_RUN_ROOT)" && test -n "$(OPTIMIZER_EVALUATION_ROOT)" && test -n "$(OPTIMIZER_CANDIDATE_EXECUTABLE)" && test -n "$(OPTIMIZER_ORACLE_BINARY)" && test -n "$(OPTIMIZER_TIMEOUT_SECONDS)" || (echo "Set OPTIMIZER_SOURCE_RUN_ROOT, OPTIMIZER_EVALUATION_ROOT, OPTIMIZER_CANDIDATE_EXECUTABLE, OPTIMIZER_ORACLE_BINARY and OPTIMIZER_TIMEOUT_SECONDS" >&2; exit 2)
+	$(PYTHON) $(PILOT_TOOL) optimizer-compare evaluate prepare --source-run-root "$(OPTIMIZER_SOURCE_RUN_ROOT)" --evaluation-root "$(OPTIMIZER_EVALUATION_ROOT)" --candidate-executable "$(OPTIMIZER_CANDIDATE_EXECUTABLE)" --oracle-binary "$(OPTIMIZER_ORACLE_BINARY)" --decision-timeout-seconds $(OPTIMIZER_TIMEOUT_SECONDS) --seed $(OPTIMIZER_SEED)
+
+# Human-operated baseline and Oracle games; never a prerequisite of a quality gate.
+pattern-optimizer-evaluate-run:
+	$(PYTHON) $(PILOT_TOOL) optimizer-compare evaluate run --evaluation-root "$(OPTIMIZER_EVALUATION_ROOT)" --progress-every $(OPTIMIZER_PROGRESS_EVERY) $(if $(OPTIMIZER_EVALUATION_EXTEND_TO_200),--extend-to-200) $(if $(OPTIMIZER_EVALUATION_RUN_ORACLE),--run-oracle)
+
+pattern-optimizer-evaluate-verify:
+	$(PYTHON) $(PILOT_TOOL) optimizer-compare evaluate verify --evaluation-root "$(OPTIMIZER_EVALUATION_ROOT)"
 
 INPUT_BUNDLE_PREPARE_ARGS ?=
 INPUT_BUNDLE_FINALIZE_ARGS ?=

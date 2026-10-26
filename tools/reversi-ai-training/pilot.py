@@ -679,7 +679,7 @@ def main(argv: list[str]) -> int:
             return 2
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("optimizer-compare", help="prepare/run/verify the frozen 0052 optimizer comparison")
+    commands.add_parser("optimizer-compare", help="prepare/run/verify 0052 optimizer comparisons and evaluate saved candidates")
     prep = commands.add_parser("prepare")
     for name in ("manifest", "baseline-artifact", "baseline-manifest", "candidate-executable", "validation-input",
                  "held-out-input", "reserved-openings", "corpus", "golden", "input-bundle", "bundle-verification-receipt"):

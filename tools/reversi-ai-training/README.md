@@ -646,6 +646,10 @@ producer bytes is rejected; `--legacy-source-dir` requires `--legacy-offline`.
 
 ## 0052 optimizer comparison
 
+This command block documents the original completed 0052 training comparison
+and its historical `not-run` match result. Keep that source root unchanged; use
+the 0053 section below to evaluate its saved Adam candidate.
+
 採用済み0019を再開せず、完了した原本から自前教師3,364行を再構成し、同じ初期baselineで
 一回整数更新Aとprojected Adam Bを比較する。人間が長時間runを開始する。
 agentは起動・監視せず、完成後にoffline検証する。
@@ -715,3 +719,33 @@ audit、phase receipts、`checkpoints/`、`epochs/`、`control.json`、`selectio
 `candidate-artifact.json`、`matches/`、`report.json`、`failure-*.json`を保管する。
 全完成batchのweights/m/vを保存するため、checkpoint用のディスク領域も確保する。
 完成後のreport identity・実指標と判断を記録するまで0052計画を残す。
+
+### 0053: 再学習なしのAdam候補評価
+
+完了済み0052 runのreportとartifactは歴史的証跡として保持する。評価は必ず別の新規rootへ保存し、Adam、teacher生成、epoch選択は再実行しない。candidate CLIとOracle binaryは0052 manifestに記録された絶対pathとSHA-256に一致させる。timeoutはこの評価attempt用に選び、prepareで固定する。timeoutや他の設定を変える場合は新しいevaluation rootを使う。
+
+```sh
+export OPTIMIZER_SOURCE_RUN_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0052-20261026-01
+export OPTIMIZER_EVALUATION_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0053-20261026-01
+
+# 0052 manifestのmatches.candidate_executable.pathとmatches.oracle_binary.pathを使う。
+export OPTIMIZER_CANDIDATE_EXECUTABLE=/path/from/0052/manifest/reversi-ai-cli
+export OPTIMIZER_ORACLE_BINARY=/path/from/0052/manifest/Egaroucid_for_Console.out
+export OPTIMIZER_TIMEOUT_SECONDS=1800
+
+rtk make pattern-optimizer-evaluate-prepare
+
+# 人間が開始する。最初の20局は10 opening pairsの座席交換。
+rtk make pattern-optimizer-evaluate-run
+
+# 20局のcandidate pointsが10以上の場合だけ、結果を確認して明示的に続行する。
+rtk make pattern-optimizer-evaluate-run OPTIMIZER_EVALUATION_EXTEND_TO_200=1
+
+# 200局でcandidate pointsが100を超えた場合だけ、Oracle診断を開始する。
+rtk make pattern-optimizer-evaluate-run OPTIMIZER_EVALUATION_RUN_ORACLE=1
+
+# timeout後は同じroot・設定でrunを再実行する。完成済み局を保ち、prefixの続きから進む。
+rtk make pattern-optimizer-evaluate-verify
+```
+
+20局で9.5 points以下ならそこで完了する。10 pointsなら同じevaluation attemptで180局を追加し、200局で100 pointsは同等、100超だけをbaselineより強い結果とする。Oracle診断は別の人間操作で、0018受け入れ判定には使わない。`verify`はmanifest、source run、candidate artifact、opening、receipt、完成局をオフラインで再構成し、trainer・candidate CLI・Oracleを起動しない。元0052 rootの全ファイルをprepare前後に照合する。

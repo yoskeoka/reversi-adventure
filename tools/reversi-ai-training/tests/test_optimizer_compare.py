@@ -11,12 +11,13 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import optimizer_adam as adam
 import optimizer_compare as compare
+import optimizer_compare_matches as matches
 import reinforcement as rf
 import training as tr
 
 
 class ComparisonTests(unittest.TestCase):
-    def fixture(self, root):
+    def fixture(self, root, *, match_led=False):
         path = Path(tr.__file__).parent/'fixtures/tiny-winner-empty-manifest.json'
         manifest = tr.read_json(path)
         rows = tr.validate_records(tr.validate_manifest(manifest, path.parent))
@@ -28,8 +29,9 @@ class ComparisonTests(unittest.TestCase):
         context = dict(baseline=base, adopted=base, teachers=teachers, validation=validation,
                        held_out=validation, pins={}, split_audit={}, source_context={'manifest': {} })
         config = adam.settings(epochs=3, patience=2, learning_rate=.001)
+        match_settings = {"version": matches.MATCH_LED_VERSION} if match_led else {}
         frozen = dict(schema_version=1, producer=compare.VERSION, source={}, optimizer=config,
-                      matches={}, sources=compare.source_hashes(), execution_commit='a'*40)
+                      matches=match_settings, sources=compare.source_hashes(), execution_commit='a'*40)
         root.mkdir()
         compare.write_once(root, 'manifest.json', compare.seal(frozen))
         for name in ('teachers', 'validation', 'held_out'):
@@ -62,6 +64,32 @@ class ComparisonTests(unittest.TestCase):
             with mock.patch.object(rf, 'Candidate', side_effect=AssertionError('offline process')):
                 self.assertEqual(compare.verify(root), report)
             self.assertEqual(before, {p: p.read_bytes() for p in root.rglob('*') if p.is_file()})
+
+    def test_match_led_starts_twenty_games_when_validation_mse_is_worse(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/'compare'
+            _, _ = self.fixture(root, match_led=True)
+            match_report = {
+                "status": "complete", "outcome": "not-improved",
+                "comparison": {"status": "complete", "games": 20, "wins": 9,
+                               "losses": 10, "draws": 1, "match_points": 9.5},
+                "stage_20": {"status": "complete", "summary": {"match_points": 9.5},
+                             "continuation_allowed": False},
+                "stage_200": {"status": "pending"},
+                "continuation": {"eligible": False, "completed": False, "required_games": 20},
+                "oracle": {"status": "not-run", "reason": "20-game continuation gate failed"},
+                "corpus": {"status": "complete", "candidate": {"sum_regret": 1},
+                           "baseline": {"sum_regret": 1}},
+            }
+            with mock.patch.object(compare.matches, "run_match_led", return_value=match_report) as run_match, \
+                 mock.patch.object(compare.matches, "verify_match_led", return_value=match_report):
+                report = compare.run(self.args(root))
+                run_match.assert_called_once()
+            self.assertFalse(report["selection"]["validation_improved"])
+            self.assertEqual(report["matches"]["comparison"]["games"], 20)
+            self.assertEqual(report["outcome"], "not-improved")
+            with mock.patch.object(compare.matches, "verify_match_led", return_value=match_report):
+                self.assertEqual(compare.verify(root), report)
 
     def test_resume_after_interrupted_batch_matches_uninterrupted_arithmetic(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -120,6 +148,12 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(compare.final_report(selected, changed)['outcome'], 'not-improved')
         match['corpus']['candidate']['mean_regret'] = .0001
         self.assertEqual(compare.final_report(selected, match)['outcome'], 'not-improved')
+
+    def test_match_led_threshold_boundaries(self):
+        self.assertFalse(matches.continuation_allowed({"match_points": 9.5}))
+        self.assertTrue(matches.continuation_allowed({"match_points": 10}))
+        self.assertFalse(matches.improved_after_200({"match_points": 100}))
+        self.assertTrue(matches.improved_after_200({"match_points": 100.5}))
 
 
 if __name__ == '__main__':
