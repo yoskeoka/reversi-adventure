@@ -217,6 +217,10 @@ and neither its datasets nor caches are runtime dependencies.
 
 ### Frozen optimizer comparison (0052)
 
+This section records the original 0052 training comparison and remains the
+contract for verifying its immutable historical output. New comparisons and
+reevaluations of a saved Adam candidate follow the match-led contract below.
+
 The offline `pilot.py optimizer-compare` entrypoint compares the original
 `bounded_td_v1` update (A) with `project_adam_v1` (B), starting from the same
 0019 initial baseline, never from the adopted candidate. It has prepare, run
@@ -286,6 +290,51 @@ inputs/state/outputs and rejects tampering. Tooling/fixture verification and
 human production comparison are recorded separately; 0052 stays active until
 the completed human outputs have been independently verified and their result
 and next decision recorded, including a valid negative result.
+
+### Match-led evaluation of a completed 0052 run (0053)
+
+The completed 0052 optimizer run remains immutable historical evidence. Its
+existing report and `not-run` comparison result are not rewritten. A separate
+evaluation attempt may reuse its selected Adam candidate without rerunning the
+trainer, teacher generation, or epoch selection. Preparation requires a
+completed 0052 run and a new, empty evaluation root, and revalidates the source
+manifest, report, candidate artifact, adopted baseline, and pinned executable
+and Oracle identities. The new manifest pins the complete source-run digest and
+candidate artifact digest. Missing or changed inputs fail closed with the
+identity that needs repair or rebuilding.
+
+Validation MSE, held-out MSE, and corpus regret remain reference diagnostics;
+they never skip the candidate-versus-baseline match. The first stage always
+plays 20 games on ten unused opening pairs, with candidate and baseline
+switching seats within each pair. At 10/20 match points or higher, an explicit
+operator continuation may add 180 games on 90 more pairs in the same attempt.
+At 9.5/20 or lower, the attempt stops after 20 games. The 100-pair opening
+plan is frozen before play; all pairs are disjoint from training teachers,
+validation, held-out, corpus, 0018 acceptance, and Oracle openings. Every game
+records its timeout, opening, participant artifact and executable identities,
+and seat. Completed games and the 20-game receipt are immutable. Resume accepts
+only the verified contiguous prefix with identical settings and digests; a
+settings change needs a new evaluation root.
+
+The 200-game result is improved only when the candidate scores strictly more
+than 100 match points. Exactly 100 is not an improvement. Only a completed
+result above 100 points permits the operator to run the separate 20-game
+Oracle diagnostic, using the pinned Egaroucid 7.8.1 binary/source and
+`oracle-0018-acceptance-v1` profile (6/6/6, exact12, no book, one thread,
+hash25). Oracle openings are disjoint from every other match. Its wins, losses,
+draws, points, and compared identities are diagnostic only; they do not decide
+0018 acceptance.
+
+The evaluation report preserves source validation/held-out MSE and corpus
+diagnostics, reports each baseline-match stage and its continuation decision,
+and reports Oracle outcomes or the exact reason they were not run. It does not
+automatically adopt the candidate, claim general strength, or change the
+historical 0052 report. `optimizer-compare evaluate prepare|run|verify` is the
+explicit evaluation-only interface. `prepare` and `verify` are offline;
+`run` is human-operated and supports an explicit continuation to 200 and an
+explicit Oracle diagnostic. Offline verification reconstructs the report and
+gates from saved inputs, openings, identities, receipts, and completed games;
+it starts no trainer, candidate CLI, or Oracle process.
 
 ### Bounded pattern reinforcement cycle
 

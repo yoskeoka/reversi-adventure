@@ -83,6 +83,73 @@ class ComparisonMatchTests(unittest.TestCase):
             with self.assertRaises(training.TrainingError):
                 matches.validate_settings(context, settings)
 
+    def test_match_led_plan_has_one_hundred_baseline_pairs_and_disjoint_oracle_pairs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            context, old_settings, _ = self.setup_context(root)
+            candidate = Path(old_settings["candidate_executable"]["path"])
+            oracle = Path(old_settings["oracle_binary"]["path"])
+            settings = matches.prepare_match_led(context, 20261026, candidate, oracle, 310)
+            matches.validate_settings(context, settings)
+            baseline_pairs = settings["openings"]["comparison"]
+            oracle_pairs = settings["openings"]["oracle-match"]
+            self.assertEqual(len(baseline_pairs), 100)
+            self.assertEqual(len(oracle_pairs), 10)
+            baseline_roots = [pilot.key(pair[0]["board"], pair[0]["side"]) for pair in baseline_pairs]
+            oracle_roots = [pilot.key(pair[0]["board"], pair[0]["side"]) for pair in oracle_pairs]
+            forbidden = matches._forbidden(context)
+            self.assertEqual(len(set(baseline_roots + oracle_roots)), 110)
+            self.assertFalse(set(baseline_roots + oracle_roots) & forbidden)
+            for pair in baseline_pairs + oracle_pairs:
+                self.assertEqual(pair[1], cycle.transform_opening(pair[0], 2))
+                self.assertEqual(pilot.key(pair[0]["board"], pair[0]["side"]),
+                                 pilot.key(pair[1]["board"], pair[1]["side"]))
+
+    def test_match_led_prefix_extends_without_replaying_and_verifies_offline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            context, old_settings, artifact = self.setup_context(root)
+            candidate = Path(old_settings["candidate_executable"]["path"])
+            oracle = Path(old_settings["oracle_binary"]["path"])
+            settings = matches.prepare_match_led(context, 20261026, candidate, oracle, 310)
+            # Near-terminal identical pairs keep this staged integration fixture quick.
+            opening = {"board": "BW." + "B" * 61, "side": "B", "moves": [], "rotation": 0}
+            settings["openings"]["comparison"] = [
+                [copy.deepcopy(opening), copy.deepcopy(opening)] for _ in range(100)
+            ]
+            output = root / "match-led"
+            with mock.patch.object(matches, "validate_settings"), \
+                 mock.patch.object(rf, "Candidate", FakeCandidate):
+                initial = matches.run_match_led(context, settings, artifact, output)
+                self.assertEqual(initial["outcome"], "pending-200")
+                self.assertEqual(initial["stage_20"]["summary"]["match_points"], 10)
+                first_prefix = training.read_jsonl(output / "games.jsonl")
+                self.assertEqual(len(first_prefix), 20)
+                first_receipt = (output / "stage-20.receipt.json").read_bytes()
+                # Replaying the same operator command performs no work after the frozen prefix.
+                with mock.patch.object(rf, "Candidate", side_effect=AssertionError("unexpected player")):
+                    resumed = matches.run_match_led(context, settings, artifact, output)
+                self.assertEqual(resumed, initial)
+                completed = matches.run_match_led(context, settings, artifact, output, extend_to_200=True)
+                self.assertEqual(completed["outcome"], "not-improved")
+                self.assertEqual(completed["comparison"]["games"], 200)
+                self.assertEqual(completed["stage_200"]["summary"]["match_points"], 100)
+                self.assertEqual(training.read_jsonl(output / "games.jsonl")[:20], first_prefix)
+                self.assertEqual((output / "stage-20.receipt.json").read_bytes(), first_receipt)
+            with mock.patch.object(rf, "Candidate", side_effect=AssertionError("offline player")) as player, \
+                 mock.patch.object(pilot.oracle, "run_profiled_match",
+                                   side_effect=AssertionError("offline Oracle")) as oracle_run, \
+                 mock.patch.object(matches, "validate_settings"):
+                self.assertEqual(matches.verify_match_led(context, settings, artifact, output), completed)
+                player.assert_not_called()
+                oracle_run.assert_not_called()
+
+    def test_match_led_thresholds_are_strict_at_both_stages(self):
+        self.assertFalse(matches.continuation_allowed({"match_points": 9.5}))
+        self.assertTrue(matches.continuation_allowed({"match_points": 10}))
+        self.assertFalse(matches.improved_after_200({"match_points": 100}))
+        self.assertTrue(matches.improved_after_200({"match_points": 100.5}))
+
     def test_skipped_counts_never_claim_twenty_games(self):
         report = matches.skipped("integer validation did not improve")
         self.assertEqual(report["comparison"]["status"], "not-run")

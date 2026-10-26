@@ -17,6 +17,14 @@ VERSION = "optimizer-comparison-matches-v1"
 CONFIG = {**cycle.MATCH_CONFIG, "time_limit_ms": 300000, "node_limit": 10000000}
 COUNT = 20
 FILES = {"binding.json", "games.jsonl", "corpus-decisions.jsonl", "oracle-games.jsonl", "report.json"}
+MATCH_LED_VERSION = "optimizer-comparison-match-led-v1"
+MATCH_LED_FIRST_COUNT = 20
+MATCH_LED_TOTAL_COUNT = 200
+MATCH_LED_ORACLE_COUNT = 20
+MATCH_LED_FILES = {
+    "binding.json", "games.jsonl", "corpus-decisions.jsonl", "oracle-games.jsonl",
+    "stage-20.receipt.json", "stage-200.receipt.json", "oracle.receipt.json",
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -41,6 +49,9 @@ def _forbidden(context: dict) -> set[str]:
         result.update(pilot.key(row["board"], row["side"]) for row in context.get(name, []))
     result.update(pilot.key(row["board"], row["side_to_move"])
                   for row in context.get("corpus", source.get("corpus", [])))
+    for opening in context.get("evaluation_excluded_openings", []):
+        if isinstance(opening, dict) and isinstance(opening.get("board"), str):
+            result.add(pilot.key(opening["board"], opening["side"]))
     return result
 
 
@@ -57,8 +68,8 @@ def _openings(context: dict, seed: int) -> dict:
     return result
 
 
-def prepare(context: dict, seed: int, candidate_executable: Path,
-            oracle_binary: Path, timeout: int) -> dict:
+def _prepare(context: dict, seed: int, candidate_executable: Path,
+             oracle_binary: Path, timeout: int, *, match_led: bool) -> dict:
     """Freeze executable identities, profiles and both disjoint opening sets."""
     training.require_int(seed, "comparison seed", 0, 2**64 - 1)
     training.require_int(timeout, "comparison timeout", 301, 3600)
@@ -72,7 +83,17 @@ def prepare(context: dict, seed: int, candidate_executable: Path,
     require(source_manifest.get("oracle_version") == pilot.oracle.ORACLE_VERSION
             and source_manifest.get("oracle_source_sha256") == pilot.oracle.SOURCE_SHA256,
             "comparison Oracle source/version differs from pinned 0019 identity")
-    return {"version": VERSION, "seed": seed, "decision_timeout_seconds": timeout,
+    pair_count = MATCH_LED_TOTAL_COUNT // 2 if match_led else COUNT // 2
+    version = MATCH_LED_VERSION if match_led else VERSION
+    forbidden = _forbidden(context)
+    reserved = set(_source(context).get("reserved", set()))
+    openings = {}
+    for name, count in (("comparison", pair_count), ("oracle-match", MATCH_LED_ORACLE_COUNT // 2)):
+        roots = pilot.opening_pool(seed, 6, count, forbidden, f"{version}-{name}", reserved=reserved)
+        pairs = [[{**root, "rotation": 0}, cycle.transform_opening(root, 2)] for root in roots]
+        forbidden.update(pilot.key(root["board"], root["side"]) for root in roots)
+        openings[name] = pairs
+    settings = {"version": version, "seed": seed, "decision_timeout_seconds": timeout,
             "candidate_executable": cycle.file_entry(candidate_executable),
             "oracle_binary": oracle_entry,
             "oracle_version": source_manifest["oracle_version"],
@@ -80,12 +101,29 @@ def prepare(context: dict, seed: int, candidate_executable: Path,
             "match_config": dict(CONFIG), "oracle_profile": profile,
             "oracle_profile_id": cycle.ORACLE_PROFILE.name,
             "oracle_exact_solver_empty_squares": pilot.oracle.profile_exact_threshold(cycle.ORACLE_PROFILE),
-            "openings": _openings(context, seed), "requested_games": COUNT}
+            "openings": openings,
+            "requested_games": MATCH_LED_TOTAL_COUNT if match_led else COUNT}
+    if match_led:
+        settings["initial_games"] = MATCH_LED_FIRST_COUNT
+        settings["oracle_requested_games"] = MATCH_LED_ORACLE_COUNT
+    return settings
+
+
+def prepare(context: dict, seed: int, candidate_executable: Path,
+            oracle_binary: Path, timeout: int) -> dict:
+    return _prepare(context, seed, candidate_executable, oracle_binary, timeout, match_led=False)
+
+
+def prepare_match_led(context: dict, seed: int, candidate_executable: Path,
+                      oracle_binary: Path, timeout: int) -> dict:
+    """Freeze 100 baseline opening pairs and ten disjoint Oracle pairs."""
+    return _prepare(context, seed, candidate_executable, oracle_binary, timeout, match_led=True)
 
 
 def validate_settings(context: dict, settings: dict) -> None:
-    expected = prepare(context, settings["seed"], Path(settings["candidate_executable"]["path"]),
-                       Path(settings["oracle_binary"]["path"]), settings["decision_timeout_seconds"])
+    prepare_fn = prepare_match_led if settings.get("version") == MATCH_LED_VERSION else prepare
+    expected = prepare_fn(context, settings["seed"], Path(settings["candidate_executable"]["path"]),
+                          Path(settings["oracle_binary"]["path"]), settings["decision_timeout_seconds"])
     require(pilot.same(settings, expected), "comparison settings or input identities differ from preparation")
 
 
@@ -169,10 +207,13 @@ class _Player:
         self.inner.close()
 
 
-def _verify_games(context: dict, settings: dict, games: list[dict]) -> None:
-    require(len(games) <= COUNT, "comparison completed prefix exceeds twenty games")
+def _verify_games(context: dict, settings: dict, games: list[dict], *, maximum: int = COUNT,
+                  start_index: int = 0) -> None:
+    require(start_index >= 0 and start_index + len(games) <= maximum,
+            f"comparison completed prefix exceeds {maximum} games")
     reserved = set(_source(context).get("reserved", set()))
-    for index, game in enumerate(games):
+    for offset, game in enumerate(games):
+        index = start_index + offset
         opening = settings["openings"]["comparison"][index // 2][index % 2]
         seats = {"B": "candidate", "W": "baseline"} if index % 2 == 0 else {"B": "baseline", "W": "candidate"}
         require(game.get("kind") == "optimizer-comparison" and game["pair"] == index // 2
@@ -340,3 +381,361 @@ def verify(context: dict, settings: dict, artifact_path: Path, output: Path) -> 
                           _load_rows(output, "corpus-decisions.jsonl"), _load_rows(output, "oracle-games.jsonl"))
     require(training.read_json(output / "report.json") == report, "comparison match report does not replay")
     return report
+
+
+def _sealed_receipt(value: dict) -> dict:
+    result = dict(value)
+    result["digest"] = training.digest(result)
+    return result
+
+
+def _read_receipt(path: Path) -> dict:
+    value = training.read_json(path)
+    expected = dict(value)
+    digest = expected.pop("digest", None)
+    require(digest == training.digest(expected), f"changed match receipt {path}")
+    return expected
+
+
+def _write_once(output: Path, name: str, value: dict) -> None:
+    path = output / name
+    encoded = pilot.blob(value)
+    if path.exists():
+        require(path.read_bytes() == encoded, f"changed immutable match evidence {path}")
+    else:
+        rf.atomic_write(output, name, encoded)
+
+
+def _match_led_stage_receipt(settings: dict, output: Path, games: list[dict], count: int) -> dict:
+    stage_games = games[:count]
+    summary = rf.match_summary(stage_games)
+    value = {
+        "version": MATCH_LED_VERSION,
+        "stage": f"baseline-{count}",
+        "settings_digest": training.digest(settings),
+        "binding_sha256": training.sha256_file(output / "binding.json"),
+        "game_digests": [game["game_digest"] for game in stage_games],
+        "games_digest": training.digest(stage_games),
+        "summary": summary,
+    }
+    if count == MATCH_LED_FIRST_COUNT:
+        value["continuation_allowed"] = continuation_allowed(summary)
+    else:
+        stage20 = output / "stage-20.receipt.json"
+        value["stage_20_receipt_sha256"] = training.sha256_file(stage20)
+        value["outcome"] = "improved" if improved_after_200(summary) else "not-improved"
+    return value
+
+
+def continuation_allowed(summary: dict) -> bool:
+    return summary["match_points"] >= 10
+
+
+def improved_after_200(summary: dict) -> bool:
+    return summary["match_points"] > 100
+
+
+def _match_led_oracle_receipt(settings: dict, output: Path, games: list[dict]) -> dict:
+    summary = _verify_oracle({}, settings, games, True)["summary"]
+    return {
+        "version": MATCH_LED_VERSION,
+        "stage": "oracle-20",
+        "settings_digest": training.digest(settings),
+        "stage_200_receipt_sha256": training.sha256_file(output / "stage-200.receipt.json"),
+        "game_digests": [game["game_digest"] for game in games],
+        "games_digest": training.digest(games),
+        "summary": summary,
+    }
+
+
+def _game_execution_identity(context: dict, settings: dict, artifact_path: Path) -> dict:
+    return {
+        "settings_digest": training.digest(settings),
+        "decision_timeout_seconds": settings["decision_timeout_seconds"],
+        "candidate_artifact_sha256": training.sha256_file(artifact_path),
+        "baseline_artifact_sha256": cycle.file_entry(_adopted_path(context))["sha256"],
+        "candidate_executable_sha256": settings["candidate_executable"]["sha256"],
+        "baseline_executable_sha256": settings["candidate_executable"]["sha256"],
+        "match_config": settings["match_config"],
+    }
+
+
+def _verify_match_led_games(context: dict, settings: dict, artifact_path: Path,
+                            games: list[dict]) -> None:
+    _verify_games(context, settings, games, maximum=MATCH_LED_TOTAL_COUNT)
+    expected_identity = _game_execution_identity(context, settings, artifact_path)
+    require(all(game.get("execution_identity") == expected_identity for game in games),
+            "baseline game does not record the frozen timeout and participant identities")
+
+
+def _match_led_summary(context: dict, settings: dict, games: list[dict], decisions: list[dict],
+                       oracle_games: list[dict], stage20: dict | None,
+                       stage200: dict | None) -> dict:
+    summary = rf.match_summary(games)
+    first = stage20["summary"] if stage20 else None
+    full = stage200["summary"] if stage200 else None
+    first_continues = bool(stage20 and stage20["continuation_allowed"])
+    if len(games) < MATCH_LED_FIRST_COUNT:
+        outcome, comparison_status = "pending-20", "partial"
+    elif not first_continues:
+        outcome, comparison_status = "not-improved", "complete"
+    elif len(games) < MATCH_LED_TOTAL_COUNT:
+        outcome, comparison_status = "pending-200", "partial"
+    elif not improved_after_200(full):
+        outcome, comparison_status = "not-improved", "complete"
+    elif len(oracle_games) < MATCH_LED_ORACLE_COUNT:
+        outcome, comparison_status = "pending-oracle", "complete"
+    else:
+        outcome, comparison_status = "improved", "complete"
+
+    oracle_allowed = stage200 is not None and improved_after_200(full)
+    oracle = _verify_oracle(context, settings, oracle_games, oracle_allowed)
+    if oracle_allowed and not oracle_games:
+        oracle = {**oracle, "status": "pending", "reason": "eligible Oracle diagnostic has not been run"}
+    elif not oracle_allowed:
+        if stage200 is not None:
+            reason = "candidate scored 100/200 or less against baseline"
+        elif stage20 is not None and not first_continues:
+            reason = "20-game baseline match scored below the 10/20 continuation threshold"
+        else:
+            reason = "200-game baseline match is incomplete"
+        oracle = {"status": "not-run", "reason": reason, "games": 0,
+                  "summary": {"candidate_win": 0, "oracle_win": 0, "draw": 0,
+                              "games": 0, "match_points": 0}}
+    corpus_count = len(context.get("corpus", [])) * 2
+    if not decisions:
+        corpus = {"status": "not-run", "reason": "corpus diagnostics have not been run", "positions": 0}
+    else:
+        corpus = _corpus_metrics(context, decisions, complete=len(decisions) == corpus_count)
+    complete = (outcome in ("improved", "not-improved") and corpus["status"] == "complete")
+    return {
+        "status": "complete" if complete else "pending",
+        "outcome": outcome,
+        "comparison": {"status": comparison_status, **summary},
+        "stage_20": ({"status": "complete", "summary": first,
+                      "continuation_allowed": first_continues} if first else {"status": "pending"}),
+        "stage_200": ({"status": "complete", "summary": full,
+                       "outcome": stage200["outcome"]} if full else {"status": "pending"}),
+        "continuation": {
+            "eligible": first_continues,
+            "completed": stage200 is not None,
+            "required_games": MATCH_LED_TOTAL_COUNT if first_continues else MATCH_LED_FIRST_COUNT,
+        },
+        "oracle": oracle,
+        "corpus": corpus,
+    }
+
+
+def _expected_receipt(path: Path, expected: dict) -> dict | None:
+    if not path.exists():
+        return None
+    actual = _read_receipt(path)
+    require(actual == expected, f"match receipt does not replay: {path}")
+    return actual
+
+
+def verify_match_led(context: dict, settings: dict, artifact_path: Path, output: Path) -> dict:
+    """Reconstruct staged match evidence without starting candidate or Oracle processes."""
+    require(settings.get("version") == MATCH_LED_VERSION, "unsupported match-led settings")
+    validate_settings(context, settings)
+    if not output.exists():
+        return _match_led_summary(context, settings, [], [], [], None, None)
+    require(output.is_dir() and {path.name for path in output.iterdir()} <= MATCH_LED_FILES,
+            "match-led outputs are unexpected")
+    binding_path = output / "binding.json"
+    games_path = output / "games.jsonl"
+    decisions_path = output / "corpus-decisions.jsonl"
+    oracle_path = output / "oracle-games.jsonl"
+    require(binding_path.is_file(), "match-led binding is missing")
+    require(training.read_json(binding_path) == _binding(context, settings, artifact_path),
+            "match-led artifact/settings binding changed")
+    games = _load_rows(output, "games.jsonl")
+    decisions = _load_rows(output, "corpus-decisions.jsonl")
+    oracle_games = _load_rows(output, "oracle-games.jsonl")
+    _verify_match_led_games(context, settings, artifact_path, games)
+    require(len(decisions) <= len(context.get("corpus", [])) * 2,
+            "match-led corpus decision prefix exceeds its frozen positions")
+    if decisions:
+        _corpus_metrics(context, decisions, complete=False)
+    if len(games) < MATCH_LED_FIRST_COUNT:
+        require(not (output / "stage-20.receipt.json").exists(),
+                "20-game receipt precedes a complete initial stage")
+    else:
+        require(len(games) >= MATCH_LED_FIRST_COUNT, "initial baseline match is incomplete")
+        _expected_receipt(output / "stage-20.receipt.json",
+                          _match_led_stage_receipt(settings, output, games, MATCH_LED_FIRST_COUNT))
+        require((output / "stage-20.receipt.json").is_file(), "missing completed 20-game receipt")
+    if len(games) < MATCH_LED_TOTAL_COUNT:
+        require(not (output / "stage-200.receipt.json").exists(),
+                "200-game receipt precedes a complete baseline match")
+    else:
+        _expected_receipt(output / "stage-200.receipt.json",
+                          _match_led_stage_receipt(settings, output, games, MATCH_LED_TOTAL_COUNT))
+        require((output / "stage-200.receipt.json").is_file(), "missing completed 200-game receipt")
+    stage20 = _read_receipt(output / "stage-20.receipt.json") if (output / "stage-20.receipt.json").exists() else None
+    stage200 = _read_receipt(output / "stage-200.receipt.json") if (output / "stage-200.receipt.json").exists() else None
+    require(stage200 is None or (stage20 is not None and stage20["continuation_allowed"]),
+            "200-game stage exists without an eligible 20-game receipt")
+    oracle_allowed = stage200 is not None and improved_after_200(stage200["summary"])
+    if oracle_games:
+        require(len(decisions) == len(context.get("corpus", [])) * 2,
+                "Oracle diagnostic preceded complete corpus diagnostics")
+    oracle = _verify_oracle(context, settings, oracle_games, oracle_allowed)
+    if len(oracle_games) == MATCH_LED_ORACLE_COUNT:
+        expected = _match_led_oracle_receipt(settings, output, oracle_games)
+        _expected_receipt(output / "oracle.receipt.json", expected)
+        require((output / "oracle.receipt.json").is_file(), "missing completed Oracle receipt")
+    else:
+        require(not (output / "oracle.receipt.json").exists(),
+                "Oracle receipt precedes a complete diagnostic")
+    return _match_led_summary(context, settings, games, decisions, oracle_games, stage20, stage200)
+
+
+def run_match_led(context: dict, settings: dict, artifact_path: Path, output: Path,
+                  *, extend_to_200: bool = False, run_oracle: bool = False, progress=None) -> dict:
+    """Run only explicitly selected match stages, preserving every completed game."""
+    require(settings.get("version") == MATCH_LED_VERSION, "unsupported match-led settings")
+    validate_settings(context, settings)
+    output.mkdir(parents=True, exist_ok=True)
+    require({path.name for path in output.iterdir()} <= MATCH_LED_FILES,
+            "match-led output contains unexpected files")
+    binding = _binding(context, settings, artifact_path)
+    if (output / "binding.json").exists():
+        require(training.read_json(output / "binding.json") == binding,
+                "match-led resume settings or artifacts changed")
+    else:
+        require(not list(output.iterdir()), "match-led output has data without its identity binding")
+        rf.atomic_write(output, "binding.json", pilot.blob(binding))
+
+    games = _load_rows(output, "games.jsonl")
+    decisions = _load_rows(output, "corpus-decisions.jsonl")
+    oracle_games = _load_rows(output, "oracle-games.jsonl")
+    _verify_match_led_games(context, settings, artifact_path, games)
+    if decisions:
+        _corpus_metrics(context, decisions, complete=False)
+    require(not decisions or len(games) >= MATCH_LED_FIRST_COUNT,
+            "corpus diagnostics precede the completed initial match")
+    if oracle_games:
+        require(len(decisions) == len(context.get("corpus", [])) * 2,
+                "Oracle diagnostic preceded complete corpus diagnostics")
+    oracle_allowed = len(games) == MATCH_LED_TOTAL_COUNT and rf.match_summary(games)["match_points"] > 100
+    _verify_oracle(context, settings, oracle_games, oracle_allowed)
+
+    stage20_path = output / "stage-20.receipt.json"
+    stage200_path = output / "stage-200.receipt.json"
+    had_stage20_receipt = stage20_path.is_file()
+    had_stage200_receipt = stage200_path.is_file()
+    if stage20_path.exists():
+        expected = _match_led_stage_receipt(settings, output, games, MATCH_LED_FIRST_COUNT)
+        _expected_receipt(stage20_path, expected)
+    elif len(games) == MATCH_LED_FIRST_COUNT:
+        _write_once(output, stage20_path.name,
+                    _sealed_receipt(_match_led_stage_receipt(settings, output, games, MATCH_LED_FIRST_COUNT)))
+    if stage200_path.exists():
+        expected = _match_led_stage_receipt(settings, output, games, MATCH_LED_TOTAL_COUNT)
+        _expected_receipt(stage200_path, expected)
+    elif len(games) == MATCH_LED_TOTAL_COUNT:
+        require(stage20_path.is_file(), "missing 20-game receipt before 200-game completion")
+        _write_once(output, stage200_path.name,
+                    _sealed_receipt(_match_led_stage_receipt(settings, output, games, MATCH_LED_TOTAL_COUNT)))
+
+    if extend_to_200:
+        require(had_stage20_receipt, "run and verify the initial 20-game stage before requesting extension")
+        stage20 = _read_receipt(stage20_path)
+        require(continuation_allowed(stage20["summary"]),
+                "20-game result is below the 10-point continuation threshold")
+        require(not (output / "report.json").exists(), "completed match-led evaluation cannot be extended")
+    if run_oracle:
+        require(had_stage200_receipt,
+                "complete and verify 200 baseline games before requesting Oracle diagnostics")
+        stage200 = _read_receipt(stage200_path)
+        require(improved_after_200(stage200["summary"]),
+                "Oracle diagnostics require more than 100 candidate points from 200 games")
+        require(not (output / "report.json").exists(), "completed match-led evaluation cannot run Oracle again")
+
+    emit = progress or (lambda phase, completed, total: None)
+    needs_games = len(games) < MATCH_LED_FIRST_COUNT or (extend_to_200 and len(games) < MATCH_LED_TOTAL_COUNT)
+    needs_corpus = (len(games) >= MATCH_LED_FIRST_COUNT
+                    and len(decisions) < len(context.get("corpus", [])) * 2)
+    needs_oracle = run_oracle and len(oracle_games) < MATCH_LED_ORACLE_COUNT
+    if not (needs_games or needs_corpus or needs_oracle):
+        return verify_match_led(context, settings, artifact_path, output)
+
+    reserved = set(_source(context).get("reserved", set()))
+    players = {}
+    try:
+        players["baseline"] = _Player(settings, _adopted_path(context), reserved)
+        players["candidate"] = _Player(settings, artifact_path, reserved)
+        remaining = [MATCH_LED_TOTAL_COUNT * 120 - sum(len(game["decisions"]) for game in games)]
+        target = MATCH_LED_TOTAL_COUNT if extend_to_200 else MATCH_LED_FIRST_COUNT
+        emit("baseline-match", len(games), target)
+        for index in range(len(games), target):
+            pair, member = divmod(index, 2)
+            opening = settings["openings"]["comparison"][pair][member]
+            seats = {"B": "candidate", "W": "baseline"} if member == 0 else {"B": "baseline", "W": "candidate"}
+            game = rf.play("optimizer-comparison", pair, member, opening["board"], opening["side"],
+                           opening["moves"], opening["rotation"], players, seats, remaining)
+            for decision in game["decisions"]:
+                if rf.legal_moves(decision["board"], decision["side"]):
+                    decision["search_telemetry"] = players[seats[decision["side"]]].decisions[decision["id"]]
+            game.pop("game_digest")
+            game["execution_identity"] = _game_execution_identity(context, settings, artifact_path)
+            game["game_digest"] = training.digest(game)
+            games.append(game)
+            _verify_games(context, settings, [game], maximum=MATCH_LED_TOTAL_COUNT, start_index=index)
+            require(game.get("execution_identity") == _game_execution_identity(context, settings, artifact_path),
+                    "baseline game does not record the frozen timeout and participant identities")
+            _write_rows(output, "games.jsonl", games)
+            emit("baseline-match", len(games), target)
+            if len(games) == MATCH_LED_FIRST_COUNT:
+                _write_once(output, "stage-20.receipt.json", _sealed_receipt(
+                    _match_led_stage_receipt(settings, output, games, MATCH_LED_FIRST_COUNT)))
+                if not continuation_allowed(_read_receipt(stage20_path)["summary"]):
+                    break
+        if len(games) == MATCH_LED_FIRST_COUNT and not stage20_path.exists():
+            _write_once(output, "stage-20.receipt.json", _sealed_receipt(
+                _match_led_stage_receipt(settings, output, games, MATCH_LED_FIRST_COUNT)))
+        if len(games) == MATCH_LED_TOTAL_COUNT and not stage200_path.exists():
+            _write_once(output, "stage-200.receipt.json", _sealed_receipt(
+                _match_led_stage_receipt(settings, output, games, MATCH_LED_TOTAL_COUNT)))
+
+        if len(games) >= MATCH_LED_FIRST_COUNT:
+            emit("corpus", len(decisions), len(context.get("corpus", [])) * 2)
+            for index in range(len(decisions), len(context.get("corpus", [])) * 2):
+                row = context["corpus"][index // 2]
+                name = "baseline" if index % 2 == 0 else "candidate"
+                identifier = f"optimizer-corpus-{index // 2}-{name}"
+                players[name].new_game(identifier)
+                move, telemetry = players[name].choose_with_diagnostic(identifier, row["board"], row["side_to_move"])
+                decisions.append({"position_id": row["position_id"], "board": row["board"],
+                                  "side": row["side_to_move"], "player": name, "move": move,
+                                  "search_telemetry": telemetry})
+                _corpus_metrics(context, decisions, complete=False)
+                _write_rows(output, "corpus-decisions.jsonl", decisions)
+                emit("corpus", len(decisions), len(context.get("corpus", [])) * 2)
+
+        if len(games) == MATCH_LED_TOTAL_COUNT:
+            summary = rf.match_summary(games)
+            if improved_after_200(summary) and run_oracle:
+                emit("oracle-match", len(oracle_games), MATCH_LED_ORACLE_COUNT)
+                binary = Path(settings["oracle_binary"]["path"])
+
+                def save_game(game):
+                    cycle.validate_oracle_game(settings, game, len(oracle_games))
+                    oracle_games.append(game)
+                    _write_rows(output, "oracle-games.jsonl", oracle_games)
+                    emit("oracle-match", len(oracle_games), MATCH_LED_ORACLE_COUNT)
+
+                pilot.oracle.run_profiled_match(binary, binary.parent, players["candidate"],
+                    settings["openings"]["oracle-match"], cycle.ORACLE_PROFILE, settings["match_config"],
+                    settings["decision_timeout_seconds"], 1, on_game=save_game, initial_games=oracle_games)
+                if len(oracle_games) == MATCH_LED_ORACLE_COUNT:
+                    _write_once(output, "oracle.receipt.json", _sealed_receipt(
+                        _match_led_oracle_receipt(settings, output, oracle_games)))
+        if len(oracle_games) == MATCH_LED_ORACLE_COUNT and not (output / "oracle.receipt.json").exists():
+            _write_once(output, "oracle.receipt.json", _sealed_receipt(
+                _match_led_oracle_receipt(settings, output, oracle_games)))
+    finally:
+        for player in players.values():
+            player.close()
+    return verify_match_led(context, settings, artifact_path, output)

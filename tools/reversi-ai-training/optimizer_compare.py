@@ -55,7 +55,8 @@ class Progress:
 
     def requested(self):
         print(f"optimizer-compare requested_epochs={self.config['epochs']} "
-              f'maximum_batches={self.batches} comparison_games=20 oracle_games=20', file=sys.stderr, flush=True)
+              f'maximum_batches={self.batches} comparison_games=200 initial_comparison_games=20 oracle_games=20',
+              file=sys.stderr, flush=True)
 
     def emit(self, phase, state=None, games=0, total=40):
         state = state or {}
@@ -85,8 +86,8 @@ def prepare(args):
     progress.requested()
     progress.emit('prepare')
     context = inputs.load_source(args.source_manifest)
-    setting = matches.prepare(context, args.seed, args.candidate_executable,
-                              args.oracle_binary, args.decision_timeout_seconds)
+    setting = matches.prepare_match_led(context, args.seed, args.candidate_executable,
+                                        args.oracle_binary, args.decision_timeout_seconds)
     manifest = seal(dict(schema_version=1, producer=VERSION, source=context['pins'],
                          optimizer=config, matches=setting, sources=source_hashes(),
                          execution_commit=cycle.source_commit()))
@@ -272,6 +273,18 @@ def within(candidate, control):
 
 
 def final_report(selected, match_report):
+    if match_report.get("outcome") in ("improved", "not-improved", "pending-20", "pending-200", "pending-oracle"):
+        gates = {
+            "baseline_match_started": match_report["comparison"]["games"] >= 20,
+            "continue_to_200": match_report["continuation"]["eligible"],
+            "strictly_better_after_200": (match_report["stage_200"].get("summary", {}).get("match_points", 0) > 100),
+        }
+        return dict(producer=VERSION, status=match_report["status"], selection=selected,
+                    matches=match_report, outcome=match_report["outcome"], gates=gates,
+                    reference_metrics={"validation_mse": selected["candidate"]["validation_mse"],
+                                       "held_out": selected["held_out"],
+                                       "corpus": match_report["corpus"]},
+                    adopted_model_replaced=False, acceptance_0018=False)
     corpus = match_report['corpus']
     corpus_ok = corpus['status'] == 'complete' and within(
         corpus['candidate'].get('sum_regret', corpus['candidate']['mean_regret']),
@@ -297,12 +310,24 @@ def verify(root, *, publishing=False):
                                              control(root, context, verify_only=True)['training_seconds'])
     adam.require((root/'candidate-artifact.json').read_bytes() == blob(expected_artifact), 'integer artifact differs from selected checkpoint')
     adam.require((root/'selection.json').read_bytes() == blob(selected), 'changed integer selection')
-    if selected['validation_improved']:
+    if manifest["matches"].get("version") == matches.MATCH_LED_VERSION:
+        match_report = matches.verify_match_led(context, manifest["matches"],
+                                                 root/'candidate-artifact.json', root/'matches')
+        expected = final_report(selected, match_report)
+        if match_report["status"] != "complete":
+            adam.require(not (root/'report.json').exists(), 'pending comparison has a final report')
+            adam.require(not (root/'matches.receipt.json').exists(), 'pending comparison has a final receipt')
+            adam.require(not (root/'offline-verification.receipt.json').exists(),
+                         'pending comparison has an offline completion receipt')
+            return expected
+    elif selected['validation_improved']:
         match_report = matches.verify(context, manifest['matches'], root/'candidate-artifact.json', root/'matches')
     else:
         match_report = matches.skipped('integer validation MSE did not strictly improve')
         adam.require(not (root/'matches').exists(), 'matches were executed despite failed validation gate')
-    expected = final_report(selected, match_report)
+        expected = final_report(selected, match_report)
+    if manifest["matches"].get("version") != matches.MATCH_LED_VERSION:
+        expected = final_report(selected, match_report)
     for phase, data in (
             ('input-verification', dict(pins=manifest['source'], split_audit_digest=tr.digest(context['split_audit']))),
             ('control-reproduction', control(root, context, verify_only=True)),
@@ -350,7 +375,25 @@ def run(args):
         write_once(root, 'selection.json', selected)
         receipt(root, 'integer-selection', selected)
         progress.emit('matches', state)
-        if selected['validation_improved']:
+        if manifest["matches"].get("version") == matches.MATCH_LED_VERSION:
+            def report_match_progress(phase, completed, total):
+                if completed in (0, total) or completed % progress.every == 0:
+                    progress.emit(phase, state, completed, total)
+
+            match_report = matches.run_match_led(
+                context, manifest["matches"], root/'candidate-artifact.json', root/'matches',
+                extend_to_200=getattr(args, "extend_to_200", False),
+                run_oracle=getattr(args, "run_oracle", False),
+                progress=report_match_progress)
+            if match_report["status"] != "complete":
+                pending = final_report(selected, match_report)
+                initial = match_report["stage_20"].get("summary", {})
+                final = match_report["stage_200"].get("summary", {})
+                print(f"optimizer-compare pending outcome={pending['outcome']} "
+                      f"points20={initial.get('match_points', 'not-complete')} "
+                      f"points200={final.get('match_points', 'not-complete')} run={root}")
+                return pending
+        elif selected['validation_improved']:
             match_report = matches.run(context, manifest['matches'], root/'candidate-artifact.json', root/'matches',
                 lambda phase, completed, total: progress.emit(phase, state, completed, total))
         else:
@@ -370,6 +413,9 @@ def run(args):
 
 
 def main(argv):
+    if argv and argv[0] == "evaluate":
+        import optimizer_compare_evaluation
+        return optimizer_compare_evaluation.main(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='action', required=True)
     prep = commands.add_parser('prepare')
@@ -387,10 +433,16 @@ def main(argv):
         sub.add_argument('--progress-every', type=rf.positive_interval, default=10)
         if action == 'run':
             sub.add_argument('--resume-from', choices=PHASES)
+            sub.add_argument('--extend-to-200', action='store_true',
+                             help='explicitly continue a verified 20-game match that reached 10 points')
+            sub.add_argument('--run-oracle', action='store_true',
+                             help='explicitly run the eligible 20-game Oracle diagnostic after 200 baseline games')
     args = parser.parse_args(argv)
     if args.action == 'prepare':
         prepare(args)
     elif args.action == 'run':
+        adam.require(not (args.extend_to_200 or args.run_oracle) or args.resume_from == 'matches',
+                     'match continuation and Oracle diagnostics require --resume-from matches')
         run(args)
     else:
         report = verify(args.run_root.resolve())
