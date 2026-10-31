@@ -38,6 +38,12 @@ baselineとの最初の20局はcandidate 7勝・0分・13敗、7.0/20 pointsだ�
 phase偏り補正、自前探索強度の候補方向があるが、次候補の実行前に診断結果を踏まえた別計画を作る。
 todoに残る0037は同じ更新方式のpipeline pilotであり、新しい学習方法を比較する計画ではない。
 
+2026-11-01、次候補は局所変更6案から見直し、Egaroucidの公開パターン表学習を
+自前データで縮小再現する[0054](../exec-plan/todo/0054-reversi-ai-next-method-experiments.md)として計画化した。
+[方式の差と選択](reversi-ai-learning-method-reproduction.md)を参照する。
+128局＋序盤最大256局面で工程の成立を確認する計画で、実行は未着手。
+0052/0053をEgaroucidの学習工程全体の再現と扱わず、0019採用モデルと0018の境界を維持する。
+
 ## 入力と方法
 
 [採用記録](reversi-ai-0019-adopted-model.md)のmanifest/report/artifact identityに
