@@ -8,9 +8,9 @@ candidateを現在のTrainedEvaluatorモデルとして採用した
 Oracle診断は0勝20敗で、別方式の実行可能な後続計画はこの時点で存在しなかった。
 既存の0008はStrategicEvaluator向け、0037は同じ更新方式のpipeline検証である。
 
-ユーザーの選択は、まず自前の同じ教師で更新方式を比較すること。
-[0052](../exec-plan/todo/0052-trained-model-adoption-and-learning-followup.md)では
-整数一回更新とf64 Adamの反復更新を、同じ初期baseline・同じ0019教師行で比較する。
+ユーザーの選択は、まず自前の同じ教師で更新方式を比較することだった。
+[比較記録](reversi-ai-optimizer-comparison.md)に、整数一回更新とf64 Adamの反復更新を
+同じ初期baseline・同じ0019教師行で比較した結果を残す。
 推論形式は維持し、float改善と整数export後の改善を区別する。
 現方式の丸め・各重み`[-1,1]`制約を弱さの確定原因とはせず、実験で評価する。
 
@@ -20,6 +20,12 @@ Oracle診断は0勝20敗で、別方式の実行可能な後続計画はこの�
 教師データはproject-owned生成に固定し、Egaroucid/Edaxの対局・公開棋譜・評価値・重みは教師にしない。
 既存Oracle corpus/goldenは診断・正しさの検証に限る。
 自己対局の複数cycleや多様なopening、phase別件数の改善は、更新方式の実結果の後に別計画で扱う。
+
+## 2026-10-31の更新方式比較後
+
+projected Adam候補はvalidation MSEと20局のbaseline matchで改善せず、200局・Oracle診断へ進まなかった。
+現在、別の学習方法を選定・比較する実行計画はない。0018に候補方向を残し、次のcandidate runの前に
+実結果の診断を反映した計画を作る。
 
 ## 0037で採用した方法の調査記録
 

@@ -5,7 +5,8 @@
 更新方式を比較すると判断した。0019の一回のcandidate cycleは完了とする。
 後続も教師データを自前で生成し、Egaroucidの棋譜・評価値・重みを教師へ取り込まない。
 0019計画は既に実装PRの履歴へ移されており、目標未達を理由に再開しない。
-後続は[0052](../exec-plan/todo/0052-trained-model-adoption-and-learning-followup.md)、
+更新方式比較は[0052の実比較記録](reversi-ai-optimizer-comparison.md)に記録した。
+projected Adam候補は改善せず、この0019 artifactを現在の採用モデルとして維持する。
 最終勝率の受け入れは[0018](../exec-plan/todo/0018-reversi-ai-strong-engine-acceptance.md)が担う。
 
 ## 採用identity

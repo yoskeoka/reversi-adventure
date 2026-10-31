@@ -2,9 +2,41 @@
 
 ## 現在の状態
 
-0052の比較toolingを実装した。fixtureによる検証と人間操作の実比較を区別する。
-実比較は未実行で、改善・不成立の実結果はまだない。0052計画を残し、採用済み0019
-artifactと0018受け入れ候補は変更しない。
+0052の比較toolingと人間操作の実比較を完了した。fixtureによる検証と実比較は区別して記録する。
+比較結果は不成立で、採用済み0019 artifactを維持する。0018の受け入れ試験は未実施である。
+
+## 2026-10-31 Adam候補の実比較
+
+人間操作の評価run `0053-20261026-01` をoffline verifierで検証した。
+
+| 項目 | 結果 |
+| --- | --- |
+| source training root | `.local/reversi-ai-runs/0052-20261026-01` |
+| source report SHA-256 | `3cd323ef29649d8c59a62267cb933a3d73db0ce56c9e00b1ac9a2e1e6a970d43` |
+| evaluation root | `.local/reversi-ai-runs/0053-20261026-01` |
+| report file SHA-256 | `ae00bd4957fe5e4f0ffeda824e523b177aea1f8999dac3d28468d9dca4c1f641` |
+| verifier canonical digest | `8054e350e1b9faf65ed467c1fc68b8b97e7f31bbcbb4ff29e4a3d3702ff56838` |
+| outcome | `not-improved` |
+| baseline artifact SHA-256 | `13e8bdf59553746ba32ce47b53a09c011eb79223cabf4ddefb224b2640d283de` |
+| candidate artifact SHA-256 | `e77d333d8c3f5591dfa8161e1f2f8acbf393b76ad1172bab670705f2596a56d8` |
+
+Adamはepoch 13を整数export後のvalidation MSEで選択した。baselineのinteger train/validation MSEは
+`220.75862068965517` / `321.5026490560406`。candidateのfloat train/validation MSEは
+`212.06570613501674` / `323.55768953600483`、integer export後は
+`715.7951843043995` / `321.8856055518245`で、validation MSEは改善しなかった。
+held-out MSEはcontrol `268.0373419142408`からcandidate `266.51118760757316`へわずかに改善した一方、
+corpus regretは12局面で合計14（平均`1.1666666666666667`）から合計32（平均`2.6666666666666665`）へ悪化した。
+held-outとcorpusは診断値として残し、いずれも候補採用や0018受け入れの証拠にしない。
+
+baselineとの最初の20局はcandidate 7勝・0分・13敗、7.0/20 pointsだった。
+10/20 pointsの続行基準を下回ったため200局へ進まず、Oracle診断も
+`20-game baseline match scored below the 10/20 continuation threshold`を理由に未実施とした。
+この結果からprojected Adam方式を採用せず、0019 artifactを現在の採用モデルとして維持する。
+この比較は0018のheld-out受け入れ試験を実施したことを意味しない。
+
+次の学習方法を選ぶ専用の実行計画はまだない。0018には、丸めと開始artifact、複数cycle・opening多様化・
+phase偏り補正、自前探索強度の候補方向があるが、次候補の実行前に診断結果を踏まえた別計画を作る。
+todoに残る0037は同じ更新方式のpipeline pilotであり、新しい学習方法を比較する計画ではない。
 
 ## 入力と方法
 
@@ -53,8 +85,5 @@ engine28件・AI124件のRustテスト、workspace Clippy、GDExtension build、
 論理path解決で停止した。修正済みcollectorは`resolved_path`を使い、別途163ファイルの
 identity照合と対応regression testを通過している。新しい学習・対戦・Oracle solveは実行していない。
 
-人間の完成出力が提供されたら、固定manifestと全receipt/checkpoint/ゲーム/指標をoffline
-検証して、この文書へrun-root・report SHA-256・best epoch・A/B指標・各gate・実対戦数・
-改善/不成立と次の判断を追記する。その後に0052を削除する。
-float改善が整数化で失われた場合は、固定小数点/量子化を次の独立計画の候補とする。
-自前複数cycle・opening多様化・phase偏り補正・探索強度の検討も実結果を受けた別計画とする。
+次の比較を実施する場合は、固定小数点/量子化、自前複数cycle、opening多様化、phase偏り補正、
+探索強度のうち、今回の実結果で説明できる課題に対応する候補を別の実行計画で選ぶ。
