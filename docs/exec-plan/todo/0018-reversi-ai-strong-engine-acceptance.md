@@ -6,8 +6,11 @@
 > 独立再検証し、selected candidateを現在のTrainedEvaluatorモデルとして人間が採用した。
 > [完了記録](../../references/reversi-ai-0019-adopted-model.md)を参照する。
 > Oracle診断は0勝20敗であり、本計画の受け入れ試験は未実施。
-> 次は[0052の更新方式比較](0052-trained-model-adoption-and-learning-followup.md)を先に行う。
-> 0018 suiteは引き続き未選定とし、0052の学習・checkpoint選択・手法選択に使用しない。
+> 0052のprojected Adam比較は完了したが、validation MSEは改善せず、candidateはbaselineとの20局で
+> 7.0/20 pointsとなり、200局への続行基準を満たさなかった。
+> [比較記録](../../references/reversi-ai-optimizer-comparison.md)を参照する。
+> 0018 suiteは引き続き未選定とし、学習・checkpoint選択・手法選択に使用しない。
+> 次のcandidateを実行する前に、診断結果から方法を選ぶ別の実行計画を作る。
 > 0019の完了済みcycleは再開しない。
 
 > **0047 score移行後の境界**: 新規AI/教師値は `winner-empty-v1`、artifact format2、
@@ -101,10 +104,9 @@ with unrestricted world-class engines.
 
 ## If the acceptance gate misses
 
-現在は[0052更新方式比較](0052-trained-model-adoption-and-learning-followup.md)の
-toolingを実装済みで、人間操作の比較結果を待つ。
-[比較記録](../../references/reversi-ai-optimizer-comparison.md)のfixture結果を
-候補選定・0018の受け入れ証拠に数えない。0018開局のfreezeは後続候補選定後とする。
+0052のtoolingと人間操作の実比較は完了し、projected Adam候補は改善なしだった。
+[比較記録](../../references/reversi-ai-optimizer-comparison.md)を参照する。
+この比較やfixture結果を0018の受け入れ証拠に数えない。0018開局のfreezeは後続候補選定後とする。
 
 Keep the frozen 0018 result as evidence. Diagnose the miss using the 0019
 validation metrics, its selected-artifact decision, the corpus-regret report,
