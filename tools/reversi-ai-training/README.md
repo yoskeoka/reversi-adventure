@@ -749,3 +749,94 @@ rtk make pattern-optimizer-evaluate-verify
 ```
 
 20局で9.5 points以下ならそこで完了する。10 pointsなら同じevaluation attemptで180局を追加し、200局で100 pointsは同等、100超だけをbaselineより強い結果とする。Oracle診断は別の人間操作で、0018受け入れ判定には使わない。`verify`はmanifest、source run、candidate artifact、opening、receipt、完成局をオフラインで再構成し、trainer・candidate CLI・Oracleを起動しない。元0052 rootの全ファイルをprepare前後に照合する。
+
+## 0054: 自前データによるtable32学習サイクル
+
+人間向け入口は `start_table32.py prepare|run|resume|verify`。`resume` は同じmanifestを
+使う `run` の別名で、引数のhelpには `run` と表示される。tooling実装ではhelpとfixtureのみを
+確認し、本番のprepare・学習・生成対局・Oracle診断は開始していない。
+[方式と未実行境界](../../docs/references/reversi-ai-learning-method-reproduction.md)、
+[契約](../../docs/specs/reversi-ai.md#project-owned-table32-pilot-0054)、
+[feature catalog](../../docs/specs/reversi-ai-table32-catalog.md)を参照する。
+
+以下は実装PRのマージ後、人間がclean checkoutで実行する手順である。原本0019/0052/0053と
+採用モデルはread-onlyで使い、新しいcheckout外rootへ保存する。Oracle runtime receiptは
+既存の検証済みsetup receiptの絶対pathを指定する。0018対戦profileではなく専用full-solve
+profileで最大24 queryのteacher診断を行い、その値を教師へ取り込まない。
+
+```sh
+rtk git pull --ff-only
+rtk git status --short
+rtk cargo build --release -p reversi-ai --bin reversi-ai-cli
+
+# root名と検証済みOracle setup receiptのpathを人間が選ぶ。
+TABLE32_RUN_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0054-20261101-01
+TABLE32_ORACLE_RECEIPT=/absolute/path/to/verified/runtime-setup-receipt.json
+
+rtk python3 tools/reversi-ai-training/start_table32.py prepare \
+  --run-root "$TABLE32_RUN_ROOT" \
+  --source-manifest /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0019-20261020-02/manifest.json \
+  --source-comparison-root /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0052-20261026-01 \
+  --source-evaluation-root /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0053-20261026-01 \
+  --candidate-executable "$PWD/target/release/reversi-ai-cli" \
+  --oracle-runtime-receipt "$TABLE32_ORACLE_RECEIPT" \
+  --seed 2026110101 --train-per-prefix 12 --validation-per-prefix 2 --test-per-prefix 2 \
+  --early-positions 256 --max-steps 1000 --max-proposals 1000 \
+  --decision-timeout-seconds 310 --time-limit-ms 300000 --node-limit 10000000 \
+  --max-wall-seconds 259200 --producer-rss-kib 262144 --child-rss-kib 1572864
+
+# 人間が開始する。最初の20局までで一旦停止する。
+rtk python3 tools/reversi-ai-training/start_table32.py run \
+  --run-root "$TABLE32_RUN_ROOT" --progress-every 10
+
+# 保存原本をoffline再構成する。trainer・candidate CLI・Oracleをspawnしない。
+rtk python3 tools/reversi-ai-training/start_table32.py verify \
+  --run-root "$TABLE32_RUN_ROOT"
+```
+
+規模はprepare引数で固定する。8種類のprefix長それぞれにtrain12/validation2/test2局を
+割り当てる既定値で計128局（96/16/16）、序盤は最大256root（preflightの2rootを含む）。
+`--early-candidates-per-phase` 既定32、`--pool-sequences` 既定10000、
+60phaseそれぞれの `--max-steps` / `--max-proposals` は既定1000である。
+これらは実行回数の操作項目であり、未学習phaseや不足データを成功扱いする切替ではない。
+source、binary、入力、seed、学習・探索設定、timeout、規模または資源予算を変更する場合は
+新rootでprepareする。採用モデル・Godot・Playgroundの既定は自動で変わらない。
+[追加の人間指示](../../docs/specs/reversi-ai.md#2026-11-01-追加の人間指示-開始scriptとパラメータによる拡大)は、
+toolingが初回規模を超える設定を拒否する旧記述より優先する。大規模化も同じscriptの
+seed（既定2026110101）・局数・序盤pool/label数・step/提案数・wall/RSS引数を変更して新rootへ凍結できる。
+探索時間300000ms、node数10000000、protocol timeout310秒の上限と、同一rootの設定固定は維持する。
+拡大runも人間が別途開始し、この実装では実行しない。
+
+Ctrl-C（SIGINT）/SIGTERMや資源停止ではprocess groupを終了し、完成済みのgame、label、query、
+Adam step、export提案のatomic receipt/stateと過去attemptを保持する。同じroot・clean commit・
+設定で `resume` すると連続完成prefixを意味とdigestまで照合し、未完gameは同じopeningの先頭から、
+未完step/提案は直前の完成stateから再実行する。exportの60秒sliceによる `export-paused` も
+同じ再開経路を使う。失敗記録やcheckpointを消して再開しない。
+
+```sh
+# 例: generation以前が完成済みの停止runを再開する。
+rtk python3 tools/reversi-ai-training/start_table32.py resume \
+  --run-root "$TABLE32_RUN_ROOT" --resume-from generation --progress-every 10
+
+# 最初の20局が10/20点以上とverifyで確認された場合だけ、人間が残り180局を許可する。
+rtk python3 tools/reversi-ai-training/start_table32.py resume \
+  --run-root "$TABLE32_RUN_ROOT" --extend-to-200 --progress-every 10
+```
+
+`--resume-from` は `input-verification`、`teacher-preflight`、`generation`、`early-labels`、
+`extraction`、`phase-training`、`export`、`diagnostics`、`match20`、`explicit-match200`、
+`offline-verification`。指定点より前の不足unitを飛ばせず、verifierが示す再開点を使う。
+20局で10点未満なら有効な負の結果として停止し、200局への延長を拒否する。
+10点以上でも自動延長せず、200局で100点超だけを `promising-at-pilot-scale` とする。
+本計画のOracle対戦は0局で、0018受け入れと候補採用は別判断である。
+
+run実行wallは全attempt累積で既定72時間まで、人間待ちを除く。resumeで予算をリセットしない。
+producer RSSは既定262144KiB、子process群は1572864KiBの観測上限で停止する。
+`attempts/` に設定・資源・累積課金・失敗とログdigest、`units/` に連鎖receipt/state、
+rootにmanifest/snapshot、candidate artifact、screening/reportとexposure keysを保管する。
+通常進捗の `--progress-every` は正整数で既定1。stderr形式は
+`table32 phase=PHASE unit=UNIT completed=N total=T elapsed_seconds=S status=STATUS`。
+phase境界・停止・完了は間隔によらず表示する。
+
+完成出力または有効な停止結果の独立検証と結論記録が残るため、0054計画は保持する。
+fixture成功やtoolingのマージを、実学習の完了・強度改善・0018合格とは扱わない。

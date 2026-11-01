@@ -140,3 +140,19 @@ Reversi Adventure is a story-driven board game targeting Steam, which has a glob
 - Provide a clear contribution guide for community translators
 
 ---
+
+## [2026-11-01] table32候補を既存trainedから隔離する
+
+**Status:** Accepted
+
+### Context
+
+0054は共有table・raw32・60phaseを一組で再現する。既存format2と同じ意味ではない。
+
+### Decision
+
+新identity reversi-ai-pattern-table32-v1、明示CLI trained-table32、専用loaderとTT identityを使う。公開方法のみ参照し教師は凍結した自前S0から生成する。CPU固定順・seed固定・128局と序盤最大256rootは意図した縮小差分とする。
+
+### Consequences
+
+既存0019モデル・Godot・Playgroundの既定は維持する。tooling実装後も人間の実runと独立検証まで0054を保持し、自動採用や0018受け入れを行わない。

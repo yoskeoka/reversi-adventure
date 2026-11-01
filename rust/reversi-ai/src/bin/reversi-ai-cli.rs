@@ -3,6 +3,7 @@ use std::io::{self, BufRead, Write};
 use reversi_ai::config::{AiConfig, DecisionMoveConfig};
 use reversi_ai::eval::novice::NoviceEvaluator;
 use reversi_ai::eval::strategic::StrategicEvaluator;
+use reversi_ai::eval::table32::Table32Evaluator;
 use reversi_ai::eval::trained::TrainedEvaluator;
 use reversi_ai::eval::BoardEvaluator;
 use reversi_ai::search::{SearchBudget, SearchEngine, SearchOutcome, SearchResult};
@@ -11,7 +12,7 @@ use reversi_engine::types::{Color, Position};
 use std::time::{Duration, Instant};
 
 fn usage() -> &'static str {
-    "usage: reversi-ai-cli [--evaluator strategic|novice|trained] [--trained-artifact PATH] [--opening-depth N] \
+    "usage: reversi-ai-cli [--evaluator strategic|novice|trained|trained-table32] [--trained-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
 [--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--unbounded-search] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v2)"
 }
@@ -123,17 +124,24 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
         }
     }
 
-    if !matches!(evaluator.as_str(), "strategic" | "novice" | "trained") {
+    if !matches!(
+        evaluator.as_str(),
+        "strategic" | "novice" | "trained" | "trained-table32"
+    ) {
         return Err(format!("unknown evaluator {evaluator:?}"));
     }
     if unbounded_search && explicit_search_limit {
         return Err("--unbounded-search conflicts with --time-limit-ms and --node-limit".into());
     }
-    if evaluator == "trained" && trained_artifact.is_none() {
-        return Err("--evaluator trained requires --trained-artifact PATH".to_string());
+    if matches!(evaluator.as_str(), "trained" | "trained-table32") && trained_artifact.is_none() {
+        return Err(
+            "--evaluator trained or trained-table32 requires --trained-artifact PATH".to_string(),
+        );
     }
-    if evaluator != "trained" && trained_artifact.is_some() {
-        return Err("--trained-artifact requires --evaluator trained".to_string());
+    if !matches!(evaluator.as_str(), "trained" | "trained-table32") && trained_artifact.is_some() {
+        return Err(
+            "--trained-artifact requires --evaluator trained or trained-table32".to_string(),
+        );
     }
     if !matches!(exact_cache_scope.as_str(), "game" | "turn") {
         return Err("--exact-cache-scope must be game or turn".to_string());
@@ -259,6 +267,11 @@ fn main() -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?,
         ),
+        "trained-table32" => Box::new(Table32Evaluator::from_path(
+            args.trained_artifact
+                .as_deref()
+                .expect("table32 path was validated"),
+        )?),
         _ => unreachable!("evaluator was checked while parsing arguments"),
     };
     if args.print_advisor_config_id {
@@ -405,6 +418,21 @@ mod tests {
     fn board_with_stones(stones: usize) -> Board {
         let flat = format!("{}{}", "B".repeat(stones), ".".repeat(64 - stones));
         board_from_flat_string(&flat).unwrap()
+    }
+
+    #[test]
+    fn table32_is_explicit_and_requires_its_artifact() {
+        assert!(args(&["--evaluator", "trained-table32"]).is_err());
+        let parsed = args(&[
+            "--evaluator",
+            "trained-table32",
+            "--trained-artifact",
+            "candidate.json",
+        ])
+        .unwrap();
+        assert_eq!(parsed.evaluator, "trained-table32");
+        assert_eq!(parsed.trained_artifact.as_deref(), Some("candidate.json"));
+        assert!(args(&["--trained-artifact", "candidate.json"]).is_err());
     }
 
     #[test]

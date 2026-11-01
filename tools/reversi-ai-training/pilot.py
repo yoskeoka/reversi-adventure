@@ -670,6 +670,13 @@ def execute(args: argparse.Namespace) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "table32":
+        import table32
+        try:
+            return table32.main(argv[1:])
+        except (training.TrainingError, oracle.OracleError, OSError, ValueError, KeyError, TypeError) as error:
+            print(f"table32 error: {error}", file=sys.stderr)
+            return 2
     if argv and argv[0] == "optimizer-compare":
         import optimizer_compare
         try:
@@ -679,6 +686,7 @@ def main(argv: list[str]) -> int:
             return 2
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("table32", help="prepare/run/verify the resumable project-owned table32 cycle")
     commands.add_parser("optimizer-compare", help="prepare/run/verify 0052 optimizer comparisons and evaluate saved candidates")
     prep = commands.add_parser("prepare")
     for name in ("manifest", "baseline-artifact", "baseline-manifest", "candidate-executable", "validation-input",

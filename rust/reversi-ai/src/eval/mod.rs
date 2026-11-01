@@ -1,6 +1,7 @@
 pub mod novice;
 pub mod pattern;
 pub mod strategic;
+pub mod table32;
 pub mod trained;
 
 use reversi_engine::board::Board;

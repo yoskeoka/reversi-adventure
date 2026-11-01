@@ -1,4 +1,23 @@
 PYTHON ?= python3
+TABLE32_START := tools/reversi-ai-training/start_table32.py
+TABLE32_RUN_ROOT ?=
+TABLE32_PREPARE_ARGS ?=
+TABLE32_RESUME_FROM ?=
+TABLE32_PROGRESS_EVERY ?= 1
+TABLE32_EXTEND_TO_200 ?=
+.PHONY: pattern-table32-prepare pattern-table32-run pattern-table32-resume pattern-table32-verify
+pattern-table32-prepare:
+	$(PYTHON) $(TABLE32_START) prepare --run-root "$(TABLE32_RUN_ROOT)" $(TABLE32_PREPARE_ARGS)
+
+# Human-operated long task; fixtures and CI never depend on this target.
+pattern-table32-run:
+	$(PYTHON) $(TABLE32_START) run --run-root "$(TABLE32_RUN_ROOT)" --progress-every $(TABLE32_PROGRESS_EVERY) $(if $(TABLE32_RESUME_FROM),--resume-from "$(TABLE32_RESUME_FROM)") $(if $(TABLE32_EXTEND_TO_200),--extend-to-200)
+
+pattern-table32-resume: pattern-table32-run
+
+pattern-table32-verify:
+	$(PYTHON) $(TABLE32_START) verify --run-root "$(TABLE32_RUN_ROOT)"
+
 PLAYGROUND_DIR := tools/reversi-ai-playground
 
 .PHONY: playground-install start-playground playground
