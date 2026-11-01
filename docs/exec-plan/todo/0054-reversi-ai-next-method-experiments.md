@@ -270,3 +270,20 @@ Git書込は直列。旧6案、pattern network、game-scope cache、大規模化
 - 該当Python suite、engine/AI tests、workspace Clippy、fmt、GDExtension build、
   workflow lint、diff check。外部学習や実対戦は品質gateの前提にしない。
 - 実run後は全棋譜・教師・算術・出力digestをoffline再構成し、工程の成立/停止と強度を区別して記録する。
+
+## 2026-11-01 追加の人間指示: 開始scriptとパラメータによる拡大
+
+人間はtooling実装に、人間用開始script、保存済み完成単位からの途中停止・再開、同じscriptのパラメータ変更による大規模化への対応を追加した。初回0054の既定128局・序盤256・phase1000stepは維持する。toolingはseed、split別prefix当たり局数、序盤pool/label数、step/export提案数、wall/RSS予算を明示引数としてprepare時に凍結できる。設定変更は新rootを必要とし、同一rootのresumeは凍結設定のままとする。拡大runの起動は本実装の完了に含めず、今回も実学習・実対戦を開始しない。
+
+## 2026-11-02 tooling実装と残作業
+
+サブタスク1〜5の実装は、独立table32 artifact/CLI、生成・抽出・Adam・整数export、
+atomic単位の再開、累積資源監視、保存原本からのoffline再構成、人間用
+`start_table32.py prepare|run|resume|verify` として用意した。
+fixtureは本番入力と区別し、停止・再開後の同一出力、process禁止の検証、対戦gateを確認する。
+起動・再開・規模変更の実CLIと引数は `tools/reversi-ai-training/README.md` に記載する。
+
+本番prepare・教師生成・学習・実対戦・Oracle診断は未実施。
+サブタスク6（人間が開始したrunの原本を独立検証し、工程成立/有効な停止、限界と次の判断を
+記録する）が残るため、この計画を保持する。tooling PRのマージをrunの完了、候補採用、
+0018受け入れと扱わない。

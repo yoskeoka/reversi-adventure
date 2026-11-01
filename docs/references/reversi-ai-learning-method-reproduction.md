@@ -96,3 +96,38 @@ pattern networkやEdax等の別方式へ今回の調査を広げない。
 4,000局等を十分な学習量とする根拠はない。局数と教師局面数を分け、
 phase・pattern coverage、teacherの質、学習曲線、資源を見て拡大規模を相談する。
 今回の小規模完走だけで最終必要量を確定せず、拡大は別計画にする。
+
+## 0054 toolingの実装と残る実比較
+
+新候補を `reversi-ai-pattern-table32-v1` と明示CLI `trained-table32` に隔離した。
+[catalog](../specs/reversi-ai-table32-catalog.md)に16表・64配置・反転置換を列挙し、
+共有JSONのcanonical SHA-256は
+`c6ffc6bf14dab5712bbb053d4a7222b9155d260c7ce706c998ea095d98d81616` とした。
+65feature、raw32総和後の符号付き丸め、int16 parameter範囲、60phase、artifact provenanceと
+digestをPython/Rustで照合する。既存0019 artifactの意味と既定モデルは変えない。
+
+CPUの安定した走査順、固定seed、phase独立のfull-batch Adam、step上限、
+整数exportの提案回数上限と60秒sliceの中断再開は、決定性と有界実行のための意図した差分である。
+上流CUDA、wall60秒で完了させる非決定的export、配布weight、上流規模や強さの再現とは区別する。
+今回の既定規模は自前128局＋序盤最大256rootであり、十分な学習量という主張ではない。
+実装中の[追加指示](../specs/reversi-ai.md#2026-11-01-追加の人間指示-開始scriptとパラメータによる拡大)により、
+toolingは同じ開始scriptの明示パラメータだけで、初回既定値を超える規模・wall/RSS予算も
+新rootへ凍結できる。初回値をtoolingの固定最大値とする旧記述はこの追加指示で置き換える。
+これは人間が後日選ぶ拡大runの操作経路であり、実行開始や必要データ量の決定を意味しない。
+
+[人間用手順](../../tools/reversi-ai-training/README.md#0054-自前データによるtable32学習サイクル)は
+`start_table32.py prepare|run|resume|verify` を使用する。規模・timeout・資源はprepareで凍結し、
+設定変更は新rootとする。SIGINT/SIGTERM後も完成単位のatomic stateを照合して再利用し、
+同一rootの実行wall予算はattempt間で累積する。最初の20局が10点以上の場合のみ、
+人間の明示 `--extend-to-200` で200局へ延長できる。MSEを対戦省略gateにはしない。
+
+tooling検証では共通14ケースのfeature/phase/prediction/digest、D4共有、raw ±15/±16、
+丸め順、parameter範囲、旧artifact拒否、TT context分離をfixtureで確認した。
+Python model6件、Rust engine28件・AI130件、workspace Clippy、fmt、GDExtension buildが通過した。
+CLIのprepare/run/resume/verifyは `--help` で引数を確認した。
+この実装作業で本番prepare、実学習、生成対局、実比較、Oracle診断は開始していない。
+fixtureは工程の部品検証であり、実モデルの強さや学習サイクル成立の証拠ではない。
+
+後日、人間が開始した実runの保存原本を別タスクでoffline再構成し、工程成立または有効な停止、
+20局screeningと許可された200局の結果、coverageと資源の限界を結論として記録する。
+それまでは0054計画を保持し、0018入力・試験と採用判断は開始しない。
