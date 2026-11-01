@@ -123,7 +123,8 @@ toolingは同じ開始scriptの明示パラメータだけで、初回既定値�
 
 tooling検証では共通14ケースのfeature/phase/prediction/digest、D4共有、raw ±15/±16、
 丸め順、parameter範囲、旧artifact拒否、TT context分離をfixtureで確認した。
-Python model6件、Rust engine28件・AI130件、workspace Clippy、fmt、GDExtension buildが通過した。
+Python全体201件と最終修正後のtable32関連71件、Rust engine28件・AI130件、
+workspace Clippy、fmt、GDExtension buildが通過した。
 CLIのprepare/run/resume/verifyは `--help` で引数を確認した。
 この実装作業で本番prepare、実学習、生成対局、実比較、Oracle診断は開始していない。
 fixtureは工程の部品検証であり、実モデルの強さや学習サイクル成立の証拠ではない。
