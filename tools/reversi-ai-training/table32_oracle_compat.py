@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -118,6 +119,7 @@ def historical_replay(source_manifest_path: Path, runtime_receipt_path: Path,
     original_sha256_file = training.sha256_file
     original_file_entry = cycle.file_entry
     original_checked_pin = input_bundle.checked_pin
+    original_request_inputs = input_bundle.request_inputs
     original_validate_settings = matches.validate_settings
 
     def source_verified_sha256_file(path):
@@ -135,6 +137,27 @@ def historical_replay(source_manifest_path: Path, runtime_receipt_path: Path,
             if entry is not None and value["sha256"] == entry["sha256"]:
                 return path
         return original_checked_pin(value, base)
+
+    def source_verified_request_inputs(stage, request):
+        # request_inputs validates all stage fields and expands directory inputs.
+        # Substitute only missing historical executable arguments while it does so;
+        # return the recorded paths for its subsequent frozen-input comparison.
+        if not isinstance(request, dict):
+            return original_request_inputs(stage, request)
+        replacements = {}
+        adjusted = dict(request)
+        for name in ("cli", "binary"):
+            value = request.get(name)
+            if not isinstance(value, str) or not Path(value).is_absolute():
+                continue
+            path = Path(value).resolve()
+            if str(path) not in executable_pins or path.is_file():
+                continue
+            placeholder = Path(temporary) / str(len(replacements))
+            placeholder.touch()
+            replacements[placeholder] = Path(value)
+            adjusted[name] = str(placeholder)
+        return [replacements.get(path, path) for path in original_request_inputs(stage, adjusted)]
 
     def recorded_validate_settings(context, settings):
         if not any(settings == saved for saved in match_settings):
@@ -160,8 +183,10 @@ def historical_replay(source_manifest_path: Path, runtime_receipt_path: Path,
         with mock.patch.object(cycle, "file_entry", match_file_entry):
             return original_validate_settings(context, settings)
 
-    with mock.patch.object(training, "sha256_file", source_verified_sha256_file), \
+    with tempfile.TemporaryDirectory(prefix="table32-historical-inputs-") as temporary, \
+         mock.patch.object(training, "sha256_file", source_verified_sha256_file), \
          mock.patch.object(cycle, "file_entry", source_verified_file_entry), \
          mock.patch.object(input_bundle, "checked_pin", source_verified_checked_pin), \
+         mock.patch.object(input_bundle, "request_inputs", source_verified_request_inputs), \
          mock.patch.object(matches, "validate_settings", recorded_validate_settings):
         yield identity

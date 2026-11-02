@@ -228,6 +228,67 @@ class Table32OracleCompatTests(unittest.TestCase):
                 with self.assertRaisesRegex(training.TrainingError, "comparison Oracle differs"):
                     optimizer_compare_matches.validate_settings(fixture["context"], settings)
 
+    def test_missing_historical_cli_in_real_stage_verification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = self.fixture(root)
+            cli = root / "old-cli"
+            cli_pin = {"path": str(cli), "sha256": "a" * 64}
+            fixture["manifest"]["candidate_executable"] = cli_pin
+            old_oracle = root / "old-oracle"
+            fixture["manifest"]["oracle_binary"] = {"path": str(old_oracle), "sha256": "b" * 64}
+            fixture["source_manifest"].write_text(json.dumps(fixture["manifest"]), encoding="utf-8")
+            corpus = root / "corpus"
+            corpus.mkdir()
+            (root / "resources").mkdir()
+            stage = root / "stage"
+            stage.mkdir()
+            bundle, output = root / "bundle.json", root / "output.json"
+            bundle.write_text("{}", encoding="utf-8")
+            output.write_text("{}", encoding="utf-8")
+            for name in ("stdout", "stderr"):
+                (stage / name).write_bytes(b"")
+            name = "bundle-verify"
+            wall, rss = input_bundle.BOUNDS[name]
+            request = {"bundle_manifest": str(bundle), "cli": str(cli), "report": str(output)}
+            manifest = {"version": input_bundle.VERSION, "stage": name,
+                        "total_wall_budget_seconds": input_bundle.TOTAL_WALL_SECONDS,
+                        "bounds": {"wall_seconds": wall, "rss_bytes": rss, "sample_seconds": 1},
+                        "request": request, "inputs": [input_bundle.pin(bundle), cli_pin]}
+            manifest_path = stage / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            result = {"stage": name, "manifest_sha256": training.sha256_file(manifest_path),
+                      "outputs": {"bundle_manifest": input_bundle.pin(bundle),
+                                  "report": input_bundle.pin(output)}}
+            result_path = stage / "result.json"
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+            report = {"version": input_bundle.VERSION, "stage": name, "status": "completed",
+                      "exit_code": 0, "manifest_sha256": training.sha256_file(manifest_path),
+                      "sample_seconds": 1, "wall_seconds": 1, "peak_observed_rss_bytes": 1,
+                      "cpu_seconds": 1, "stdout_sha256": training.sha256_file(stage / "stdout"),
+                      "stderr_sha256": training.sha256_file(stage / "stderr"),
+                      "result": input_bundle.pin(result_path)}
+            report_path = stage / "report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            predecessors = dict(input_bundle.PREDECESSORS, **{name: set()})
+            with mock.patch.object(input_bundle, "PREDECESSORS", predecessors), \
+                 mock.patch.object(table32_players.oracle, "verify_runtime_receipt",
+                                   return_value=fixture["receipt"]), \
+                 mock.patch.object(table32_players.oracle, "runtime_identity",
+                                   return_value=fixture["runtime"]):
+                with self.assertRaisesRegex(training.TrainingError, "file identity mismatch"):
+                    input_bundle.verify_stage(report_path)
+                with oracle_compat.historical_replay(fixture["source_manifest"], fixture["receipt_path"]):
+                    self.assertEqual(input_bundle.verify_stage(report_path)["stage"], name)
+                    oracle_request = {"corpus_dir": str(corpus), "binary": str(old_oracle),
+                                      "oracle_cwd": str(root), "output_dir": str(root / "golden"),
+                                      "progress_every": 1}
+                    self.assertIn(old_oracle, input_bundle.request_inputs("oracle", oracle_request))
+                    with self.assertRaisesRegex(training.TrainingError, "missing frozen stage input"):
+                        input_bundle.request_inputs(name, dict(request, bundle_manifest=str(root / "missing.json")))
+                with self.assertRaisesRegex(training.TrainingError, "file identity mismatch"):
+                    input_bundle.verify_stage(report_path)
+
     def test_historical_and_table32_reload_reconstruct_without_rewriting_source_pins(self):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.fixture(Path(temporary))
