@@ -129,6 +129,15 @@ CLIのprepare/run/resume/verifyは `--help` で引数を確認した。
 この実装作業で本番prepare、実学習、生成対局、実比較、Oracle診断は開始していない。
 fixtureは工程の部品検証であり、実モデルの強さや学習サイクル成立の証拠ではない。
 
+0054 prepareのOracle適格性は、0019 manifestの実行時 `oracle_binary.sha256` ではなく、
+Egaroucid 7.8.1、pinned source archive SHA-256
+`173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b`、profile identity、
+source archive由来のbuild/runtimeを検査したruntime setup receiptで確認する。
+この条件により、同じ固定sourceから再buildした実行binaryを使える。旧0019 binary digestと
+0019/0051/0052/0053の原本inventoryは書き換えず、table32専用adapterが0054のhistorical replay時だけ
+旧Oracle entryを照合する。manifest reloadではreceipt、archive/version/profile/path、実runtimeを
+再検証する。production/optimizer/evaluation verifierと0053のsource hash契約は変更しない。
+
 後日、人間が開始した実runの保存原本を別タスクでoffline再構成し、工程成立または有効な停止、
 20局screeningと許可された200局の結果、coverageと資源の限界を結論として記録する。
 それまでは0054計画を保持し、0018入力・試験と採用判断は開始しない。

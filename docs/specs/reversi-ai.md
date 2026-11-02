@@ -2161,10 +2161,26 @@ teacher policyは学習中Bではなく凍結S0、自前探索11/11/11・exact25
 合法な進行でその空き数に到達した手番を保ち、手番配分を揃えるための人工的色反転はしない。
 不足なら生成に進まず停止する。自前exact25 decision12回が全て完全読み・合法・資源内であること、
 各rootとselected childを独立Oracleで最大24query照合することを要求する。
-OracleはEgaroucid7.8.1の専用full-solve profileでsource/binary/resources/argvをpinし、
+OracleはEgaroucid7.8.1の専用full-solve profileを使い、
 book off・1thread・hash25・確率的枝刈りoff、root/childの残り空き数を完全に読む。
 0018対戦profile exact12を流用しない。既存queryの再利用は同一設定・score契約のexact証拠に限る。
 Oracleの値は診断だけで教師へ戻さない。
+
+historical 0019 manifestの `oracle_binary.sha256` は元の実行証跡として変更せず保持するが、
+0054の入力適格性はこの実行バイナリdigestに依存しない。Oracle identityはversion `7.8.1`、
+manifestと一致するsource archive SHA-256
+`173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b` と、同じsource archive・
+build recipe・runtime binary/resourcesを検証するruntime setup receiptで確認する。
+receipt記載のbinary pathはhistorical manifestのpathと一致し、現在のruntime identityはreceiptと
+一致しなければならない。0054 manifestはhistorical binary pinをそのまま保存し、別にreceipt pin、
+verified runtime identity、`source-archive-verified-v1` policyを記録する。
+
+この例外は0054のhistorical replayとreloadだけに適用する。compatibility adapterはOracle pathに限り
+historical verifierが要求する元digestを照合し、他の全file digest、0019 manifest/report、
+0051/0052/0053 inventory、0053 verifier source hashesを変更・再sealしない。
+prepareとoffline reloadの両方でreceipt/source/version/profile/path/runtimeを再検証する。
+production cycle、optimizer compare、evaluationのstrict validatorとdigest契約は引き続き厳格にする。
+wrong version/source SHA/profile/path、receipt改変、または実runtimeの変更は停止条件である。
 序盤label poolの先頭2rootも指定depth17の完了を確認し、完成labelは同じIDとして後で再利用する。
 どちらも未完了なら `teacher-policy-infeasible` で停止し、depth/thresholdを黙って下げない。
 
