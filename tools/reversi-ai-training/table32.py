@@ -99,6 +99,8 @@ def settings(args):
 
 
 def prepare(args):
+    import table32_players as players
+
     root = args.run_root.resolve()
     checkout = Path(__file__).resolve().parents[2]
     st.require(args.run_root.is_absolute() and root != checkout and checkout not in root.parents,

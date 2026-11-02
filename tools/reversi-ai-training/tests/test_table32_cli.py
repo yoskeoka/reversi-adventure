@@ -1,6 +1,7 @@
 """Frozen scale/seed controls at the operator entry point; no engine starts."""
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ import table32
 import table32_store as st
 import table32_players as players
 import table32_inputs as inputs
+import production_cycle
 
 
 class Table32CliTests(unittest.TestCase):
@@ -45,17 +47,44 @@ class Table32CliTests(unittest.TestCase):
 
     def prepare_fixture(self,folder,extra):
         executable=folder/"fixture-cli"
+        oracle_binary=folder/"fixture-oracle"
         receipt=folder/"fixture-runtime.json"
         executable.write_text("never executed")
-        receipt.write_text("{}")
+        oracle_binary.write_text("fixture Oracle")
+        runtime={"binary":{"path":str(oracle_binary.resolve()),
+                            "sha256":table32.training.sha256_file(oracle_binary)},
+                 "working_directory":str(folder.resolve()),"resources":[]}
+        source_manifest=folder/"source.json"
+        source_value={"oracle_version":players.oracle.ORACLE_VERSION,
+                      "oracle_source_sha256":players.oracle.SOURCE_SHA256,
+                      "oracle_profile_id":production_cycle.ORACLE_PROFILE.name,
+                      "oracle_profile":players.oracle.profile_metadata(production_cycle.ORACLE_PROFILE),
+                      "oracle_exact_solver_empty_squares":players.oracle.profile_exact_threshold(
+                          production_cycle.ORACLE_PROFILE),
+                      "oracle_binary":{"path":str(oracle_binary.resolve()),
+                                       "sha256":table32.training.sha256_file(oracle_binary)}}
+        source_manifest.write_text(json.dumps(source_value,sort_keys=True)+"\n")
+        receipt_value={"version":players.oracle.RUNTIME_RECEIPT_VERSION,"status":"complete",
+                       "oracle_version":players.oracle.ORACLE_VERSION,
+                       "source_archive":{"path":str(folder/"source.tar.gz"),
+                                          "sha256":players.oracle.SOURCE_SHA256},
+                       "runtime":runtime}
+        receipt.write_text(json.dumps(receipt_value,sort_keys=True)+"\n")
         argv=["prepare","--run-root",str(folder/"run"),"--source-manifest",str(folder/"source.json"),
               "--source-comparison-root",str(folder/"source52"),"--source-evaluation-root",str(folder/"source53"),
               "--candidate-executable",str(executable),"--oracle-runtime-receipt",str(receipt),*extra]
-        runtime={"binary":{"path":str(executable)},"working_directory":str(folder)}
+        identity={"policy":"source-archive-verified-v1",
+                  "historical_binary":source_value["oracle_binary"],
+                  "oracle_version":players.oracle.ORACLE_VERSION,
+                  "source_archive_sha256":players.oracle.SOURCE_SHA256,
+                  "historical_profile_id":production_cycle.ORACLE_PROFILE.name,
+                  "runtime":runtime}
+        originals={"fixture":True,"oracle_source_identity":identity,
+                   "source_manifest":st.pin(source_manifest)}
         with mock.patch.object(table32,"clean_commit",return_value="a"*40), \
-             mock.patch.object(table32,"historical",return_value=({"fixture":True},{"fixture":True})) as history, \
-             mock.patch.object(players.oracle,"verify_runtime_receipt",return_value={"runtime":runtime}), \
+             mock.patch.object(table32,"historical",return_value=(originals,{"fixture":True})) as history, \
              mock.patch.object(players.oracle,"runtime_identity",return_value=runtime), \
+             mock.patch.object(players.oracle,"verify_runtime_receipt",return_value=receipt_value), \
              mock.patch.object(table32.subprocess,"Popen",side_effect=AssertionError("unexpected engine")), \
              contextlib.redirect_stdout(io.StringIO()):
             table32.main(argv)
@@ -76,7 +105,10 @@ class Table32CliTests(unittest.TestCase):
             self.assertEqual(manifest["limits"]["export_proposals_per_phase"],3000)
             self.assertEqual(manifest["limits"]["wall_seconds"],400000)
             self.assertEqual({spec["seed"] for spec in manifest["generation_plan"]},{2026110202})
-            self.assertEqual(table32.load(folder/"run",verify_originals=False)[0],manifest)
+            with mock.patch.object(players.oracle,"verify_runtime_receipt",
+                                   return_value=json.loads((folder/"fixture-runtime.json").read_text())), \
+                 mock.patch.object(players.oracle,"runtime_identity",return_value=manifest["oracle_runtime"]):
+                self.assertEqual(table32.load(folder/"run",verify_originals=False)[0],manifest)
             with self.assertRaisesRegex(Exception,"run root exists"):
                 self.prepare_fixture(folder,["--seed","2026110203"])
             self.assertEqual(st.read(folder/"run/manifest.json"),manifest)
