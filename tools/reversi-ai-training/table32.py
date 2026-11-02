@@ -13,6 +13,7 @@ import table32_extract as extraction
 import table32_inputs as inputs
 import table32_model as model
 import table32_optimizer as optimizer
+import table32_oracle_compat as oracle_compat
 import table32_store as st
 import training
 
@@ -35,15 +36,18 @@ def clean_commit():
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def historical(source_manifest, comparison_root, evaluation_root, *, seed=inputs.SEED):
+def historical(source_manifest, comparison_root, evaluation_root, *, runtime_receipt,
+               expected_oracle_identity=None, seed=inputs.SEED):
     """Use existing semantic verifiers; no trainer/CLI/Oracle is launched."""
     import optimizer_compare
     import optimizer_compare_evaluation
     import optimizer_compare_inputs
     before = [st.inventory(p) for p in (Path(source_manifest).parent, comparison_root, evaluation_root)]
-    context = optimizer_compare_inputs.load_source(Path(source_manifest))
-    report52 = optimizer_compare.verify(Path(comparison_root))
-    report53 = optimizer_compare_evaluation.verify(Path(evaluation_root))
+    with oracle_compat.historical_replay(source_manifest, runtime_receipt,
+                                         expected_identity=expected_oracle_identity) as oracle_identity:
+        context = optimizer_compare_inputs.load_source(Path(source_manifest))
+        report52 = optimizer_compare.verify(Path(comparison_root))
+        report53 = optimizer_compare_evaluation.verify(Path(evaluation_root))
     st.require(report52["status"] == report53["status"] == "complete", "historical runs incomplete")
     games = training.read_jsonl(context["source_predecessors"]["self-play"] / "games.jsonl")
     exposures = set(context["exposure_keys"])
@@ -61,6 +65,7 @@ def historical(source_manifest, comparison_root, evaluation_root, *, seed=inputs
     after = [st.inventory(p) for p in (Path(source_manifest).parent, comparison_root, evaluation_root)]
     st.require(before == after, "historical verification changed an original")
     return {"inventories": before, "closure": context["pins"],
+            "oracle_source_identity": oracle_identity,
             "source_manifest": st.pin(source_manifest),
             "comparison_report": st.pin(Path(comparison_root) / "report.json"),
             "evaluation_report": st.pin(Path(evaluation_root) / "report.json")}, snapshot
@@ -105,12 +110,10 @@ def prepare(args):
     baseline = st.pin(checkout / "models/trained/0019-20261020-02.json")
     st.require(baseline["sha256"] == st.BASELINE_SHA, "adopted S0 changed")
     originals, snapshot = historical(args.source_manifest, args.source_comparison_root,
-                                      args.source_evaluation_root,seed=seed)
-    import table32_players as players
-    receipt = players.oracle.verify_runtime_receipt(args.oracle_runtime_receipt)
-    runtime = receipt["runtime"]
-    st.require(players.oracle.runtime_identity(Path(runtime["binary"]["path"]),
-                  Path(runtime["working_directory"])) == runtime, "prepared Oracle runtime changed")
+                                      args.source_evaluation_root,
+                                      runtime_receipt=args.oracle_runtime_receipt, seed=seed)
+    oracle_identity = originals["oracle_source_identity"]
+    runtime = oracle_identity["runtime"]
     specs = inputs.generation_plan(seed, config["train_per_prefix"],
                                    config["validation_per_prefix"], config["test_per_prefix"])
     limits = {**st.LIMITS, "games": len(specs), "early_labels": config["early_positions"],
@@ -124,7 +127,8 @@ def prepare(args):
                 "catalog_digest": model.CATALOG_DIGEST, "baseline": baseline,
                 "candidate_executable": st.pin(args.candidate_executable),
                 "oracle_runtime_receipt": st.pin(args.oracle_runtime_receipt),
-                "oracle_runtime": runtime, "oracle_profile": players.oracle.profile_metadata(players.full_solve_profile()),
+                "oracle_runtime": runtime, "oracle_source_identity": oracle_identity,
+                "oracle_profile": players.oracle.profile_metadata(players.full_solve_profile()),
                 "historical": originals, "snapshot_digest": st.digest(snapshot),
                 "settings": config, "limits": limits, "generation_plan": specs,
                 "input_kind": "production", "acceptance_reservation": "not-yet-selected",
@@ -149,6 +153,12 @@ def load(root, *, verify_originals=True):
     for name in ("baseline", "candidate_executable", "oracle_runtime_receipt"):
         st.check_pin(manifest[name])
     st.require(manifest["baseline"]["sha256"] == st.BASELINE_SHA, "baseline pin differs")
+    source_manifest_path = manifest["historical"]["source_manifest"]["path"]
+    oracle_identity = oracle_compat.verify_source_identity(
+        source_manifest_path, manifest["oracle_runtime_receipt"]["path"])
+    st.require(oracle_identity == manifest["oracle_source_identity"]
+               and oracle_identity["runtime"] == manifest["oracle_runtime"],
+               "table32 Oracle source/runtime identity differs")
     snapshot = st.read(root / "snapshot.json")
     st.require(st.digest(snapshot) == manifest["snapshot_digest"], "snapshot digest differs")
     if verify_originals:
@@ -156,16 +166,18 @@ def load(root, *, verify_originals=True):
         for value in original["inventories"]:
             st.require(st.inventory(value["path"]) == value, "historical original changed")
         for value in original["closure"]["files"]:
-            st.check_pin(value)
+            if Path(value["path"]).resolve() == Path(oracle_identity["historical_binary"]["path"]).resolve():
+                st.require(value == oracle_identity["historical_binary"],
+                           "historical Oracle binary record differs")
+            else:
+                st.check_pin(value)
         pins, reconstructed = historical(original["source_manifest"]["path"],
                                          Path(original["inventories"][1]["path"]),
-                                         Path(original["inventories"][2]["path"]),seed=manifest["seed"])
+                                         Path(original["inventories"][2]["path"]),
+                                         runtime_receipt=manifest["oracle_runtime_receipt"]["path"],
+                                         expected_oracle_identity=oracle_identity,
+                                         seed=manifest["seed"])
         st.require(pins == original and reconstructed == snapshot, "historical snapshot does not reconstruct")
-        import table32_players as players
-        receipt = players.oracle.verify_runtime_receipt(manifest["oracle_runtime_receipt"]["path"])
-        st.require(receipt["runtime"] == manifest["oracle_runtime"]
-                   and players.oracle.runtime_identity(Path(receipt["runtime"]["binary"]["path"]),
-                   Path(receipt["runtime"]["working_directory"])) == receipt["runtime"], "Oracle runtime changed")
     return manifest, snapshot
 
 

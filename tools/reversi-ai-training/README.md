@@ -761,7 +761,13 @@ rtk make pattern-optimizer-evaluate-verify
 
 以下は実装PRのマージ後、人間がclean checkoutで実行する手順である。原本0019/0052/0053と
 採用モデルはread-onlyで使い、新しいcheckout外rootへ保存する。Oracle runtime receiptは
-既存の検証済みsetup receiptの絶対pathを指定する。0018対戦profileではなく専用full-solve
+固定Egaroucid 7.8.1 source archive SHA-256
+`173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b` を取得・照合し、fresh buildと
+runtime identityを記録する `prepare-runtime` のreceiptを使う。既存のreceiptを再利用する場合も
+そのruntime binary/resourcesがreceiptと一致していることを確認する。0054は0019 manifestに残る
+historical `oracle_binary.sha256` を原本記録として保持するが、実行binaryのdigest一致は要求しない。
+receiptが検証する同じversion/source archive/build recipe/runtime identityとbinary pathを要求する。
+0018対戦profileではなく専用full-solve
 profileで最大24 queryのteacher診断を行い、その値を教師へ取り込まない。
 
 ```sh
@@ -771,7 +777,12 @@ rtk cargo build --release -p reversi-ai --bin reversi-ai-cli
 
 # root名と検証済みOracle setup receiptのpathを人間が選ぶ。
 TABLE32_RUN_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0054-20261101-01
-TABLE32_ORACLE_RECEIPT=/absolute/path/to/verified/runtime-setup-receipt.json
+TABLE32_ORACLE_RUNTIME_DIR=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-oracle-runtime/0054-20261103-02
+TABLE32_ORACLE_RECEIPT="$TABLE32_ORACLE_RUNTIME_DIR/runtime.json"
+
+# receiptがまだない場合のみ、新しい空directoryへ固定版を取得・検証してbuildする。
+rtk python3 tools/reversi-ai-oracle/oracle.py prepare-runtime \
+  --output-dir "$TABLE32_ORACLE_RUNTIME_DIR" --timeout 300
 
 rtk python3 tools/reversi-ai-training/start_table32.py prepare \
   --run-root "$TABLE32_RUN_ROOT" \
@@ -799,7 +810,7 @@ rtk python3 tools/reversi-ai-training/start_table32.py verify \
 `--early-candidates-per-phase` 既定32、`--pool-sequences` 既定10000、
 60phaseそれぞれの `--max-steps` / `--max-proposals` は既定1000である。
 これらは実行回数の操作項目であり、未学習phaseや不足データを成功扱いする切替ではない。
-source、binary、入力、seed、学習・探索設定、timeout、規模または資源予算を変更する場合は
+Oracle source identity、runtime receipt、入力、seed、学習・探索設定、timeout、規模または資源予算を変更する場合は
 新rootでprepareする。採用モデル・Godot・Playgroundの既定は自動で変わらない。
 [追加の人間指示](../../docs/specs/reversi-ai.md#2026-11-01-追加の人間指示-開始scriptとパラメータによる拡大)は、
 toolingが初回規模を超える設定を拒否する旧記述より優先する。大規模化も同じscriptの
