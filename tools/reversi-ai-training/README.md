@@ -766,19 +766,27 @@ rtk make pattern-optimizer-evaluate-verify
 runtime identityを記録する `prepare-runtime` のreceiptを使う。既存のreceiptを再利用する場合も
 そのruntime binary/resourcesがreceiptと一致していることを確認する。0054は0019 manifestに残る
 historical `oracle_binary.sha256` を原本記録として保持するが、実行binaryのdigest一致は要求しない。
-receiptが検証する同じversion/source archive/build recipe/runtime identityとbinary pathを要求する。
+receiptが検証するversion/source archive/build recipeと、実際のruntime binary/resourcesのidentityを
+0054 manifestに記録する。historical binaryのpathとの一致は要求しない。
+candidateも過去の比較で使ったbinaryとの一致を要求せず、今回buildしたsource commitと実binaryの
+SHA-256をmanifestに記録する。commitには実際にbinaryをbuildしたclean checkoutのcommitを指定する。
 0018対戦profileではなく専用full-solve
 profileで最大24 queryのteacher診断を行い、その値を教師へ取り込まない。
 
 ```sh
 rtk git pull --ff-only
 rtk git status --short
-rtk cargo build --release -p reversi-ai --bin reversi-ai-cli
 
-# root名と検証済みOracle setup receiptのpathを人間が選ぶ。
+# root名、checkout外のbuild directory、検証済みOracle setup receiptを人間が選ぶ。
 TABLE32_RUN_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0054-20261101-01
+TABLE32_BUILD_DIR=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-builds/0054-20261101-01
 TABLE32_ORACLE_RUNTIME_DIR=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-oracle-runtime/0054-20261103-02
 TABLE32_ORACLE_RECEIPT="$TABLE32_ORACLE_RUNTIME_DIR/runtime.json"
+
+# clean checkoutから専用directoryにbuildし、そのsource commitを記録する。
+TABLE32_CANDIDATE_SOURCE_COMMIT="$(rtk git rev-parse HEAD)"
+rtk cargo build --release -p reversi-ai --bin reversi-ai-cli --target-dir "$TABLE32_BUILD_DIR"
+TABLE32_CANDIDATE_EXECUTABLE="$TABLE32_BUILD_DIR/release/reversi-ai-cli"
 
 # receiptがまだない場合のみ、新しい空directoryへ固定版を取得・検証してbuildする。
 rtk python3 tools/reversi-ai-oracle/oracle.py prepare-runtime \
@@ -789,7 +797,8 @@ rtk python3 tools/reversi-ai-training/start_table32.py prepare \
   --source-manifest /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0019-20261020-02/manifest.json \
   --source-comparison-root /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0052-20261026-01 \
   --source-evaluation-root /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0053-20261026-01 \
-  --candidate-executable "$PWD/target/release/reversi-ai-cli" \
+  --candidate-executable "$TABLE32_CANDIDATE_EXECUTABLE" \
+  --candidate-source-commit "$TABLE32_CANDIDATE_SOURCE_COMMIT" \
   --oracle-runtime-receipt "$TABLE32_ORACLE_RECEIPT" \
   --seed 2026110101 --train-per-prefix 12 --validation-per-prefix 2 --test-per-prefix 2 \
   --early-positions 256 --max-steps 1000 --max-proposals 1000 \
@@ -810,7 +819,7 @@ rtk python3 tools/reversi-ai-training/start_table32.py verify \
 `--early-candidates-per-phase` 既定32、`--pool-sequences` 既定10000、
 60phaseそれぞれの `--max-steps` / `--max-proposals` は既定1000である。
 これらは実行回数の操作項目であり、未学習phaseや不足データを成功扱いする切替ではない。
-Oracle source identity、runtime receipt、入力、seed、学習・探索設定、timeout、規模または資源予算を変更する場合は
+candidate binary、Oracle runtime、入力、seed、学習・探索設定、timeout、規模または資源予算を変更する場合は
 新rootでprepareする。採用モデル・Godot・Playgroundの既定は自動で変わらない。
 [追加の人間指示](../../docs/specs/reversi-ai.md#2026-11-01-追加の人間指示-開始scriptとパラメータによる拡大)は、
 toolingが初回規模を超える設定を拒否する旧記述より優先する。大規模化も同じscriptの
@@ -820,7 +829,8 @@ seed（既定2026110101）・局数・序盤pool/label数・step/提案数・wal
 
 Ctrl-C（SIGINT）/SIGTERMや資源停止ではprocess groupを終了し、完成済みのgame、label、query、
 Adam step、export提案のatomic receipt/stateと過去attemptを保持する。同じroot・clean commit・
-設定で `resume` すると連続完成prefixを意味とdigestまで照合し、未完gameは同じopeningの先頭から、
+設定で `resume` するとprepare時に記録したcandidate binaryとOracle runtimeのidentityおよび連続完成prefixを
+照合し、未完gameは同じopeningの先頭から、
 未完step/提案は直前の完成stateから再実行する。exportの60秒sliceによる `export-paused` も
 同じ再開経路を使う。失敗記録やcheckpointを消して再開しない。
 

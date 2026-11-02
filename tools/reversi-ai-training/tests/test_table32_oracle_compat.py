@@ -14,6 +14,7 @@ import optimizer_compare
 import optimizer_compare_evaluation
 import optimizer_compare_inputs
 import optimizer_compare_matches
+import input_bundle
 import production_cycle
 import table32
 import table32_inputs
@@ -34,6 +35,7 @@ class Table32OracleCompatTests(unittest.TestCase):
         receipt_path.write_text("{}\n", encoding="utf-8")
         candidate_path = root / "candidate-cli"
         candidate_path.write_bytes(b"candidate fixture")
+        candidate_path.chmod(0o755)
 
         source_root = root / "0019"
         source_root.mkdir()
@@ -150,6 +152,82 @@ class Table32OracleCompatTests(unittest.TestCase):
                 with self.assertRaisesRegex(training.TrainingError, "runtime receipt does not match"):
                     oracle_compat.verify_source_identity(fixture["source_manifest"], fixture["receipt_path"])
 
+    def test_replay_uses_historical_executable_entries_without_old_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(Path(temporary))
+            historical_oracle = Path(temporary) / "removed-oracle"
+            historical_candidate = Path(temporary) / "removed-candidate"
+            oracle_pin = {"path": str(historical_oracle), "sha256": "1" * 64}
+            candidate_pin = {"path": str(historical_candidate), "sha256": "2" * 64}
+            manifest = dict(fixture["manifest"], oracle_binary=oracle_pin,
+                            candidate_executable=candidate_pin)
+            fixture["source_manifest"].write_text(json.dumps(manifest), encoding="utf-8")
+            for root in (fixture["comparison_root"], fixture["evaluation_root"]):
+                (root / "manifest.json").write_text(json.dumps({"matches": {
+                    "candidate_executable": candidate_pin, "oracle_binary": oracle_pin}}), encoding="utf-8")
+            other = Path(temporary) / "other-input"
+            other.write_bytes(b"actual")
+            with mock.patch.object(table32_players.oracle, "verify_runtime_receipt",
+                                   return_value=fixture["receipt"]), \
+                 mock.patch.object(table32_players.oracle, "runtime_identity",
+                                   return_value=fixture["runtime"]):
+                with oracle_compat.historical_replay(
+                        fixture["source_manifest"], fixture["receipt_path"],
+                        comparison_root=fixture["comparison_root"],
+                        evaluation_root=fixture["evaluation_root"]):
+                    self.assertEqual(production_cycle.file_entry(historical_candidate), candidate_pin)
+                    self.assertEqual(training.sha256_file(historical_oracle), oracle_pin["sha256"])
+                    self.assertEqual(input_bundle.checked_pin(candidate_pin, Path(temporary)), historical_candidate)
+                    self.assertEqual(production_cycle.file_entry(other)["sha256"], training.sha256_file(other))
+                    with self.assertRaisesRegex(training.TrainingError, "file identity mismatch"):
+                        input_bundle.checked_pin({"path": str(other), "sha256": "0" * 64}, Path(temporary))
+            with self.assertRaisesRegex(training.TrainingError, "required file does not exist"):
+                production_cycle.file_entry(historical_candidate)
+
+    def test_same_path_with_different_source_and_comparison_binary_digests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(Path(temporary))
+            candidate = fixture["candidate_path"]
+            source_pin = {"path": str(candidate), "sha256": "1" * 64}
+            comparison_pin = {"path": str(candidate), "sha256": "2" * 64}
+            oracle_pin = fixture["manifest"]["oracle_binary"]
+            fixture["manifest"]["candidate_executable"] = source_pin
+            fixture["source_manifest"].write_text(json.dumps(fixture["manifest"]), encoding="utf-8")
+            old_file_entry = production_cycle.file_entry
+
+            def historical_entry(path):
+                if Path(path) == candidate:
+                    return comparison_pin
+                if Path(path) == fixture["oracle_path"]:
+                    return oracle_pin
+                return old_file_entry(path)
+
+            with mock.patch.object(optimizer_compare_matches, "_forbidden", return_value=set()), \
+                 mock.patch.object(optimizer_compare_matches.pilot, "opening_pool",
+                                   return_value=[{"board": "." * 62 + "WB", "side": "B"}]), \
+                 mock.patch.object(optimizer_compare_matches.cycle, "transform_opening",
+                                   side_effect=lambda opening, rotation: {**opening, "rotation": rotation}):
+                with mock.patch.object(production_cycle, "file_entry", side_effect=historical_entry):
+                    settings = optimizer_compare_matches.prepare_match_led(
+                        fixture["context"], 7, candidate, fixture["oracle_path"], 310)
+                for root in (fixture["comparison_root"], fixture["evaluation_root"]):
+                    (root / "manifest.json").write_text(json.dumps({"matches": settings}), encoding="utf-8")
+                with mock.patch.object(table32_players.oracle, "verify_runtime_receipt",
+                                       return_value=fixture["receipt"]), \
+                     mock.patch.object(table32_players.oracle, "runtime_identity",
+                                       return_value=fixture["runtime"]):
+                    with oracle_compat.historical_replay(
+                            fixture["source_manifest"], fixture["receipt_path"],
+                            comparison_root=fixture["comparison_root"],
+                            evaluation_root=fixture["evaluation_root"]):
+                        self.assertEqual(production_cycle.file_entry(candidate), source_pin)
+                        optimizer_compare_matches.validate_settings(fixture["context"], settings)
+                        changed = dict(settings, requested_games=1)
+                        with self.assertRaisesRegex(training.TrainingError, "comparison settings"):
+                            optimizer_compare_matches.validate_settings(fixture["context"], changed)
+                with self.assertRaisesRegex(training.TrainingError, "comparison Oracle differs"):
+                    optimizer_compare_matches.validate_settings(fixture["context"], settings)
+
     def test_historical_and_table32_reload_reconstruct_without_rewriting_source_pins(self):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.fixture(Path(temporary))
@@ -167,6 +245,7 @@ class Table32OracleCompatTests(unittest.TestCase):
                             "producer_commit": "b" * 40, "sources": table32.source_hashes(), "seed": 7,
                             "catalog_digest": table32_model.CATALOG_DIGEST, "baseline": st.pin(baseline),
                             "candidate_executable": st.pin(fixture["candidate_path"]),
+                            "candidate_source_commit": "c" * 40,
                             "oracle_runtime_receipt": st.pin(fixture["receipt_path"]),
                             "oracle_runtime": fixture["runtime"],
                             "oracle_source_identity": originals["oracle_source_identity"],
