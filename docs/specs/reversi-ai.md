@@ -2167,20 +2167,27 @@ book off・1thread・hash25・確率的枝刈りoff、root/childの残り空き�
 Oracleの値は診断だけで教師へ戻さない。
 
 historical 0019 manifestの `oracle_binary.sha256` は元の実行証跡として変更せず保持するが、
-0054の入力適格性はこの実行バイナリdigestに依存しない。Oracle identityはversion `7.8.1`、
+0054の入力適格性はこの実行バイナリdigest/pathに依存しない。Oracle identityはversion `7.8.1`、
 manifestと一致するsource archive SHA-256
-`173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b` と、同じsource archive・
-build recipe・runtime binary/resourcesを検証するruntime setup receiptで確認する。
-receipt記載のbinary pathはhistorical manifestのpathと一致し、現在のruntime identityはreceiptと
-一致しなければならない。0054 manifestはhistorical binary pinをそのまま保存し、別にreceipt pin、
-verified runtime identity、`source-archive-verified-v1` policyを記録する。
+`173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b` と、source archive SHA、
+build recipe、runtime binary/resourcesを検証するruntime setup receiptで確認する。
+receipt内のbinary path/digestは実際に使うruntimeの記録として検証するが、historical manifestの
+path/digestとの一致は要求しない。0054 manifestにはreceipt digestと、実行時に解決したOracle
+binary/resourcesのpathとdigestを記録する。
 
-この例外は0054のhistorical replayとreloadだけに適用する。compatibility adapterはOracle pathに限り
-historical verifierが要求する元digestを照合し、他の全file digest、0019 manifest/report、
-0051/0052/0053 inventory、0053 verifier source hashesを変更・再sealしない。
-prepareとoffline reloadの両方でreceipt/source/version/profile/path/runtimeを再検証する。
-production cycle、optimizer compare、evaluationのstrict validatorとdigest契約は引き続き厳格にする。
-wrong version/source SHA/profile/path、receipt改変、または実runtimeの変更は停止条件である。
+candidate executableも計画時や0052のhistorical manifestに記録されたpath/SHAとの一致を
+0054の開始条件にしない。operatorは実行binaryのsource commitを指定し、prepareはそのcommitと
+実binary SHA-256を0054 manifestへ記録する。source commitは形式を検証するprovenanceであり、
+予定revisionとの一致条件ではない。prepareで記録したcandidate/Oracle runtime identityは同じrunの
+run・resume開始時に再検証し、変化していれば停止する。複数利用者間の同時変更や実行中の競合は
+契約に含めない。
+
+historical replay compatibility adapterは0054の入力再構成に必要なcandidate/Oracle executable
+identityの比較だけを0054内で緩和する。0019 manifest/report、0051/0052/0053 inventory、
+0053 verifier source hashesと他の全file digestは変更・再sealしない。既存production cycle、
+optimizer compare、evaluationのstrict validatorとdigest契約は引き続き厳格にする。
+wrong Oracle version/source SHA/profile、receipt改変、または同一runのrun/resume時に実runtimeが
+prepare時のidentityから変化していれば停止条件である。
 序盤label poolの先頭2rootも指定depth17の完了を確認し、完成labelは同じIDとして後で再利用する。
 どちらも未完了なら `teacher-policy-infeasible` で停止し、depth/thresholdを黙って下げない。
 
