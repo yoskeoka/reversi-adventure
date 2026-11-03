@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -44,7 +46,9 @@ def historical(source_manifest, comparison_root, evaluation_root, *, runtime_rec
     import optimizer_compare_inputs
     before = [st.inventory(p) for p in (Path(source_manifest).parent, comparison_root, evaluation_root)]
     with oracle_compat.historical_replay(source_manifest, runtime_receipt,
-                                         expected_identity=expected_oracle_identity) as oracle_identity:
+                                         expected_identity=expected_oracle_identity,
+                                         comparison_root=comparison_root,
+                                         evaluation_root=evaluation_root) as oracle_identity:
         context = optimizer_compare_inputs.load_source(Path(source_manifest))
         report52 = optimizer_compare.verify(Path(comparison_root))
         report53 = optimizer_compare_evaluation.verify(Path(evaluation_root))
@@ -107,6 +111,9 @@ def prepare(args):
                "run root must be an absolute checkout-external path")
     st.require(not root.exists(), "run root exists; resume it or choose a new root")
     config = settings(args)
+    candidate_commit = candidate_source_commit(args.candidate_source_commit)
+    candidate = st.pin(args.candidate_executable)
+    st.require(os.access(candidate["path"], os.X_OK), "candidate executable is not executable")
     seed=training.require_int(args.seed,"seed",0,2**64-1)
     producer = clean_commit()
     baseline = st.pin(checkout / "models/trained/0019-20261020-02.json")
@@ -127,7 +134,8 @@ def prepare(args):
     manifest = {"version": st.VERSION, "score_contract": training.SCORE_CONTRACT,
                 "producer_commit": producer, "sources": source_hashes(), "seed": seed,
                 "catalog_digest": model.CATALOG_DIGEST, "baseline": baseline,
-                "candidate_executable": st.pin(args.candidate_executable),
+                "candidate_executable": candidate,
+                "candidate_source_commit": candidate_commit,
                 "oracle_runtime_receipt": st.pin(args.oracle_runtime_receipt),
                 "oracle_runtime": runtime, "oracle_source_identity": oracle_identity,
                 "oracle_profile": players.oracle.profile_metadata(players.full_solve_profile()),
@@ -146,6 +154,7 @@ def prepare(args):
 def load(root, *, verify_originals=True):
     root = Path(root)
     manifest = st.read(root / "manifest.json")
+    candidate_source_commit(manifest.get("candidate_source_commit"))
     st.require(manifest["version"] == st.VERSION and manifest["score_contract"] == training.SCORE_CONTRACT
                and type(manifest["seed"]) is int and 0<=manifest["seed"]<2**64
                and manifest["catalog_digest"] == model.CATALOG_DIGEST
@@ -154,6 +163,8 @@ def load(root, *, verify_originals=True):
                "snapshot_digest": manifest["snapshot_digest"]}), "prepare receipt differs")
     for name in ("baseline", "candidate_executable", "oracle_runtime_receipt"):
         st.check_pin(manifest[name])
+    st.require(os.access(manifest["candidate_executable"]["path"], os.X_OK),
+               "candidate executable is not executable")
     st.require(manifest["baseline"]["sha256"] == st.BASELINE_SHA, "baseline pin differs")
     source_manifest_path = manifest["historical"]["source_manifest"]["path"]
     oracle_identity = oracle_compat.verify_source_identity(
@@ -167,10 +178,13 @@ def load(root, *, verify_originals=True):
         original = manifest["historical"]
         for value in original["inventories"]:
             st.require(st.inventory(value["path"]) == value, "historical original changed")
+        historical_executables = oracle_compat.historical_executable_pins(
+            source_manifest_path, original["inventories"][1]["path"],
+            original["inventories"][2]["path"])
         for value in original["closure"]["files"]:
-            if Path(value["path"]).resolve() == Path(oracle_identity["historical_binary"]["path"]).resolve():
-                st.require(value == oracle_identity["historical_binary"],
-                           "historical Oracle binary record differs")
+            executable = historical_executables.get(str(Path(value["path"]).resolve()))
+            if executable is not None:
+                st.require(value == executable, "historical executable record differs")
             else:
                 st.check_pin(value)
         pins, reconstructed = historical(original["source_manifest"]["path"],
@@ -181,6 +195,12 @@ def load(root, *, verify_originals=True):
                                          seed=manifest["seed"])
         st.require(pins == original and reconstructed == snapshot, "historical snapshot does not reconstruct")
     return manifest, snapshot
+
+
+def candidate_source_commit(value):
+    st.require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None,
+               "candidate source commit must be a 40-character lowercase Git commit ID")
+    return value
 
 
 class MissingUnit(Exception):
@@ -706,6 +726,7 @@ def main(argv):
     for name in ("run-root","source-manifest","source-comparison-root","source-evaluation-root",
                  "candidate-executable","oracle-runtime-receipt"):
         prep.add_argument("--"+name,type=Path,required=True)
+    prep.add_argument("--candidate-source-commit", required=True)
     defaults={"seed":inputs.SEED,"train-per-prefix":12,"validation-per-prefix":2,"test-per-prefix":2,
         "early-positions":256,"early-candidates-per-phase":32,"pool-sequences":10000,
         "max-steps":1000,"max-proposals":1000,"decision-timeout-seconds":310,

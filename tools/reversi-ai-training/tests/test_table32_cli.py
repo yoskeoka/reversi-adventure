@@ -50,6 +50,7 @@ class Table32CliTests(unittest.TestCase):
         oracle_binary=folder/"fixture-oracle"
         receipt=folder/"fixture-runtime.json"
         executable.write_text("never executed")
+        executable.chmod(0o755)
         oracle_binary.write_text("fixture Oracle")
         runtime={"binary":{"path":str(oracle_binary.resolve()),
                             "sha256":table32.training.sha256_file(oracle_binary)},
@@ -72,7 +73,8 @@ class Table32CliTests(unittest.TestCase):
         receipt.write_text(json.dumps(receipt_value,sort_keys=True)+"\n")
         argv=["prepare","--run-root",str(folder/"run"),"--source-manifest",str(folder/"source.json"),
               "--source-comparison-root",str(folder/"source52"),"--source-evaluation-root",str(folder/"source53"),
-              "--candidate-executable",str(executable),"--oracle-runtime-receipt",str(receipt),*extra]
+              "--candidate-executable",str(executable),"--candidate-source-commit","b"*40,
+              "--oracle-runtime-receipt",str(receipt),*extra]
         identity={"policy":"source-archive-verified-v1",
                   "historical_binary":source_value["oracle_binary"],
                   "oracle_version":players.oracle.ORACLE_VERSION,
@@ -98,6 +100,9 @@ class Table32CliTests(unittest.TestCase):
                 "--early-positions","512","--early-candidates-per-phase","64",
                 "--max-steps","2000","--max-proposals","3000","--max-wall-seconds","400000"])
             self.assertEqual(manifest["seed"],2026110202)
+            self.assertEqual(manifest["candidate_source_commit"],"b"*40)
+            self.assertEqual(manifest["candidate_executable"],st.pin(folder/"fixture-cli"))
+            self.assertNotEqual(manifest["candidate_source_commit"],manifest["producer_commit"])
             self.assertEqual(history.call_args.kwargs["seed"],2026110202)
             self.assertEqual(manifest["limits"]["games"],256)
             self.assertEqual(manifest["limits"]["early_labels"],512)
@@ -123,3 +128,31 @@ class Table32CliTests(unittest.TestCase):
                         self.prepare_fixture(folder,extra)
                     self.assertNotIsInstance(failure.exception,AssertionError)
                 self.assertFalse((folder/"run").exists())
+
+    def test_candidate_source_commit_is_required_and_must_be_a_full_commit_id(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            table32.main(["prepare", "--run-root", "/tmp/run", "--source-manifest", "/tmp/source",
+                          "--source-comparison-root", "/tmp/comparison", "--source-evaluation-root", "/tmp/evaluation",
+                          "--candidate-executable", "/tmp/cli", "--oracle-runtime-receipt", "/tmp/receipt"])
+        for commit in ("", "a"*39, "g"*40, "A"*40):
+            with self.subTest(commit=commit), tempfile.TemporaryDirectory() as temporary:
+                folder=Path(temporary)
+                with self.assertRaisesRegex(Exception,"candidate source commit"):
+                    self.prepare_fixture(folder,["--candidate-source-commit",commit])
+                self.assertFalse((folder/"run").exists())
+
+    def test_changed_candidate_is_rejected_by_load_run_resume_and_verify(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder=Path(temporary)
+            manifest,_=self.prepare_fixture(folder,[])
+            executable=folder/"fixture-cli"
+            executable.write_text("a different binary")
+            self.assertNotEqual(table32.training.sha256_file(executable),
+                                manifest["candidate_executable"]["sha256"])
+            for argv in (["run","--run-root",str(folder/"run")],
+                         ["run","--run-root",str(folder/"run"),"--resume-from","generation"],
+                         ["verify","--run-root",str(folder/"run")]):
+                with self.subTest(argv=argv), self.assertRaisesRegex(Exception,"input digest changed"):
+                    table32.main(argv)
+            with self.assertRaisesRegex(Exception,"input digest changed"):
+                table32.load(folder/"run",verify_originals=False)
