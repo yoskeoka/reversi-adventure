@@ -35,6 +35,27 @@ This project follows the AI-Centered Development workflow.
    - **Completion**: When a task is done, delete the plan file from `todo/` after verification and PR preparation. Retrieve completed plans from the implementation PR or Git history.
     - **Long-running batches**: A plan for a long-running batch command must define its completed work unit, known total, live progress fields, meaningful stage boundaries, and a rate-control option when per-unit output can overwhelm a caller. Its black-box spec fixes the exact diagnostic format and default rate.
 
+## Reversi AI training input identity
+
+- Record the inputs actually used for each training run: binary paths and
+  SHA-256 digests, their source commits when known or supplied by the operator,
+  data and model identities and digests, relevant versions, settings, and seeds.
+  Treat an operator-supplied source commit as provenance, not proof of how a
+  binary was built. Keep these records available for reproduction and verification.
+- Validate inputs for the requested experiment, including required versions,
+  published source archive checksums, data integrity, format, and semantic
+  compatibility. Do not reject a run merely because a binary or data input has
+  a different path or digest from an earlier plan or historical run. Preserve
+  historical artifacts and verify their own recorded identities when reusing them
+  as evidence; do not rewrite them to match current inputs. Honor explicitly
+  selected model/data identities and existing strict verification contracts;
+  change those contracts only through the normal specification workflow.
+- On resume or verification, compare the inputs and settings to the identity
+  recorded for that run, and preserve completed work. When an input has changed,
+  stop and use a new run or an explicitly supported recovery procedure. Do not
+  add concurrent-user or continuous in-run replacement checks for a locally
+  operated training environment without a concrete need.
+
 ## When asked to "Start a new feature":
 1. Create a branch: `ww create plan/feature-name` then `cd "$(ww cd plan/feature-name)"`
 2. Read `docs/project-plan.md`.
