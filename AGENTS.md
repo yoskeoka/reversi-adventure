@@ -37,11 +37,12 @@ This project follows the AI-Centered Development workflow.
 
 ## Reversi AI training input identity
 
-- Record the inputs actually used for each training run: binary paths and
+- Record the inputs used for each training run: binary paths and
   SHA-256 digests, their source commits when known or supplied by the operator,
   data and model identities and digests, relevant versions, settings, and seeds.
-  Treat an operator-supplied source commit as provenance, not proof of how a
-  binary was built. Keep these records available for reproduction and verification.
+  An operator-supplied source commit is a provenance claim. A separate build
+  record is needed to prove how a binary was built. Keep the records for
+  reproduction and verification.
 - Validate inputs for the requested experiment, including required versions,
   published source archive checksums, data integrity, format, and semantic
   compatibility. Do not reject a run merely because a binary or data input has
