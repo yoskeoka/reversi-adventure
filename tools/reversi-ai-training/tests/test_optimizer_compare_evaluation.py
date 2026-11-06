@@ -125,6 +125,31 @@ class EvaluationTests(unittest.TestCase):
             with self.assertRaisesRegex(training.TrainingError, "source run changed"):
                 evaluation.verify(args.evaluation_root)
 
+    def test_historical_replay_accepts_old_sources_but_still_checks_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, args, _, _ = self.fixture(temporary)
+            historical = evaluation.source_hashes()
+            historical["pilot.py"] = "0" * 64
+            with mock.patch.object(evaluation, "source_hashes", return_value=historical):
+                evaluation.prepare(args)
+            with self.assertRaisesRegex(training.TrainingError, "evaluation source changed"):
+                evaluation.verify(args.evaluation_root)
+            self.assertEqual(evaluation.verify(args.evaluation_root, historical_sources=True)["status"], "pending")
+            with (source / "report.json").open("ab") as handle:
+                handle.write(b" ")
+            with self.assertRaisesRegex(training.TrainingError, "source run changed"):
+                evaluation.verify(args.evaluation_root, historical_sources=True)
+
+    def test_historical_replay_rejects_malformed_source_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, args, _, _ = self.fixture(temporary)
+            historical = evaluation.source_hashes()
+            historical["pilot.py"] = "invalid"
+            with mock.patch.object(evaluation, "source_hashes", return_value=historical):
+                evaluation.prepare(args)
+            with self.assertRaisesRegex(training.TrainingError, "invalid evaluation source identities"):
+                evaluation.verify(args.evaluation_root, historical_sources=True)
+
     def test_evaluation_outcome_uses_match_points_when_reference_mse_is_worse(self):
         with tempfile.TemporaryDirectory() as temporary:
             source, args, source_report, _ = self.fixture(temporary)

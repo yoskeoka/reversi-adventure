@@ -2183,8 +2183,11 @@ run・resume開始時に再検証し、変化していれば停止する。複�
 契約に含めない。
 
 historical replay compatibility adapterは0054の入力再構成に必要なcandidate/Oracle executable
-identityの比較だけを0054内で緩和する。0019 manifest/report、0051/0052/0053 inventory、
-0053 verifier source hashesと他の全file digestは変更・再sealしない。既存production cycle、
+identityと、0053に記録された検証コードのhashと現在のコードの一致を0054内で要求しない。
+0053のsource hashは形式を検証したprovenanceとして保持し、現在の検証器で棋譜、report、receiptを
+意味的に再構成する。これは過去と同一の検証コードを実行した証明ではない。
+0019 manifest/report、0051/0052/0053 inventory、0053 source hashesと他の全file digestは
+変更・再sealしない。既存production cycle、
 optimizer compare、evaluationのstrict validatorとdigest契約は引き続き厳格にする。
 wrong Oracle version/source SHA/profile、receipt改変、または同一runのrun/resume時に実runtimeが
 prepare時のidentityから変化していれば停止条件である。
