@@ -51,7 +51,7 @@ def historical(source_manifest, comparison_root, evaluation_root, *, runtime_rec
                                          evaluation_root=evaluation_root) as oracle_identity:
         context = optimizer_compare_inputs.load_source(Path(source_manifest))
         report52 = optimizer_compare.verify(Path(comparison_root))
-        report53 = optimizer_compare_evaluation.verify(Path(evaluation_root))
+        report53 = optimizer_compare_evaluation.verify(Path(evaluation_root), historical_sources=True)
     st.require(report52["status"] == report53["status"] == "complete", "historical runs incomplete")
     games = training.read_jsonl(context["source_predecessors"]["self-play"] / "games.jsonl")
     exposures = set(context["exposure_keys"])

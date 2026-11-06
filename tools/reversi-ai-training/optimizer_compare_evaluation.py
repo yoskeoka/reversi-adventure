@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import optimizer_compare as comparison
@@ -170,7 +171,7 @@ def _valid_failure(path: Path, manifest: dict) -> None:
             f"invalid evaluation failure evidence {path}")
 
 
-def load(root: Path):
+def load(root: Path, *, historical_sources: bool = False):
     manifest = _unseal_manifest(root / "manifest.json")
     allowed = {"manifest.json", "prepare.receipt.json", "candidate-artifact.json", "matches",
                "report.json", "offline-verification.receipt.json"}
@@ -200,8 +201,13 @@ def load(root: Path):
     require(cycle.file_entry(matches._adopted_path(context)) == manifest["baseline_artifact"],
             "adopted baseline artifact differs from the 0052 source identity")
     matches.validate_settings(context, manifest["matches"])
-    require(manifest["sources"] == source_hashes(),
-            "evaluation source changed; verify with the pinned implementation or prepare a new root")
+    sources = manifest["sources"]
+    require(isinstance(sources, dict) and set(sources) == set(SOURCE_FILES)
+            and all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+                    for value in sources.values()), "invalid evaluation source identities")
+    if not historical_sources:
+        require(sources == source_hashes(),
+                "evaluation source changed; verify with the pinned implementation or prepare a new root")
     require(comparison.unseal(root / "prepare.receipt.json")
             == _prepare_receipt(root, manifest), "evaluation preparation receipt changed")
     return manifest, context, source_report
@@ -256,9 +262,9 @@ def _terminal(value: dict) -> bool:
     return value["status"] == "complete" and value["outcome"] in ("improved", "not-improved")
 
 
-def verify(root: Path) -> dict:
+def verify(root: Path, *, historical_sources: bool = False) -> dict:
     """Offline verifier: replay source and match evidence without external players."""
-    manifest, context, source_report = load(root)
+    manifest, context, source_report = load(root, historical_sources=historical_sources)
     match_report = matches.verify_match_led(context, manifest["matches"],
                                              root / "candidate-artifact.json", root / "matches")
     expected = report(manifest, source_report, match_report)
