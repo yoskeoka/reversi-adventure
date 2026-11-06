@@ -104,7 +104,9 @@ artifact identityをTT contextに含め、旧trainedとcacheを共有しない�
 
 ### 2. 凍結入力とteacher policyの実行可能性
 
-原本0051/0019/0052/0053はread-only。原本manifest/report/receiptsと採用artifactをoffline照合し、
+原本0051/0019/0052/0053はread-only。2026-11-07の人間指示により、保存済みの完了証跡と
+必要なsnapshotを信頼して再利用し、過去の対局・学習・reportを毎回再生しない。
+今回の入力と設定は固定し、同一runの再開・検証ではその固定内容を照合する。
 採用S0を `models/trained/0019-20261020-02.json`、
 SHA-256 `13e8bdf59553746ba32ce47b53a09c011eb79223cabf4ddefb224b2640d283de` に固定する。
 producerのclean commit、候補CLI、generator、学習実装、入力・設定を新manifestへpinする。

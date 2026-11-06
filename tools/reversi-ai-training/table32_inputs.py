@@ -320,7 +320,13 @@ def historical_states(game: dict) -> list[dict]:
 def preflight_roots(games: Iterable[dict], seed: int = SEED) -> list[dict]:
     candidates: dict[int, dict[str, dict]] = {empty: {} for empty in (20, 22, 24, 25)}
     for game_id, game in enumerate(games):
-        for cursor, state in enumerate(historical_states(game)):
+        turns = game.get("turns", game.get("decisions"))
+        require(isinstance(turns, list), "saved historical decisions missing")
+        offset = 0 if "turns" in game else len(game.get("opening", []))
+        for cursor, state in enumerate(turns, start=offset):
+            require(isinstance(state.get("board"), str) and state.get("side") in ("B", "W"),
+                    "saved historical position missing")
+            state = {"board": state["board"], "side": state["side"]}
             empty = state["board"].count(".")
             if empty in candidates and rf.legal_moves(state["board"], state["side"]):
                 key = position_key(state["board"], state["side"])

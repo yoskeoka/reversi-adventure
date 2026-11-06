@@ -754,13 +754,15 @@ rtk make pattern-optimizer-evaluate-verify
 
 人間向け入口は `start_table32.py prepare|run|resume|verify`。`resume` は同じmanifestを
 使う `run` の別名で、引数のhelpには `run` と表示される。tooling実装ではhelpとfixtureのみを
-確認し、本番のprepare・学習・生成対局・Oracle診断は開始していない。
+確認し、本番の学習・生成対局・Oracle診断は開始していない。
 [方式と未実行境界](../../docs/references/reversi-ai-learning-method-reproduction.md)、
 [契約](../../docs/specs/reversi-ai.md#project-owned-table32-pilot-0054)、
 [feature catalog](../../docs/specs/reversi-ai-table32-catalog.md)を参照する。
 
 以下は実装PRのマージ後、人間がclean checkoutで実行する手順である。原本0019/0052/0053と
-採用モデルはread-onlyで使い、新しいcheckout外rootへ保存する。Oracle runtime receiptは
+採用モデルはread-onlyで使い、新しいcheckout外rootへ保存する。保存済みの完了証跡と
+snapshotを信頼し、過去の対局・学習・reportの完全再生はprepareや再開時に行わない。
+これは過去結果を今回再検証したことを意味しない。Oracle runtime receiptは
 固定Egaroucid 7.8.1 source archive SHA-256
 `173af642276216a284498f8d7e32de23dbb9dc6611686c370b0de3eddbc1238b` を取得・照合し、fresh buildと
 runtime identityを記録する `prepare-runtime` のreceiptを使う。既存のreceiptを再利用する場合も

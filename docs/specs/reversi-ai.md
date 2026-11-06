@@ -2146,7 +2146,11 @@ artifact identityをTT contextに含め、旧trainedとcacheを共有しない�
 
 ### 2. 凍結入力とteacher policyの実行可能性
 
-原本0051/0019/0052/0053はread-only。原本manifest/report/receiptsと採用artifactをoffline照合し、
+原本0051/0019/0052/0053はread-only。保存済み完了report/receiptと必要なsnapshotを信頼して読み、
+過去の対局・教師・学習・reportをprepare、run、resume、verifyのたびに再生しない。
+必要な局面・参考診断入力・完了状態を保存済み成果物から取得し、今回のsnapshotへ固定する。
+参照した原本と設定は記録し、同一runの再開・検証では凍結した入力と設定を照合する。
+これは過去成果物を今回独立に再検証したという主張ではない。
 採用S0を `models/trained/0019-20261020-02.json`、
 SHA-256 `13e8bdf59553746ba32ce47b53a09c011eb79223cabf4ddefb224b2640d283de` に固定する。
 producerのclean commit、候補CLI、generator、学習実装、入力・設定を新manifestへpinする。
@@ -2182,10 +2186,9 @@ candidate executableも計画時や0052のhistorical manifestに記録されたp
 run・resume開始時に再検証し、変化していれば停止する。複数利用者間の同時変更や実行中の競合は
 契約に含めない。
 
-historical replay compatibility adapterは0054の入力再構成に必要なcandidate/Oracle executable
-identityと、0053に記録された検証コードのhashと現在のコードの一致を0054内で要求しない。
-0053のsource hashは形式を検証したprovenanceとして保持し、現在の検証器で棋譜、report、receiptを
-意味的に再構成する。これは過去と同一の検証コードを実行した証明ではない。
+0054は過去のcandidate/Oracle executableや検証コードを現在のものと一致させず、過去の
+完了証跡を入力として信頼する。保存されたsource hashはprovenanceであり、過去の棋譜、report、
+receiptを今回意味的に再構成した証明ではない。
 0019 manifest/report、0051/0052/0053 inventory、0053 source hashesと他の全file digestは
 変更・再sealしない。既存production cycle、
 optimizer compare、evaluationのstrict validatorとdigest契約は引き続き厳格にする。
