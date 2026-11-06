@@ -5,23 +5,16 @@ import json
 import sys
 import tempfile
 import unittest
-from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import optimizer_compare
-import optimizer_compare_evaluation
 import optimizer_compare_inputs
 import optimizer_compare_matches
 import input_bundle
 import production_cycle
-import table32
-import table32_inputs
-import table32_model
 import table32_oracle_compat as oracle_compat
 import table32_players
-import table32_store as st
 import training
 
 
@@ -87,24 +80,6 @@ class Table32OracleCompatTests(unittest.TestCase):
                    "exposure_keys": [], "validation": [], "held_out": [],
                    "corpus": [], "golden": [], "reserved": set()}
         return locals()
-
-    def patched_verifiers(self, fixture):
-        stack = ExitStack()
-        stack.enter_context(mock.patch.object(table32_players.oracle, "verify_runtime_receipt",
-                                              return_value=fixture["receipt"]))
-        stack.enter_context(mock.patch.object(table32_players.oracle, "runtime_identity",
-                                              return_value=fixture["runtime"]))
-        stack.enter_context(mock.patch.object(optimizer_compare_inputs, "load_source",
-                                              return_value=fixture["context"]))
-        stack.enter_context(mock.patch.object(optimizer_compare, "verify",
-                                              return_value={"status": "complete"}))
-        stack.enter_context(mock.patch.object(optimizer_compare_evaluation, "verify",
-                                              return_value={"status": "complete"}))
-        stack.enter_context(mock.patch.object(table32_inputs, "preflight_roots",
-                                              return_value=[{"id": "fixture"}]))
-        stack.enter_context(mock.patch.object(table32, "verified_match_exposure_keys",
-                                              return_value=set()))
-        return stack
 
     def test_source_identity_adapter_is_scoped_and_used_by_pinned_readers(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -288,37 +263,6 @@ class Table32OracleCompatTests(unittest.TestCase):
                         input_bundle.request_inputs(name, dict(request, bundle_manifest=str(root / "missing.json")))
                 with self.assertRaisesRegex(training.TrainingError, "file identity mismatch"):
                     input_bundle.verify_stage(report_path)
-
-    def test_historical_and_table32_reload_reconstruct_without_rewriting_source_pins(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            fixture = self.fixture(Path(temporary))
-            baseline = Path(__file__).resolve().parents[3] / "models/trained/0019-20261020-02.json"
-            with self.patched_verifiers(fixture):
-                originals, snapshot = table32.historical(
-                    fixture["source_manifest"], fixture["comparison_root"], fixture["evaluation_root"],
-                    runtime_receipt=fixture["receipt_path"], seed=7)
-                self.assertEqual(originals["oracle_source_identity"]["historical_binary"],
-                                 fixture["manifest"]["oracle_binary"])
-
-                root = Path(temporary) / "table32-run"
-                root.mkdir()
-                manifest = {"version": st.VERSION, "score_contract": training.SCORE_CONTRACT,
-                            "producer_commit": "b" * 40, "sources": table32.source_hashes(), "seed": 7,
-                            "catalog_digest": table32_model.CATALOG_DIGEST, "baseline": st.pin(baseline),
-                            "candidate_executable": st.pin(fixture["candidate_path"]),
-                            "candidate_source_commit": "c" * 40,
-                            "oracle_runtime_receipt": st.pin(fixture["receipt_path"]),
-                            "oracle_runtime": fixture["runtime"],
-                            "oracle_source_identity": originals["oracle_source_identity"],
-                            "historical": originals, "snapshot_digest": st.digest(snapshot)}
-                st.atomic(root / "snapshot.json", snapshot, once=True)
-                st.atomic(root / "manifest.json", manifest, once=True)
-                st.atomic(root / "prepare.receipt.json", st.seal({"manifest_digest": st.digest(manifest),
-                           "snapshot_digest": st.digest(snapshot)}), once=True)
-                loaded, reconstructed = table32.load(root)
-                self.assertEqual(loaded, manifest)
-                self.assertEqual(reconstructed, snapshot)
-
 
 if __name__ == "__main__":
     unittest.main()

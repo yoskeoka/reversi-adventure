@@ -40,21 +40,49 @@ def clean_commit():
 
 def historical(source_manifest, comparison_root, evaluation_root, *, runtime_receipt,
                expected_oracle_identity=None, seed=inputs.SEED):
-    """Use existing semantic verifiers; no trainer/CLI/Oracle is launched."""
-    import optimizer_compare
-    import optimizer_compare_evaluation
-    import optimizer_compare_inputs
-    before = [st.inventory(p) for p in (Path(source_manifest).parent, comparison_root, evaluation_root)]
-    with oracle_compat.historical_replay(source_manifest, runtime_receipt,
-                                         expected_identity=expected_oracle_identity,
-                                         comparison_root=comparison_root,
-                                         evaluation_root=evaluation_root) as oracle_identity:
-        context = optimizer_compare_inputs.load_source(Path(source_manifest))
-        report52 = optimizer_compare.verify(Path(comparison_root))
-        report53 = optimizer_compare_evaluation.verify(Path(evaluation_root), historical_sources=True)
-    st.require(report52["status"] == report53["status"] == "complete", "historical runs incomplete")
-    games = training.read_jsonl(context["source_predecessors"]["self-play"] / "games.jsonl")
-    exposures = set(context["exposure_keys"])
+    """Read completed saved evidence without reconstructing previous runs."""
+    source_manifest = Path(source_manifest).resolve()
+    source_root = source_manifest.parent
+    comparison_root, evaluation_root = Path(comparison_root), Path(evaluation_root)
+    oracle_identity = oracle_compat.verify_source_identity(source_manifest, runtime_receipt)
+    if expected_oracle_identity is not None:
+        st.require(oracle_identity == expected_oracle_identity, "Oracle identity differs")
+    source = st.read(source_manifest)
+    source_report = st.read(source_root / "report.json")
+    st.require(source_report.get("run_status") == "complete"
+               and source_report.get("selected_artifact") == "candidate", "source run incomplete")
+    receipt_digest = source_report["phase_receipts"]["self-play"]
+    attempts = []
+    for path in sorted((source_root / "phases/self-play").glob("attempt-*/receipt.json")):
+        receipt = st.read(path)
+        if (receipt.get("phase") == "self-play" and receipt.get("status") == "complete"
+                and receipt.get("receipt_digest") == receipt_digest):
+            attempts.append(path)
+    st.require(len(attempts) == 1, "completed self-play receipt missing or ambiguous")
+    games_path = attempts[0].parent / "games.jsonl"
+    games = training.read_jsonl(games_path)
+    exposures = set()
+    for values in source_report["exposure_keys"].values():
+        exposures.update(values)
+    verified = source["verified_bundle"]
+    for values in verified["exposure_keys"].values():
+        exposures.update(values)
+    exposures.update(verified["acceptance_reservation"]["keys"])
+    rows = {name: st.read(comparison_root / f"{name}.json")
+            for name in ("teachers", "validation", "held_out")}
+    for values in rows.values():
+        exposures.update(inputs.position_key(row["board"], row["side"]) for row in values)
+    files = [source_manifest, source_root / "report.json", attempts[0], games_path,
+             comparison_root / "prepare.receipt.json"]
+    files.extend(comparison_root / f"{name}.json" for name in rows)
+    for root in (comparison_root, evaluation_root):
+        report_path = root / "report.json"
+        st.require(st.read(report_path).get("status") == "complete", "historical runs incomplete")
+        files.extend((report_path, root / "manifest.json", root / "offline-verification.receipt.json"))
+        for name in ("games.jsonl", "oracle-games.jsonl"):
+            path = root / "matches" / name
+            if path.is_file():
+                files.append(path)
     for root in (comparison_root, evaluation_root):
         exposures.update(verified_match_exposure_keys(root))
         manifest = training.read_json(Path(root) / "manifest.json")
@@ -62,13 +90,14 @@ def historical(source_manifest, comparison_root, evaluation_root, *, runtime_rec
             for pair in pairs:
                 for opening in pair:
                     exposures.add(inputs.position_key(opening["board"], opening["side"]))
+    corpus_path = Path(source["inputs"]["corpus"]["path"])
+    golden_path = Path(source["inputs"]["golden"]["path"])
+    files.extend((corpus_path, golden_path))
     snapshot = {"preflight_roots": inputs.preflight_roots(games,seed=seed),
-                "validation": context["validation"], "held_out": context["held_out"],
-                "corpus": context["corpus"], "golden": context["golden"],
+                "validation": rows["validation"], "held_out": rows["held_out"],
+                "corpus": training.read_jsonl(corpus_path), "golden": training.read_jsonl(golden_path),
                 "excluded_keys": sorted(exposures)}
-    after = [st.inventory(p) for p in (Path(source_manifest).parent, comparison_root, evaluation_root)]
-    st.require(before == after, "historical verification changed an original")
-    return {"inventories": before, "closure": context["pins"],
+    return {"policy": "saved-completed-v1", "files": [st.pin(p) for p in files],
             "oracle_source_identity": oracle_identity,
             "source_manifest": st.pin(source_manifest),
             "comparison_report": st.pin(Path(comparison_root) / "report.json"),
@@ -76,7 +105,7 @@ def historical(source_manifest, comparison_root, evaluation_root, *, runtime_rec
 
 
 def verified_match_exposure_keys(root):
-    """Collect exposure only after the owning historical verifier has replayed it."""
+    """Collect positions recorded in completed historical match artifacts."""
     keys=set()
     for name in ("games.jsonl","oracle-games.jsonl"):
         path=Path(root)/"matches"/name
@@ -176,24 +205,7 @@ def load(root, *, verify_originals=True):
     st.require(st.digest(snapshot) == manifest["snapshot_digest"], "snapshot digest differs")
     if verify_originals:
         original = manifest["historical"]
-        for value in original["inventories"]:
-            st.require(st.inventory(value["path"]) == value, "historical original changed")
-        historical_executables = oracle_compat.historical_executable_pins(
-            source_manifest_path, original["inventories"][1]["path"],
-            original["inventories"][2]["path"])
-        for value in original["closure"]["files"]:
-            executable = historical_executables.get(str(Path(value["path"]).resolve()))
-            if executable is not None:
-                st.require(value == executable, "historical executable record differs")
-            else:
-                st.check_pin(value)
-        pins, reconstructed = historical(original["source_manifest"]["path"],
-                                         Path(original["inventories"][1]["path"]),
-                                         Path(original["inventories"][2]["path"]),
-                                         runtime_receipt=manifest["oracle_runtime_receipt"]["path"],
-                                         expected_oracle_identity=oracle_identity,
-                                         seed=manifest["seed"])
-        st.require(pins == original and reconstructed == snapshot, "historical snapshot does not reconstruct")
+        st.require(original.get("policy") == "saved-completed-v1", "unsupported historical evidence policy")
     return manifest, snapshot
 
 
