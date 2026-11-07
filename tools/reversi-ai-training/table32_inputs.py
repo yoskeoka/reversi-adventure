@@ -94,6 +94,26 @@ def random_prefix(spec: dict, *, allow_terminal: bool = False) -> dict:
     return {"board": board, "side": side, "turns": turns}
 
 
+def generation_opening(spec: dict, *, max_candidates: int = 1000) -> dict:
+    """Skip terminal random candidates before any teacher decision is made."""
+    require(type(max_candidates) is int and max_candidates > 0, "invalid opening candidate limit")
+    rejected = []
+    for candidate in range(max_candidates):
+        stream = (spec["stream_seed"] if candidate == 0 else
+                  int(training.digest({"domain": "generation-opening-candidate-v1",
+                                       "stream_seed": spec["stream_seed"],
+                                       "candidate": candidate}), 16))
+        opening = random_prefix({**spec, "stream_seed": stream}, allow_terminal=True)
+        board, side = opening["board"], opening["side"]
+        if rf.legal_moves(board, side) or rf.legal_moves(board, rf.other(side)):
+            return {**opening, "candidate_index": candidate, "candidate_stream_seed": stream,
+                    "rejected_candidates": rejected}
+        rejected.append({"candidate": candidate, "stream_seed": stream,
+                         "moves": [turn["move"] for turn in opening["turns"]],
+                         "reason": "terminal"})
+    raise training.TrainingError("generation opening candidate limit exhausted")
+
+
 def validate_decision(board: str, side: str, result: dict, settings: dict) -> dict:
     require(isinstance(result, dict), "teacher-policy-infeasible: missing decision")
     for name in ("score", "completed_depth", "nodes", "elapsed_ms"):
@@ -122,7 +142,7 @@ def validate_decision(board: str, side: str, result: dict, settings: dict) -> di
 
 
 def generate_game(spec: dict, choose: Choose) -> dict:
-    opening = random_prefix(spec)
+    opening = generation_opening(spec)
     board, side, decisions = opening["board"], opening["side"], []
     while rf.legal_moves(board, side) or rf.legal_moves(board, rf.other(side)):
         require(len(decisions) < 120, "generation decision ceiling exceeded")
@@ -149,7 +169,7 @@ def replay_game(game: dict) -> list[dict]:
     unsigned = {k: v for k, v in game.items() if k != "game_digest"}
     require(game.get("game_digest") == training.digest(unsigned), "table32 game digest mismatch")
     spec = game["spec"]
-    require(game["opening"] == random_prefix(spec), "random prefix reconstruction mismatch")
+    require(game["opening"] == generation_opening(spec), "random prefix reconstruction mismatch")
     board, side = game["opening"]["board"], game["opening"]["side"]
     rows = []
     require(isinstance(game["decisions"], list) and len(game["decisions"]) <= 120,

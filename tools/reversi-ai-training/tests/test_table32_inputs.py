@@ -151,6 +151,53 @@ class Table32InputTests(unittest.TestCase):
         # The post-pass position is still eligible: do not discard the whole sequence.
         self.assertTrue(any("pass" in root["prefix"] for root in pool["candidates"]))
 
+    def test_generation_opening_skips_early_terminal_deterministically(self):
+        spec = next(spec for spec in inputs.generation_plan(seed=2026110101)
+                    if spec["game_id"] == "p24-validation-00")
+        opening = inputs.generation_opening(spec)
+        self.assertEqual(opening, inputs.generation_opening(spec))
+        self.assertGreater(opening["candidate_index"], 0)
+        self.assertEqual(len(opening["rejected_candidates"]), opening["candidate_index"])
+        rejected = opening["rejected_candidates"][0]
+        self.assertEqual(rejected["candidate"], 0)
+        self.assertEqual(rejected["stream_seed"], spec["stream_seed"])
+        self.assertEqual(rejected["reason"], "terminal")
+        self.assertEqual(rejected["moves"],
+                         "f5 f4 e3 f2 f3 f6 e6 d6 c4 b4".split())
+        self.assertEqual(64 - opening["board"].count(".") - 4, 24)
+        self.assertTrue(rf.legal_moves(opening["board"], opening["side"])
+                        or rf.legal_moves(opening["board"], rf.other(opening["side"])))
+
+        game = inputs.generate_game(spec, fixture_choose)
+        self.assertEqual(game["opening"], opening)
+        self.assertTrue(inputs.replay_game(game))
+        tampered = copy.deepcopy(game)
+        tampered["opening"]["rejected_candidates"][0]["reason"] = "other"
+        tampered["game_digest"] = training.digest({k: v for k, v in tampered.items() if k != "game_digest"})
+        with self.assertRaises(training.TrainingError):
+            inputs.replay_game(tampered)
+
+    def test_generation_opening_skips_terminal_at_requested_length(self):
+        previous = next(spec for spec in inputs.generation_plan(seed=2026110101)
+                        if spec["game_id"] == "p24-validation-00")
+        spec = {**previous, "prefix_length": 10}
+        first = inputs.random_prefix(spec, allow_terminal=True)
+        self.assertEqual(64 - first["board"].count(".") - 4, 10)
+        self.assertFalse(rf.legal_moves(first["board"], first["side"]))
+        self.assertFalse(rf.legal_moves(first["board"], rf.other(first["side"])))
+        opening = inputs.generation_opening(spec)
+        self.assertGreater(opening["candidate_index"], 0)
+        self.assertEqual(opening["rejected_candidates"][0]["reason"], "terminal")
+        self.assertEqual(len(opening["rejected_candidates"][0]["moves"]), 10)
+
+    def test_generation_opening_candidate_limit(self):
+        spec = inputs.generation_plan()[0]
+        terminal = {"board": "B" * 64, "side": "W", "turns": []}
+        with mock.patch.object(inputs, "random_prefix", return_value=terminal) as generate:
+            with self.assertRaisesRegex(training.TrainingError, "candidate limit exhausted"):
+                inputs.generation_opening(spec, max_candidates=2)
+        self.assertEqual(generate.call_count, 2)
+
     def test_cross_split_duplicates_removed_from_every_split(self):
         key = inputs.position_key(rf.INITIAL, "B")
         raw = [{"id": "a", "split": "train", "canonical_key": key, "phase": 0, "prefix_length": 12},

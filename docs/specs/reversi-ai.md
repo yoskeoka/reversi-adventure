@@ -2200,8 +2200,8 @@ prepare時のidentityから変化していれば停止条件である。
 ### 3. 自前生成：128局＋序盤最大256局面
 
 - master seedはrunごとに固定し、用途/length/split/gameからSHA-256でstreamを分離する。
-  当初の`2026110101`は指定prefix前に終局する局が見つかったためそのrunを停止し、
-  次のrun全体には`2026110102`を用いる。個別の開局を差し替えない。
+  当初の`2026110101`では指定prefix前の終局によりrunが停止したため、
+  次のrun全体には`2026110102`を用いる。
   prefix長はplacementsで12/18/21/24/30/40/50/58の8層。
   各層train12・validation2・test2局、合計96/16/16=128局。
   1prefixから1継続対局とし、標準黒先手からsorted合法手を一様抽出する。D4変換を別の独立局数に数えない。
@@ -2211,7 +2211,9 @@ prepare時のidentityから変化していれば停止条件である。
   generation上限128 terminal games、1局120decision、採用教師全split合計15,360行。
 - splitはgame生成前に固定し、canonical D4 board-and-sideの交差重複を全splitから除外する。
   除外ID・原本/採用keys・game・side・prefix長・phase別の数を保存する。
-  空split・欠けたprefix層・非終局・不正手・資源超過で停止。失敗局を別の都合のよい開局へ交換しない。
+  空split・欠けたprefix層・非終局・不正手・資源超過で停止。教師による継続を開始した失敗局は交換しない。
+  開始局面を作る際、指定手数までに終局した候補は採用せず、各局の決定的乱数列から次の候補を選ぶ。
+  除外した候補とその理由は記録し、各局の候補は最大1,000件とする。
 - 序盤は標準初期盤面から0–11 placementsのunique到達局面を別poolとして収集する。
   決定的なseed付き合法prefix列を最大10,000本走査し、各occupied phaseの候補上限32、
   全体上限256root。各lengthの先頭1rootを先に確保し、残りはcanonical keyのseed付きhash順位で採用する。
