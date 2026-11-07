@@ -12,7 +12,7 @@ import table32_model as model
 import table32_store as st
 
 
-def build(games, labels, specs, folder, *, early_limit):
+def build(games, labels, specs, folder, *, early_limit, limits=None):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     counts, prefix, raw_counts = collections.Counter(), collections.Counter(), collections.Counter()
@@ -31,13 +31,13 @@ def build(games, labels, specs, folder, *, early_limit):
         for game_count, game in enumerate(games, 1):
             st.require(game_count <= len(specs) and game["spec"] == specs[game_count-1],
                        "generation differs from frozen plan")
-            for row in inputs.replay_game(game):
+            for row in inputs.replay_game(game, limits=limits):
                 add(row)
         st.require(game_count == len(specs), "generation incomplete")
         label_count = 0
         for label_count, label in enumerate(labels, 1):
             st.require(label_count <= early_limit, "early label budget exceeded")
-            add(inputs.early_row(label))
+            add(inputs.early_row(label, limits=limits))
         db.execute("CREATE INDEX key_split ON rows(key,split)")
         db.execute("CREATE TABLE collisions AS SELECT key FROM rows GROUP BY key HAVING COUNT(DISTINCT split)>1")
         db.execute("CREATE INDEX collisions_key ON collisions(key)")

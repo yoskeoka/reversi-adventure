@@ -114,14 +114,28 @@ def generation_opening(spec: dict, *, max_candidates: int = 1000) -> dict:
     raise training.TrainingError("generation opening candidate limit exhausted")
 
 
+def search_settings(base: dict, limits: dict | None = None) -> dict:
+    """Keep the search policy fixed while honoring the run's resource settings."""
+    effective = dict(base)
+    if limits is not None:
+        for name in ("time_limit_ms", "node_limit"):
+            require(name in limits, f"missing search setting {name}")
+            effective[name] = limits[name]
+    for name in ("time_limit_ms", "node_limit"):
+        value = effective[name]
+        require(value is None or (type(value) is int and value > 0), f"invalid search setting {name}")
+    return effective
+
+
 def validate_decision(board: str, side: str, result: dict, settings: dict) -> dict:
     require(isinstance(result, dict), "teacher-policy-infeasible: missing decision")
     for name in ("score", "completed_depth", "nodes", "elapsed_ms"):
         require(type(result.get(name)) is int, f"teacher-policy-infeasible: invalid {name}")
     require(type(result.get("exact")) is bool and -64 <= result["score"] <= 64,
             "teacher-policy-infeasible: invalid score/exactness")
-    require(0 <= result["nodes"] <= settings["node_limit"]
-            and 0 <= result["elapsed_ms"] <= settings["time_limit_ms"],
+    require(result["nodes"] >= 0 and result["elapsed_ms"] >= 0
+            and (settings["node_limit"] is None or result["nodes"] <= settings["node_limit"])
+            and (settings["time_limit_ms"] is None or result["elapsed_ms"] <= settings["time_limit_ms"]),
             "teacher-policy-infeasible: resource ceiling exceeded")
     if result.get("forced_pass") is True:
         require(not rf.legal_moves(board, side) and bool(rf.legal_moves(board, rf.other(side)))
@@ -141,30 +155,32 @@ def validate_decision(board: str, side: str, result: dict, settings: dict) -> di
     return dict(result)
 
 
-def generate_game(spec: dict, choose: Choose) -> dict:
+def generate_game(spec: dict, choose: Choose, *, limits: dict | None = None) -> dict:
+    settings = search_settings(TEACHER_SETTINGS, limits)
     opening = generation_opening(spec)
     board, side, decisions = opening["board"], opening["side"], []
     while rf.legal_moves(board, side) or rf.legal_moves(board, rf.other(side)):
         require(len(decisions) < 120, "generation decision ceiling exceeded")
         result = validate_decision(board, side,
                                    choose(f"{spec['game_id']}-{len(decisions):03}", board, side,
-                                          dict(TEACHER_SETTINGS)), TEACHER_SETTINGS)
+                                          dict(settings)), settings)
         decisions.append({"board": board, "side": side, **result})
         board, side = advance(board, side, result["move"])
     game = {"schema_version": 1, "version": VERSION,
             "score_contract": training.SCORE_CONTRACT, "spec": dict(spec),
             "opening": opening, "decisions": decisions, "terminal_board": board,
             "terminal_side": side, "final_score_black": training.terminal_score(board, "B"),
-            "teacher_settings": dict(TEACHER_SETTINGS), "source_kind": "project-owned-s0-continuation"}
+            "teacher_settings": settings, "source_kind": "project-owned-s0-continuation"}
     game["game_digest"] = training.digest(game)
     return game
 
 
-def replay_game(game: dict) -> list[dict]:
+def replay_game(game: dict, *, limits: dict | None = None) -> list[dict]:
+    settings = search_settings(TEACHER_SETTINGS, limits)
     require(game.get("version") == VERSION and game.get("schema_version") == 1
             and game.get("score_contract") == training.SCORE_CONTRACT
             and game.get("source_kind") == "project-owned-s0-continuation"
-            and game.get("teacher_settings") == TEACHER_SETTINGS,
+            and game.get("teacher_settings") == settings,
             "unsupported table32 game provenance")
     unsigned = {k: v for k, v in game.items() if k != "game_digest"}
     require(game.get("game_digest") == training.digest(unsigned), "table32 game digest mismatch")
@@ -177,7 +193,7 @@ def replay_game(game: dict) -> list[dict]:
     for cursor, decision in enumerate(game["decisions"]):
         require(decision.get("board") == board and decision.get("side") == side,
                 "generation decision state mismatch")
-        validate_decision(board, side, decision, TEACHER_SETTINGS)
+        validate_decision(board, side, decision, settings)
         rows.append({"id": f"{spec['game_id']}-{cursor:03}", "game_id": spec["game_id"],
                      "split": spec["split"], "prefix_length": spec["prefix_length"],
                      "board": board, "side": side, "phase": phase(board),
@@ -245,23 +261,25 @@ def early_pool(seed: int = SEED, *, max_sequences: int = 10000,
             "limits": {"sequences": max_sequences, "total": total_limit, "per_phase": candidate_limit}}
 
 
-def label_early(root: dict, choose: Choose) -> dict:
+def label_early(root: dict, choose: Choose, *, limits: dict | None = None) -> dict:
+    settings = search_settings(EARLY_SETTINGS, limits)
     require(0 <= root["placements"] <= 11 and phase(root["board"]) == root["phase"]
             and root["canonical_key"] == position_key(root["board"], root["side"]), "invalid early root")
     result = validate_decision(root["board"], root["side"],
-                               choose(root["id"], root["board"], root["side"], dict(EARLY_SETTINGS)), EARLY_SETTINGS)
+                               choose(root["id"], root["board"], root["side"], dict(settings)), settings)
     require(result.get("forced_pass") is not True, "forced pass is not an early search label")
-    return {"root": root, "decision": result, "settings": dict(EARLY_SETTINGS),
+    return {"root": root, "decision": result, "settings": settings,
             "source_kind": "project-owned-s0-depth17", "score_contract": training.SCORE_CONTRACT}
 
 
-def early_row(label: dict) -> dict:
-    require(label.get("settings") == EARLY_SETTINGS
+def early_row(label: dict, *, limits: dict | None = None) -> dict:
+    settings = search_settings(EARLY_SETTINGS, limits)
+    require(label.get("settings") == settings
             and label.get("source_kind") == "project-owned-s0-depth17"
             and label.get("score_contract") == training.SCORE_CONTRACT,
             "invalid early teacher provenance")
     root = label["root"]
-    validate_decision(root["board"], root["side"], label["decision"], EARLY_SETTINGS)
+    validate_decision(root["board"], root["side"], label["decision"], settings)
     require(label["decision"].get("forced_pass") is not True, "forced pass is not an early search label")
     board, side = rf.INITIAL, "B"
     for move in root["prefix"]:
@@ -276,7 +294,7 @@ def early_row(label: dict) -> dict:
 
 def extract(games: list[dict], labels: list[dict], *, seed: int = SEED,
             require_complete: bool = True, planned_specs: list[dict] | None = None,
-            early_limit: int = 256) -> dict:
+            early_limit: int = 256, limits: dict | None = None) -> dict:
     expected = generation_plan(seed) if planned_specs is None else planned_specs
     require(type(early_limit) is int and early_limit >= 12
             and bool(expected) and len(games) <= len(expected)
@@ -284,7 +302,7 @@ def extract(games: list[dict], labels: list[dict], *, seed: int = SEED,
     specs = [game["spec"] for game in games]
     require(specs == expected[:len(specs)] and (not require_complete or len(specs) == len(expected)),
             "generation plan is not the fixed contiguous prefix")
-    raw = [row for game in games for row in replay_game(game)] + [early_row(label) for label in labels]
+    raw = [row for game in games for row in replay_game(game, limits=limits)] + [early_row(label, limits=limits) for label in labels]
     require(len(raw) <= len(expected) * 120 + early_limit and len({row["id"] for row in raw}) == len(raw),
             "teacher row ceiling or duplicate IDs")
     key_splits: dict[str, set[str]] = defaultdict(set)
@@ -381,15 +399,16 @@ def oracle_query(root: dict, *, child_move: str | None = None) -> dict:
 
 
 def validate_preflight(roots: list[dict], decisions: list[dict], queries: list[dict],
-                       labels: list[dict]) -> dict:
+                       labels: list[dict], *, limits: dict | None = None) -> dict:
+    settings = search_settings(TEACHER_SETTINGS, limits)
     require(len(roots) == len(decisions) == 12 and len(queries) == 24
             and Counter(root["empty"] for root in roots) == {20: 3, 22: 3, 24: 3, 25: 3},
             "teacher-policy-infeasible: incomplete exact preflight")
     require(len(labels) == 2, "teacher-policy-infeasible: missing first two early labels")
     for label in labels:
-        early_row(label)
+        early_row(label, limits=limits)
     for cursor, (root, decision) in enumerate(zip(roots, decisions)):
-        validate_decision(root["board"], root["side"], decision, TEACHER_SETTINGS)
+        validate_decision(root["board"], root["side"], decision, settings)
         for offset, query in enumerate((oracle_query(root), oracle_query(root, child_move=decision["move"]))):
             saved = queries[cursor * 2 + offset]
             require(saved.get("query") == query and isinstance(saved.get("result"), dict),

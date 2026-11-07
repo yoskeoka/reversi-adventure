@@ -123,11 +123,18 @@ def settings(args):
              "early_candidates_per_phase", "pool_sequences", "max_steps", "max_proposals",
              "decision_timeout_seconds", "time_limit_ms", "node_limit")
     value = {name: getattr(args, name) for name in names}
-    st.require(all(type(v) is int and v > 0 for v in value.values()), "settings must be positive integers")
-    st.require(value["early_positions"] >= 12 and value["time_limit_ms"] <= 300000
-               and value["node_limit"] <= 10000000 and value["decision_timeout_seconds"] <= 310
-               and value["decision_timeout_seconds"] * 1000 > value["time_limit_ms"],
-               "invalid teacher resource limits (max300000ms/10000000nodes/310s)")
+    resources = ("decision_timeout_seconds", "time_limit_ms", "node_limit")
+    st.require(all(type(v) is int and (v >= 0 if k in resources else v > 0)
+                   for k, v in value.items()), "invalid settings")
+    for name in resources:
+        if value[name] == 0:
+            value[name] = None
+    st.require(value["early_positions"] >= 12, "invalid early position limit")
+    bounded = value["time_limit_ms"] is not None
+    st.require((value["node_limit"] is not None) == bounded
+               and (value["decision_timeout_seconds"] is not None) == bounded
+               and (not bounded or value["decision_timeout_seconds"] * 1000 > value["time_limit_ms"]),
+               "search limits must all be zero or all positive with timeout exceeding search time")
     return value
 
 
@@ -469,6 +476,8 @@ def cycle(driver, snapshot, *, extend=False):
     choose, solve = (driver.providers if driver.providers is not None else production_providers(driver))
     driver.computed("input-verification", "snapshot", {"snapshot_digest": m["snapshot_digest"],
                      "limits": m["limits"], "acceptance_reservation": "not-yet-selected"})
+    if driver.attempt:
+        st.atomic(driver.attempt / "progress.json", {"phase": "teacher-preflight", "unit": "early-pool"})
     pool = inputs.early_pool(m["seed"], max_sequences=config["pool_sequences"],
                              total_limit=config["early_positions"], candidate_limit=config["early_candidates_per_phase"])
     driver.computed("teacher-preflight", "early-pool", pool)
@@ -486,22 +495,22 @@ def cycle(driver, snapshot, *, extend=False):
                 len(queries)+1, 24))
     for position in pool["roots"][:2]:
         def create_label():
-            return inputs.label_early(position, lambda i,b,s,c: choose("early", i,b,s,c))
+            return inputs.label_early(position, lambda i,b,s,c: choose("early", i,b,s,c), limits=config)
         def validate_label(label):
             st.require(label["root"] == position, "early root changed")
             check(position["id"],position["board"],position["side"],label["decision"],inputs.EARLY_SETTINGS)
-            inputs.early_row(label)
+            inputs.early_row(label, limits=config)
         labels.append(driver.unit("teacher-preflight", position["id"], create_label, validate_label))
-    driver.computed("teacher-preflight", "complete", inputs.validate_preflight(roots, decisions, queries, labels))
+    driver.computed("teacher-preflight", "complete", inputs.validate_preflight(roots, decisions, queries, labels, limits=config))
     if hasattr(driver,"close_players"):
         driver.close_players()
     gen_start = driver.journal.cursor
     for index, spec in enumerate(m["generation_plan"]):
         def generate():
-            return inputs.generate_game(spec, lambda i,b,s,c: choose("teacher",i,b,s,c))
+            return inputs.generate_game(spec, lambda i,b,s,c: choose("teacher",i,b,s,c), limits=config)
         def validate_game(game):
             st.require(game["spec"] == spec, "game plan changed")
-            inputs.replay_game(game)
+            inputs.replay_game(game, limits=config)
             for turn, row in enumerate(game["decisions"]):
                 check(f"{spec['game_id']}-{turn:03}",row["board"],row["side"],row,inputs.TEACHER_SETTINGS)
         driver.unit("generation", spec["game_id"], generate, validate_game,index+1,len(m["generation_plan"]))
@@ -511,11 +520,11 @@ def cycle(driver, snapshot, *, extend=False):
     label_start = driver.journal.cursor
     for index, position in enumerate(pool["roots"][2:], 2):
         def create_label():
-            return inputs.label_early(position, lambda i,b,s,c: choose("early", i,b,s,c))
+            return inputs.label_early(position, lambda i,b,s,c: choose("early", i,b,s,c), limits=config)
         def validate_label(label):
             st.require(label["root"] == position, "early root changed")
             check(position["id"],position["board"],position["side"],label["decision"],inputs.EARLY_SETTINGS)
-            inputs.early_row(label)
+            inputs.early_row(label, limits=config)
         driver.unit("early-labels", position["id"], create_label, validate_label,index+1,len(pool["roots"]))
     label_end = driver.journal.cursor
     if hasattr(driver,"close_players"):
@@ -524,7 +533,7 @@ def cycle(driver, snapshot, *, extend=False):
         import itertools
         return extraction.build(_events(root, gen_start, gen_end),
             itertools.chain(labels, _events(root, label_start, label_end)),
-            m["generation_plan"], folder, early_limit=config["early_positions"])
+            m["generation_plan"], folder, early_limit=config["early_positions"], limits=config)
     folder = root / "extracted"
     def validate_extraction(saved):
         with tempfile.TemporaryDirectory(prefix="table32-replay-") as temporary:
@@ -741,8 +750,8 @@ def main(argv):
     prep.add_argument("--candidate-source-commit", required=True)
     defaults={"seed":inputs.SEED,"train-per-prefix":12,"validation-per-prefix":2,"test-per-prefix":2,
         "early-positions":256,"early-candidates-per-phase":32,"pool-sequences":10000,
-        "max-steps":1000,"max-proposals":1000,"decision-timeout-seconds":310,
-        "time-limit-ms":300000,"node-limit":10000000,"max-wall-seconds":259200,
+        "max-steps":1000,"max-proposals":1000,"decision-timeout-seconds":0,
+        "time-limit-ms":0,"node-limit":0,"max-wall-seconds":259200,
         "producer-rss-kib":262144,"child-rss-kib":1572864}
     for name,value in defaults.items(): prep.add_argument("--"+name,type=int,default=value)
     for action in ("run","verify"):

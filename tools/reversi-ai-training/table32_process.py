@@ -162,6 +162,7 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
         failure = None
         failure_error = None
         status = None
+        next_heartbeat = 60.0
         try:
             while True:
                 done, status = os.waitpid(pid, os.WNOHANG)
@@ -181,6 +182,12 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                     peak[name] = max(peak[name], metrics[name])
                 st.atomic(attempt / "resources.json", {**metrics, "peaks": peak,
                                                        "elapsed_seconds": elapsed})
+                if elapsed >= next_heartbeat:
+                    context = st.read(attempt / "progress.json")
+                    print(f"table32 phase={context['phase']} unit={context['unit']} completed=0 "
+                          f"total=1 elapsed_seconds={elapsed:.3f} status=running",
+                          file=sys.stderr, flush=True)
+                    next_heartbeat = elapsed + 60.0
                 st.require(elapsed < remaining, "cumulative wall budget exceeded")
                 st.require(metrics["producer_rss_kib"] <= manifest["limits"]["producer_rss_kib"],
                            "producer RSS budget exceeded")
