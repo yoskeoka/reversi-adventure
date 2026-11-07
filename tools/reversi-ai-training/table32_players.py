@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import queue
+import os
+import select
 import subprocess
 import threading
 import time
@@ -11,6 +13,7 @@ import pilot
 import reinforcement as rf
 import table32_inputs as inputs
 import table32_store as st
+import training
 
 oracle = pilot.oracle
 
@@ -30,8 +33,15 @@ def full_solve_profile():
 def player_argv(executable,artifact,config,evaluator):
     argv=[str(executable),"--evaluator",evaluator,"--trained-artifact",str(artifact)]
     for key in ("opening_depth","midgame_depth","endgame_depth",
-                "exact_solver_empty_squares","time_limit_ms","node_limit"):
+                "exact_solver_empty_squares"):
         argv += ["--"+key.replace("_","-"),str(config[key])]
+    time_limit, node_limit = config["time_limit_ms"], config["node_limit"]
+    if time_limit is None and node_limit is None:
+        argv.append("--unbounded-search")
+    else:
+        st.require(type(time_limit) is int and time_limit > 0
+                   and type(node_limit) is int and node_limit > 0, "invalid search limits")
+        argv += ["--time-limit-ms", str(time_limit), "--node-limit", str(node_limit)]
     return argv+["--exact-cache-scope","turn"]
 
 
@@ -93,13 +103,20 @@ def diagnostic_fields(line):
     st.require({"position_id", "outcome", "score", "completed_depth", "exact", "nodes", "elapsed_us"} <= set(fields),
                "incomplete raw search telemetry")
     try:
-        for key in ("score", "completed_depth", "nodes", "elapsed_us"):
+        for key in ("completed_depth", "nodes", "elapsed_us"):
             int(fields[key])
     except ValueError:
         st.require(False, "incomplete or invalid raw search telemetry score/numeric field")
     st.require(all(int(fields[key]) >= 0 for key in ("completed_depth", "nodes", "elapsed_us")),
                "negative raw search telemetry field")
     st.require(fields["exact"] in ("true", "false"), "invalid raw search exactness")
+    if fields["score"] == "none" and fields["exact"] == "false":
+        st.require(False, f"teacher-policy-infeasible: incomplete search (nodes={fields['nodes']}, "
+                          f"completed_depth={fields['completed_depth']}, elapsed_us={fields['elapsed_us']})")
+    try:
+        int(fields["score"])
+    except ValueError:
+        st.require(False, "incomplete or invalid raw search telemetry score/numeric field")
     return fields
 
 
@@ -156,7 +173,8 @@ class Player(rf.Candidate):
     def request(self, identifier, request):
         self._save({"argv": self.argv, "stream": "stdin", "request": request})
         try:
-            answer = super().request(identifier, request)
+            answer = (super().request(identifier, request) if self.timeout is not None
+                      else self._request_unbounded(identifier, request))
         except Exception as error:
             self._save({"argv": self.argv, "request": request, "failure": str(error),
                         "stdout_partial_hex": bytes(self.buffer).hex(),
@@ -165,6 +183,26 @@ class Player(rf.Candidate):
         self.last_request = {"request": request, "stdout": answer}
         self._save({"argv": self.argv, **self.last_request})
         return answer
+
+    def _request_unbounded(self, identifier, request):
+        """Wait without a per-decision deadline; the outer supervisor can stop the group."""
+        assert self.process.stdin and self.process.stdout
+        try:
+            self.process.stdin.write((request + "\n").encode("ascii"))
+            self.process.stdin.flush()
+            while b"\n" not in self.buffer:
+                select.select([self.process.stdout], [], [], None)
+                chunk = os.read(self.process.stdout.fileno(), 4096)
+                st.require(bool(chunk), f"candidate exited before answering {identifier}")
+                self.buffer.extend(chunk)
+                st.require(len(self.buffer) <= 4096, f"candidate response too long at {identifier}")
+            line, _, remainder = self.buffer.partition(b"\n")
+            self.buffer = bytearray(remainder)
+            return (line + b"\n").decode("ascii")
+        except (BrokenPipeError, OSError) as error:
+            raise training.TrainingError(f"candidate failed at {identifier}: {error}") from error
+        except UnicodeDecodeError as error:
+            raise training.TrainingError(f"candidate response is not ASCII at {identifier}") from error
 
     def decision(self, identifier, board, side):
         pins_before = self._check_live_pins()
@@ -185,10 +223,10 @@ class Player(rf.Candidate):
         reset = dict(self.last_request)
         move = self.choose(identifier, board, side)
         raw = dict(self.last_request)
-        deadline = time.monotonic() + self.timeout
+        deadline = None if self.timeout is None else time.monotonic() + self.timeout
         while True:
-            remaining = deadline - time.monotonic()
-            st.require(remaining > 0, "candidate search diagnostic timed out")
+            remaining = None if deadline is None else deadline - time.monotonic()
+            st.require(remaining is None or remaining > 0, "candidate search diagnostic timed out")
             try:
                 line = self.diagnostic_lines.get(timeout=remaining)
             except queue.Empty:
@@ -257,7 +295,7 @@ def query_oracle(query, runtime, timeout, attempt):
         argv = oracle.oracle_argv(Path(runtime["binary"]["path"]), full_solve_profile(),
                                  solve_path=path, child_query=False)
         # The supervisor enforces the aggregate descendant RSS and cumulative
-        # wall ceiling in addition to this per-query watchdog.
+        # wall ceiling; timeout=None removes the per-query watchdog.
         try:
             response = subprocess.run(argv, cwd=runtime["working_directory"], timeout=timeout,
                                       capture_output=True, text=True)

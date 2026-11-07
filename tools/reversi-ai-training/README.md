@@ -804,7 +804,7 @@ rtk python3 tools/reversi-ai-training/start_table32.py prepare \
   --oracle-runtime-receipt "$TABLE32_ORACLE_RECEIPT" \
   --seed 2026110102 --train-per-prefix 12 --validation-per-prefix 2 --test-per-prefix 2 \
   --early-positions 256 --max-steps 1000 --max-proposals 1000 \
-  --decision-timeout-seconds 310 --time-limit-ms 300000 --node-limit 10000000 \
+  --decision-timeout-seconds 0 --time-limit-ms 0 --node-limit 0 \
   --max-wall-seconds 259200 --producer-rss-kib 262144 --child-rss-kib 1572864
 
 # 人間が開始する。最初の20局までで一旦停止する。
@@ -820,13 +820,15 @@ rtk python3 tools/reversi-ai-training/start_table32.py verify \
 割り当てる既定値で計128局（96/16/16）、序盤は最大256root（preflightの2rootを含む）。
 `--early-candidates-per-phase` 既定32、`--pool-sequences` 既定10000、
 60phaseそれぞれの `--max-steps` / `--max-proposals` は既定1000である。
+探索のtime/node/timeoutは3つとも0で各局面を無制限に待つ。制限する場合は3つとも正数とし、
+timeoutは探索時間を超える値とする。run全体のwall/RSS予算は無制限設定でも有効。
 これらは実行回数の操作項目であり、未学習phaseや不足データを成功扱いする切替ではない。
 candidate binary、Oracle runtime、入力、seed、学習・探索設定、timeout、規模または資源予算を変更する場合は
 新rootでprepareする。採用モデル・Godot・Playgroundの既定は自動で変わらない。
 [追加の人間指示](../../docs/specs/reversi-ai.md#2026-11-01-追加の人間指示-開始scriptとパラメータによる拡大)は、
 toolingが初回規模を超える設定を拒否する旧記述より優先する。大規模化も同じscriptの
 seed（既定2026110101）・局数・序盤pool/label数・step/提案数・wall/RSS引数を変更して新rootへ凍結できる。
-探索時間300000ms、node数10000000、protocol timeout310秒の上限と、同一rootの設定固定は維持する。
+探索時間・node数・protocol timeoutの既定上限はなく、同一rootの設定は固定する。
 拡大runも人間が別途開始し、この実装では実行しない。
 
 Ctrl-C（SIGINT）/SIGTERMや資源停止ではprocess groupを終了し、完成済みのgame、label、query、

@@ -2157,7 +2157,11 @@ producerのclean commit、候補CLI、generator、学習実装、入力・設定
 
 teacher policyは学習中Bではなく凍結S0、自前探索11/11/11・exact25・turn・book off。
 序盤labelは同じS0の17/17/17・exact25による探索値を使う。
-探索限界は300000ms/10000000 nodes、protocol timeout310秒。
+既定では探索ごとの時間・node数および応答待ちの上限を設けず、完全読みを待つ。
+operatorが上限を明示した場合はrunのmanifestに凍結し、全ての生成・診断・再生に同じ設定を適用する。
+run全体のwall/RSS上限と中断・再開は別に維持する。Oracle照合にも同じ応答待ち方針を適用する。
+長い探索中は監督側が60秒ごとに現在のphase/unitと累計経過時間を `status=running` として表示する。
+これは生存状況の表示であり、探索の完了率ではない。
 これは上流と同じ強さを保証せず、自前teacherの質という明示的差分である。
 
 大量生成前に、保存されたproject-owned合法棋譜から空き20/22/24/25を各3、
@@ -2285,7 +2289,7 @@ offline再構成が上限内で完了すれば学習サイクルの成立を確�
 - 生成128局、序盤label最大256root（preflightの先頭2は内数）、preflight自前exact12decision、
   Oracle最大24query、各phase1,000step、export各phase1,000提案、比較最大200局。
   新しい学習cycleは1回だけとし、無制限反復や自動データ拡大はしない。
-- child timeout310秒、RSS≤1,572,864KiB、producer RSS≤262,144KiB。
+- child応答待ちの既定上限なし、RSS≤1,572,864KiB、producer RSS≤262,144KiB。
   学習はphase単位にstream/loadして上限を守る。run累積実行wallは72時間まで、
   同一root全attemptの累積を永続保存し、resumeでリセットしない。人間待ち時間は除く。
 - prepareに実行commit・source/input/CLI/Oracle identity・seed・全設定・上限を保存する。

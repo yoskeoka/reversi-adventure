@@ -100,6 +100,60 @@ class Table32InputTests(unittest.TestCase):
         with self.assertRaises(training.TrainingError):
             inputs.validate_decision(late["board"], late["side"], {**result, "exact": False}, inputs.TEACHER_SETTINGS)
 
+    def test_unbounded_search_settings_propagate_and_replay(self):
+        limits = {"time_limit_ms": None, "node_limit": None}
+        def expensive_choose(identifier, board, side, settings):
+            self.assertIsNone(settings["time_limit_ms"])
+            self.assertIsNone(settings["node_limit"])
+            return {**fixture_choose(identifier, board, side, settings),
+                    "nodes": 10000001, "elapsed_ms": 300001}
+
+        spec = inputs.generation_plan()[0]
+        game = inputs.generate_game(spec, expensive_choose, limits=limits)
+        self.assertIsNone(game["teacher_settings"]["node_limit"])
+        self.assertTrue(inputs.replay_game(game, limits=limits))
+        with self.assertRaises(training.TrainingError):
+            inputs.replay_game(game)
+        roots = inputs.early_pool(max_sequences=1, total_limit=12)["roots"]
+        label = inputs.label_early(roots[0], expensive_choose, limits=limits)
+        self.assertEqual(inputs.early_row(label, limits=limits)["split"], "train")
+        with self.assertRaises(training.TrainingError):
+            inputs.early_row(label)
+
+        roots = [{"id": f"r{empty}-{index}", "empty": empty, "board": rf.INITIAL,
+                  "side": "B", "canonical_key": "initial"}
+                 for empty in (20, 22, 24, 25) for index in range(3)]
+        decisions = [expensive_choose(root["id"], root["board"], root["side"],
+                                      inputs.search_settings(inputs.TEACHER_SETTINGS, limits))
+                     for root in roots]
+        queries = []
+        for root, decision in zip(roots, decisions):
+            for query in (inputs.oracle_query(root), inputs.oracle_query(root, child_move=decision["move"])):
+                queries.append({"query": query, "result": {"score": 0, "exact": True,
+                                "completed_depth": query["depth"]}})
+        with mock.patch.object(inputs, "early_row"):
+            self.assertEqual(inputs.validate_preflight(roots, decisions, queries, [label, label],
+                                                       limits=limits)["status"], "feasible")
+            with self.assertRaises(training.TrainingError):
+                inputs.validate_preflight(roots, decisions, queries, [label, label])
+
+    def test_explicit_search_limits_enforced_and_recorded(self):
+        limits = {"time_limit_ms": 5, "node_limit": 5}
+        spec = inputs.generation_plan()[0]
+        game = inputs.generate_game(spec, fixture_choose, limits=limits)
+        self.assertEqual(game["teacher_settings"]["node_limit"], 5)
+        self.assertTrue(inputs.replay_game(game, limits=limits))
+        with self.assertRaises(training.TrainingError):
+            inputs.replay_game(game, limits={"time_limit_ms": None, "node_limit": None})
+        board, side = game["opening"]["board"], game["opening"]["side"]
+        decision = fixture_choose("x", board, side, inputs.TEACHER_SETTINGS)
+        with self.assertRaises(training.TrainingError):
+            inputs.validate_decision(board, side, {**decision, "nodes": 6},
+                                     inputs.search_settings(inputs.TEACHER_SETTINGS, limits))
+        with self.assertRaises(training.TrainingError):
+            inputs.validate_decision(board, side, {**decision, "elapsed_ms": 6},
+                                     inputs.search_settings(inputs.TEACHER_SETTINGS, limits))
+
     def test_pass_preserves_phase_and_terminal_winner_empty(self):
         board = "WB." + "W" * 61
         after, side = inputs.advance(board, "B", "pass")

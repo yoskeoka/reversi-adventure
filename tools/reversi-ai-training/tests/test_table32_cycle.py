@@ -4,6 +4,7 @@ import io
 import random
 import sys
 import tempfile
+import types
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -77,6 +78,21 @@ def runtime():
 
 
 class Table32CycleTests(unittest.TestCase):
+    def test_search_limits_are_explicitly_unbounded_or_consistently_bounded(self):
+        base = dict(train_per_prefix=12, validation_per_prefix=2, test_per_prefix=2,
+                    early_positions=256, early_candidates_per_phase=32, pool_sequences=10000,
+                    max_steps=1000, max_proposals=1000, decision_timeout_seconds=0,
+                    time_limit_ms=0, node_limit=0)
+        unbounded = cycle.settings(types.SimpleNamespace(**base))
+        self.assertIsNone(unbounded["time_limit_ms"])
+        self.assertIsNone(unbounded["node_limit"])
+        self.assertIsNone(unbounded["decision_timeout_seconds"])
+        bounded = cycle.settings(types.SimpleNamespace(**{**base, "time_limit_ms": 600000,
+            "node_limit": 100000000, "decision_timeout_seconds": 610}))
+        self.assertEqual(bounded["node_limit"], 100000000)
+        with self.assertRaises(training.TrainingError):
+            cycle.settings(types.SimpleNamespace(**{**base, "node_limit": 10000000}))
+
     @classmethod
     def setUpClass(cls):
         cls.roots = inputs.preflight_roots(historical_game(seed) for seed in range(4))
@@ -160,7 +176,7 @@ class Table32CycleTests(unittest.TestCase):
 
     def test_disk_extraction_uses_scaled_plan_counts(self):
         specs = inputs.generation_plan(train_per_prefix=24, validation_per_prefix=4, test_per_prefix=4)
-        def replay(game):
+        def replay(game, *, limits=None):
             spec = game["spec"]
             return [{"id": spec["game_id"], "game_id": spec["game_id"], "split": spec["split"],
                      "prefix_length": spec["prefix_length"], "phase": 0, "board": rf.INITIAL,
