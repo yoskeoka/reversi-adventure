@@ -827,9 +827,13 @@ candidate binary、Oracle runtime、入力、seed、学習・探索設定、time
 新rootでprepareする。採用モデル・Godot・Playgroundの既定は自動で変わらない。
 [追加の人間指示](../../docs/specs/reversi-ai.md#2026-11-01-追加の人間指示-開始scriptとパラメータによる拡大)は、
 toolingが初回規模を超える設定を拒否する旧記述より優先する。大規模化も同じscriptの
-seed（既定2026110101）・局数・序盤pool/label数・step/提案数・wall/RSS引数を変更して新rootへ凍結できる。
+seed（既定2026110102）・局数・序盤pool/label数・step/提案数・wall/RSS引数を変更して新rootへ凍結できる。
 探索時間・node数・protocol timeoutの既定上限はなく、同一rootの設定は固定する。
 拡大runも人間が別途開始し、この実装では実行しない。
+
+RSSは物理メモリに常駐する量で、swapは含まない。取得できないsampleは `resources.json` と
+attemptの `completion.json` に欠測として記録し、取得失敗だけでは停止しない。観測できた
+値が上限を超えればprocess groupを停止し、未完成単位は再開時にやり直す。
 
 Ctrl-C（SIGINT）/SIGTERMや資源停止ではprocess groupを終了し、完成済みのgame、label、query、
 Adam step、export提案のatomic receipt/stateと過去attemptを保持する。同じroot・clean commit・

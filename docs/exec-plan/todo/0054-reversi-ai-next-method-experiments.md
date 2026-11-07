@@ -218,6 +218,8 @@ offline再構成が上限内で完了すれば学習サイクルの成立を確�
   Oracle最大24query、各phase1,000step、export各phase1,000提案、比較最大200局。
   新しい学習cycleは1回だけとし、無制限反復や自動データ拡大はしない。
 - child応答待ちの既定上限なし、RSS≤1,572,864KiB、producer RSS≤262,144KiB。
+  これはswapを含まない実メモリの観測上限。取得できないsampleは欠測と記録して続行し、
+  観測できた部分だけでも超過した場合は停止する。欠測中の遵守は保証されない。
   学習はphase単位にstream/loadして上限を守る。run累積実行wallは72時間まで、
   同一root全attemptの累積を永続保存し、resumeでリセットしない。人間待ち時間は除く。
 - prepareに実行commit・source/input/CLI/Oracle identity・seed・全設定・上限を保存する。
