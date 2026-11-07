@@ -129,6 +129,28 @@ class Table32InputTests(unittest.TestCase):
         with self.assertRaises(training.TrainingError):
             inputs.early_row(bad)
 
+    def test_early_pool_skips_terminal_and_forced_pass_positions(self):
+        # The original production generation seed has a genuine terminal after ten
+        # placements. Seed 364 reaches a legal forced pass within eleven.
+        terminal_spec = next(spec for spec in inputs.generation_plan(seed=2026110101)
+                             if spec["game_id"] == "p24-validation-00")
+        terminal_stream = terminal_spec["stream_seed"]
+        with self.assertRaisesRegex(training.TrainingError, "random prefix reached terminal"):
+            inputs.random_prefix({"prefix_length": 11, "stream_seed": terminal_stream})
+
+        with mock.patch.object(inputs, "seed_stream", side_effect=[terminal_stream, 364, 0]):
+            pool = inputs.early_pool(max_sequences=3, total_limit=64, candidate_limit=32)
+
+        self.assertEqual(pool["exclusions"]["terminal"], 1)
+        self.assertEqual(pool["exclusions"]["forced-pass"], 1)
+        self.assertEqual(len(pool["sequences"][0]["moves"]), 10)
+        self.assertIn("pass", pool["sequences"][1]["moves"])
+        self.assertEqual([root["placements"] for root in pool["roots"][:12]], list(range(12)))
+        for root in pool["candidates"]:
+            self.assertTrue(rf.legal_moves(root["board"], root["side"]))
+        # The post-pass position is still eligible: do not discard the whole sequence.
+        self.assertTrue(any("pass" in root["prefix"] for root in pool["candidates"]))
+
     def test_cross_split_duplicates_removed_from_every_split(self):
         key = inputs.position_key(rf.INITIAL, "B")
         raw = [{"id": "a", "split": "train", "canonical_key": key, "phase": 0, "prefix_length": 12},

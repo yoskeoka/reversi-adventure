@@ -802,7 +802,7 @@ rtk python3 tools/reversi-ai-training/start_table32.py prepare \
   --candidate-executable "$TABLE32_CANDIDATE_EXECUTABLE" \
   --candidate-source-commit "$TABLE32_CANDIDATE_SOURCE_COMMIT" \
   --oracle-runtime-receipt "$TABLE32_ORACLE_RECEIPT" \
-  --seed 2026110101 --train-per-prefix 12 --validation-per-prefix 2 --test-per-prefix 2 \
+  --seed 2026110102 --train-per-prefix 12 --validation-per-prefix 2 --test-per-prefix 2 \
   --early-positions 256 --max-steps 1000 --max-proposals 1000 \
   --decision-timeout-seconds 310 --time-limit-ms 300000 --node-limit 10000000 \
   --max-wall-seconds 259200 --producer-rss-kib 262144 --child-rss-kib 1572864

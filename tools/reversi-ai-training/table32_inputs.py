@@ -13,7 +13,7 @@ import reinforcement as rf
 import training
 
 VERSION = "reversi-ai-table32-inputs-v1"
-SEED = 2026110101
+SEED = 2026110102
 PREFIX_LENGTHS = (12, 18, 21, 24, 30, 40, 50, 58)
 SPLIT_COUNTS = {"train": 12, "validation": 2, "test": 2}
 TEACHER_SETTINGS = {"opening_depth": 11, "midgame_depth": 11,
@@ -74,7 +74,7 @@ def advance(board: str, side: str, move: str) -> tuple[str, str]:
     return board, rf.other(side)
 
 
-def random_prefix(spec: dict) -> dict:
+def random_prefix(spec: dict, *, allow_terminal: bool = False) -> dict:
     require(type(spec.get("prefix_length")) is int and 0 <= spec["prefix_length"] <= 58,
             "invalid prefix length")
     board, side, turns, placements = rf.INITIAL, "B", [], 0
@@ -85,8 +85,9 @@ def random_prefix(spec: dict) -> dict:
             move = legal[rng.randrange(len(legal))]
             placements += 1
         else:
-            require(bool(rf.legal_moves(board, rf.other(side))),
-                    "random prefix reached terminal before requested placements")
+            if not rf.legal_moves(board, rf.other(side)):
+                require(allow_terminal, "random prefix reached terminal before requested placements")
+                break
             move = "pass"
         turns.append({"board": board, "side": side, "move": move, "kind": "random-prefix"})
         board, side = advance(board, side, move)
@@ -181,11 +182,19 @@ def early_pool(seed: int = SEED, *, max_sequences: int = 10000,
     sequences, exclusions = [], Counter()
     for sequence in range(max_sequences):
         spec = {"prefix_length": 11, "stream_seed": seed_stream(seed, "early-pool", 11, "train", sequence)}
-        prefix = random_prefix(spec)
+        prefix = random_prefix(spec, allow_terminal=True)
         turns = prefix["turns"]
         sequences.append({"sequence": sequence, "moves": [turn["move"] for turn in turns]})
         board, side, moves, length = rf.INITIAL, "B", [], 0
         for cursor in range(len(turns) + 1):
+            legal = rf.legal_moves(board, side)
+            if not legal:
+                exclusions["forced-pass" if rf.legal_moves(board, rf.other(side)) else "terminal"] += 1
+                if cursor < len(turns):
+                    move = turns[cursor]["move"]
+                    board, side = advance(board, side, move)
+                    moves.append(move)
+                continue
             key = position_key(board, side)
             pool = pools[length]
             if key in pool:
