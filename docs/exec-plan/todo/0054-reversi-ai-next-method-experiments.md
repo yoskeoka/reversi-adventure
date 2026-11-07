@@ -130,7 +130,9 @@ Oracleの値は診断だけで教師へ戻さない。
 
 ### 3. 自前生成：128局＋序盤最大256局面
 
-- master seed `2026110101`、用途/length/split/gameからSHA-256でstreamを分離する。
+- master seedはrunごとに固定し、用途/length/split/gameからSHA-256でstreamを分離する。
+  初回`2026110101`では指定prefix前に終局する局が見つかったため、失敗原本を保存し、
+  次run全体のseedを`2026110102`とする。
   prefix長はplacementsで12/18/21/24/30/40/50/58の8層。
   各層train12・validation2・test2局、合計96/16/16=128局。
   1prefixから1継続対局とし、標準黒先手からsorted合法手を一様抽出する。D4変換を別の独立局数に数えない。
@@ -140,10 +142,12 @@ Oracleの値は診断だけで教師へ戻さない。
   generation上限128 terminal games、1局120decision、採用教師全split合計15,360行。
 - splitはgame生成前に固定し、canonical D4 board-and-sideの交差重複を全splitから除外する。
   除外ID・原本/採用keys・game・side・prefix長・phase別の数を保存する。
-  空split・欠けたprefix層・非終局・不正手・資源超過で停止。失敗局を別の都合のよい開局へ交換しない。
+  空split・欠けたprefix層・非終局・不正手・資源超過で停止。教師による継続を開始した失敗局は交換しない。
+  指定手数までに終局する開始候補は教師へ渡さず、記録の上で決定的な次候補を選ぶ（各局最大1,000件）。
 - 序盤は標準初期盤面から0–11 placementsのunique到達局面を別poolとして収集する。
   決定的なseed付き合法prefix列を最大10,000本走査し、各occupied phaseの候補上限32、
   全体上限256root。各lengthの先頭1rootを先に確保し、残りはcanonical keyのseed付きhash順位で採用する。
+  11手前の終局はその候補列を打ち切り、終局・パス必須局面を教師候補から除外する。
   12個のlength全てが非空でなければ停止。pool原本・prefixと採用/除外根拠を保存する。
   depth17の完成探索値のみをそのrootの教師とし、timeout/浅いfallbackは採用しない。
 - 序盤256は全列挙約束ではない。上流の11手全列挙からの明示的縮小である。
