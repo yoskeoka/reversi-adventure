@@ -14,49 +14,57 @@ import table32_store as st
 
 
 def process_resources(group, worker):
-    """Sample the worker and aggregate descendants, failing closed on lost metrics."""
-    own, children, user, system = 0, 0, 0.0, 0.0
+    """Sample observed RSS; missing entries make child totals lower bounds."""
+    own, children, user, system = None, 0, 0.0, 0.0
+    unavailable = []
     ticks = os.sysconf("SC_CLK_TCK")
-    worker_seen = False
     paths = [Path(f"/proc/{worker}/stat")]
-    paths.extend(path for path in Path("/proc").glob("[0-9]*/stat")
-                 if path.parent.name != str(worker))
+    try:
+        paths.extend(path for path in Path("/proc").glob("[0-9]*/stat")
+                     if path.parent.name != str(worker))
+    except OSError:
+        unavailable.append({"pid": None, "field": "scan"})
     for path in paths:
+        pid = int(path.parent.name)
+        is_worker = pid == worker
         try:
             raw = path.read_text()
             fields = raw[raw.rfind(")") + 2:].split()
-            is_worker = int(path.parent.name) == worker
             if not is_worker and int(fields[2]) != group:
                 continue
+            user += int(fields[11]) / ticks
+            system += int(fields[12]) / ticks
+        except FileNotFoundError:
+            # A non-worker process may exit while /proc is enumerated.
+            if is_worker:
+                unavailable.append({"pid": pid, "field": "stat"})
+            continue
+        except (OSError, ValueError, IndexError):
+            unavailable.append({"pid": pid, "field": "stat"})
+            continue
+        try:
             status = (path.parent / "status").read_text()
             rss = next((int(line.split()[1]) for line in status.splitlines()
                         if line.startswith("VmRSS:")), None)
             if rss is None:
-                # A fast worker can exit between reading stat and status.
-                # Recheck its current state before treating a missing RSS as
-                # an unavailable live-process metric.
                 state = next((line.split()[1] for line in status.splitlines()
                               if line.startswith("State:")), None)
                 if fields[0] not in ("Z", "X") and state not in ("Z", "X"):
                     fresh = path.read_text()
                     state = fresh[fresh.rfind(")") + 2:].split()[0]
-                st.require(fields[0] in ("Z", "X") or state in ("Z", "X"),
-                           "process RSS metrics unavailable")
-                rss = 0
+                if fields[0] in ("Z", "X") or state in ("Z", "X"):
+                    rss = 0
+                else:
+                    unavailable.append({"pid": pid, "field": "rss"})
+                    continue
             if is_worker:
                 own = rss
-                worker_seen = True
             else:
                 children += rss
-            user += int(fields[11]) / ticks
-            system += int(fields[12]) / ticks
-        except (FileNotFoundError, ProcessLookupError):
-            if path.parent.name == str(worker):
-                raise ProcessLookupError("worker resource metrics unavailable")
-            continue
-    st.require(worker_seen, "worker resource metrics unavailable")
+        except (OSError, ValueError, IndexError):
+            unavailable.append({"pid": pid, "field": "status"})
     return {"producer_rss_kib": own, "children_rss_kib": children,
-            "user_seconds": user, "system_seconds": system}
+            "user_seconds": user, "system_seconds": system, "unavailable": unavailable}
 
 
 def _terminate_group(pid):
@@ -163,6 +171,7 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
         failure_error = None
         status = None
         next_heartbeat = 60.0
+        incomplete_samples = 0
         try:
             while True:
                 done, status = os.waitpid(pid, os.WNOHANG)
@@ -171,16 +180,14 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                 elapsed = time.monotonic() - started
                 st.atomic(attempt / "budget.json", {
                     "charged_seconds": min(remaining, math.ceil(elapsed + 1))})
-                try:
-                    metrics = process_resources(pid, pid)
-                except ProcessLookupError:
-                    done, status = os.waitpid(pid, os.WNOHANG)
-                    if done:
-                        break
-                    raise
+                metrics = process_resources(pid, pid)
+                if metrics["unavailable"]:
+                    incomplete_samples += 1
                 for name in peak:
-                    peak[name] = max(peak[name], metrics[name])
+                    if metrics[name] is not None:
+                        peak[name] = max(peak[name], metrics[name])
                 st.atomic(attempt / "resources.json", {**metrics, "peaks": peak,
+                                                       "rss_incomplete_samples": incomplete_samples,
                                                        "elapsed_seconds": elapsed})
                 if elapsed >= next_heartbeat:
                     context = st.read(attempt / "progress.json")
@@ -189,7 +196,8 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                           file=sys.stderr, flush=True)
                     next_heartbeat = elapsed + 60.0
                 st.require(elapsed < remaining, "cumulative wall budget exceeded")
-                st.require(metrics["producer_rss_kib"] <= manifest["limits"]["producer_rss_kib"],
+                st.require(metrics["producer_rss_kib"] is None
+                           or metrics["producer_rss_kib"] <= manifest["limits"]["producer_rss_kib"],
                            "producer RSS budget exceeded")
                 st.require(metrics["children_rss_kib"] <= manifest["limits"]["child_rss_kib"],
                            "child process group RSS budget exceeded")
@@ -215,7 +223,8 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
         st.atomic(attempt / "completion.json", st.seal({**provenance,
             "status": "complete" if status == 0 and failure is None else "failed",
             "exit_status": status, "reason": failure, "charged_seconds": charged_attempt,
-            "elapsed_seconds": elapsed, "peak_resources": peak}), once=True)
+            "elapsed_seconds": elapsed, "peak_resources": peak,
+            "rss_incomplete_samples": incomplete_samples}), once=True)
         context=st.read(attempt/"progress.json")
         succeeded=status==0 and failure is None
         print(f"table32 phase={context['phase']} unit={context['unit']} completed={int(succeeded)} "
