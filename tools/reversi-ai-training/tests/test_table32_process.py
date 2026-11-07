@@ -39,13 +39,13 @@ class Table32ProcessTests(unittest.TestCase):
             if path.name == "stat":
                 return "123 (fixture) S 1 123 " + "0 " * 20
             return "Name: fixture\n"
-        with patch.object(Path, "glob", return_value=[]), patch.object(Path, "read_text", reader):
+        with patch.object(process.os, "listdir", return_value=[]), patch.object(Path, "read_text", reader):
             metrics = process.process_resources(123, 123)
             self.assertIsNone(metrics["producer_rss_kib"])
             self.assertIn({"pid": 123, "field": "rss"}, metrics["unavailable"])
         def zombie(path, *args, **kwargs):
             return reader(path).replace(") S ", ") Z ")
-        with patch.object(Path, "glob", return_value=[]), patch.object(Path, "read_text", zombie):
+        with patch.object(process.os, "listdir", return_value=[]), patch.object(Path, "read_text", zombie):
             metrics = process.process_resources(123, 123)
             self.assertEqual(metrics["producer_rss_kib"], 0)
             self.assertEqual(metrics["unavailable"], [])
@@ -58,19 +58,29 @@ class Table32ProcessTests(unittest.TestCase):
             if pid == 124:
                 return "Name: fixture\nState:\tS (sleeping)\n"
             return f"Name: fixture\nVmRSS:\t{100 if pid == 123 else 200} kB\n"
-        paths = [Path("/proc/124/stat"), Path("/proc/125/stat")]
-        with patch.object(Path, "glob", return_value=paths), patch.object(Path, "read_text", reader):
+        with patch.object(process.os, "listdir", return_value=["124", "125"]), patch.object(Path, "read_text", reader):
             metrics = process.process_resources(123, 123)
         self.assertEqual(metrics["producer_rss_kib"], 100)
         self.assertEqual(metrics["children_rss_kib"], 200)
         self.assertIn({"pid": 124, "field": "rss"}, metrics["unavailable"])
 
     def test_unreadable_worker_stat_marks_rss_unknown(self):
-        with patch.object(Path, "glob", return_value=[]), \
+        with patch.object(process.os, "listdir", return_value=[]), \
                 patch.object(Path, "read_text", side_effect=PermissionError("fixture")):
             metrics = process.process_resources(123, 123)
         self.assertIsNone(metrics["producer_rss_kib"])
         self.assertIn({"pid": 123, "field": "stat"}, metrics["unavailable"])
+
+    def test_denied_process_enumeration_is_recorded_and_does_not_stop_worker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(process.os, "listdir", side_effect=PermissionError("fixture")):
+                process.supervise(root, manifest(), lambda attempt: time.sleep(.3))
+            attempt = root / "attempts/0000"
+            completion = st.read(attempt / "completion.json")
+            self.assertEqual(completion["status"], "complete")
+            self.assertGreater(completion["rss_incomplete_samples"], 0)
+            self.assertIn({"pid": None, "field": "scan"}, st.read(attempt / "resources.json")["unavailable"])
 
     def test_unavailable_rss_does_not_stop_worker_and_is_recorded(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -125,7 +135,7 @@ class Table32ProcessTests(unittest.TestCase):
             if path.name == "stat":
                 return "123 (fixture) R 1 123 " + "0 " * 20
             return "Name: fixture\nState:\tZ (zombie)\n"
-        with patch.object(Path,"glob",return_value=[]),patch.object(Path,"read_text",reader):
+        with patch.object(process.os,"listdir",return_value=[]),patch.object(Path,"read_text",reader):
             self.assertEqual(process.process_resources(123,123)["producer_rss_kib"],0)
 
     def test_worker_failure_preserves_stage_settings_and_raw_log_digest(self):

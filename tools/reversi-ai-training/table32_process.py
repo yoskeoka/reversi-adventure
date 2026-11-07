@@ -20,8 +20,8 @@ def process_resources(group, worker):
     ticks = os.sysconf("SC_CLK_TCK")
     paths = [Path(f"/proc/{worker}/stat")]
     try:
-        paths.extend(path for path in Path("/proc").glob("[0-9]*/stat")
-                     if path.parent.name != str(worker))
+        paths.extend(Path("/proc") / name / "stat" for name in os.listdir("/proc")
+                     if name.isascii() and name.isdecimal() and name != str(worker))
     except OSError:
         unavailable.append({"pid": None, "field": "scan"})
     for path in paths:
