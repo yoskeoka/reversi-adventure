@@ -33,6 +33,24 @@ def saved_game(seed):
 
 
 class Table32InputTests(unittest.TestCase):
+    def test_partial_teacher_exact_threshold_and_legacy_default(self):
+        limits = {"time_limit_ms": None, "node_limit": None,
+                  "teacher_exact_solver_empty_squares": 20}
+        settings = inputs.search_settings(inputs.TEACHER_SETTINGS, limits)
+        self.assertEqual(settings["exact_solver_empty_squares"], 20)
+        self.assertEqual(inputs.search_settings(inputs.TEACHER_SETTINGS)["exact_solver_empty_squares"], 25)
+        spec = {"prefix_length": 39, "stream_seed": inputs.seed_stream(inputs.SEED, "threshold", 39)}
+        opening = inputs.generation_opening(spec)
+        board, side = opening["board"], opening["side"]
+        self.assertEqual(board.count("."), 21)
+        decision = {"move": sorted(rf.legal_moves(board, side))[0], "score": 0,
+                    "completed_depth": 11, "exact": False, "nodes": 1, "elapsed_ms": 1}
+        inputs.validate_decision(board, side, decision, settings)
+        with self.assertRaises(training.TrainingError):
+            inputs.validate_decision(board, side, decision, inputs.TEACHER_SETTINGS)
+        with self.assertRaises(training.TrainingError):
+            inputs.search_settings(inputs.TEACHER_SETTINGS, {**limits, "teacher_exact_solver_empty_squares": True})
+
     def test_frozen_plan_counts_domains_and_repeatability(self):
         plan = inputs.generation_plan()
         self.assertEqual(len(plan), 128)

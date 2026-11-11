@@ -53,14 +53,18 @@ def phase(board: str) -> int:
 
 
 def generation_plan(seed: int = SEED, train_per_prefix: int = 12,
-                    validation_per_prefix: int = 2, test_per_prefix: int = 2) -> list[dict]:
+                    validation_per_prefix: int = 2, test_per_prefix: int = 2,
+                    prefix_lengths: tuple[int, ...] = PREFIX_LENGTHS) -> list[dict]:
     counts = {"train": train_per_prefix, "validation": validation_per_prefix, "test": test_per_prefix}
     require(all(type(value) is int and value > 0 for value in counts.values()),
             "split counts must be positive integers")
+    require(bool(prefix_lengths) and len(set(prefix_lengths)) == len(prefix_lengths)
+            and all(type(length) is int and 0 <= length <= 58 for length in prefix_lengths),
+            "invalid generation prefix lengths")
     return [{"game_id": f"p{length:02}-{split}-{ordinal:02}", "split": split,
              "prefix_length": length, "ordinal": ordinal, "seed": seed,
              "stream_seed": seed_stream(seed, "generation", length, split, ordinal)}
-            for length in PREFIX_LENGTHS for split, count in counts.items()
+            for length in prefix_lengths for split, count in counts.items()
             for ordinal in range(count)]
 
 
@@ -121,6 +125,10 @@ def search_settings(base: dict, limits: dict | None = None) -> dict:
         for name in ("time_limit_ms", "node_limit"):
             require(name in limits, f"missing search setting {name}")
             effective[name] = limits[name]
+        if "teacher_exact_solver_empty_squares" in limits:
+            exact = limits["teacher_exact_solver_empty_squares"]
+            require(type(exact) is int and 0 <= exact <= 60, "invalid teacher exact threshold")
+            effective["exact_solver_empty_squares"] = exact
     for name in ("time_limit_ms", "node_limit"):
         value = effective[name]
         require(value is None or (type(value) is int and value > 0), f"invalid search setting {name}")

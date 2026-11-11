@@ -20,6 +20,13 @@ def verify_attempts(root,manifest):
         budget=st.read(path/"budget.json")["charged_seconds"]
         st.require(type(budget) in (int,float) and math.isfinite(budget) and budget>=0,
                    "attempt budget invalid")
+        if "attempt_wall_seconds" in provenance:
+            limit = provenance["attempt_wall_seconds"]
+            st.require(type(limit) is int and limit >= 0 and (limit == 0 or budget <= limit),
+                       "attempt wall budget invalid")
+        else:
+            st.require(charged + budget <= manifest["limits"]["wall_seconds"],
+                       "cumulative execution budget exceeded")
         charged+=budget
         completion=path/"completion.json"
         if completion.exists():
@@ -35,7 +42,6 @@ def verify_attempts(root,manifest):
                 target=(path/relative).resolve()
                 st.require(path.resolve() in target.parents and st.pin(target)["sha256"]==sha,
                            "failure raw log changed")
-    st.require(charged<=manifest["limits"]["wall_seconds"],"cumulative execution budget exceeded")
     return charged
 
 

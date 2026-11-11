@@ -30,8 +30,10 @@ def full_solve_profile():
     return profile
 
 
-def player_argv(executable,artifact,config,evaluator):
+def player_argv(executable,artifact,config,evaluator,fallback_artifact=None):
     argv=[str(executable),"--evaluator",evaluator,"--trained-artifact",str(artifact)]
+    if fallback_artifact is not None:
+        argv += ["--fallback-artifact", str(fallback_artifact)]
     for key in ("opening_depth","midgame_depth","endgame_depth",
                 "exact_solver_empty_squares"):
         argv += ["--"+key.replace("_","-"),str(config[key])]
@@ -68,8 +70,10 @@ def validate_raw_decision(identifier, board, side, result, config, *, expected_p
         inputs.validate_decision(board, side, result, config)
         return result
     if expected_pins is not None:
+        fallback = expected_pins.get("fallback")
         st.require(raw.get("argv")==player_argv(expected_pins["executable"]["path"],
-            expected_pins["artifact"]["path"],config,expected_evaluator),"candidate search argv differs")
+            expected_pins["artifact"]["path"],config,expected_evaluator,
+            fallback["path"] if fallback else None),"candidate search argv differs")
     st.require(raw.get("request") == f"{identifier}\t{board}\t{side}"
                and raw.get("stdout") == f"{identifier}\t{result.get('move')}\n",
                "candidate raw request/response mismatch")
@@ -123,15 +127,16 @@ def diagnostic_fields(line):
 class Player(rf.Candidate):
     """Reuse the protocol transport with explicit evaluator and saved raw bytes."""
     def __init__(self, executable, artifact, config, timeout, *, evaluator="trained", log=None,
-                 expected_pins=None):
+                 expected_pins=None, fallback_artifact=None):
         self.expected_pins = expected_pins
         if expected_pins is not None:
-            st.require(set(expected_pins) == {"executable", "artifact"}
+            st.require(set(expected_pins) == ({"executable", "artifact", "fallback"} if fallback_artifact is not None else {"executable", "artifact"})
                        and Path(expected_pins["executable"]["path"]).resolve() == Path(executable).resolve()
-                       and Path(expected_pins["artifact"]["path"]).resolve() == Path(artifact).resolve(),
+                       and Path(expected_pins["artifact"]["path"]).resolve() == Path(artifact).resolve()
+                       and (fallback_artifact is None or Path(expected_pins["fallback"]["path"]).resolve() == Path(fallback_artifact).resolve()),
                        "candidate live pin paths differ")
             self._check_live_pins()
-        argv = player_argv(executable,artifact,config,evaluator)
+        argv = player_argv(executable,artifact,config,evaluator,fallback_artifact)
         self.evaluator=evaluator
         self.log, self.log_lock, self.argv = Path(log) if log else None, threading.Lock(), argv
         self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

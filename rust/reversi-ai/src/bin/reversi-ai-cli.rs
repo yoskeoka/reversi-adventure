@@ -3,7 +3,7 @@ use std::io::{self, BufRead, Write};
 use reversi_ai::config::{AiConfig, DecisionMoveConfig};
 use reversi_ai::eval::novice::NoviceEvaluator;
 use reversi_ai::eval::strategic::StrategicEvaluator;
-use reversi_ai::eval::table32::Table32Evaluator;
+use reversi_ai::eval::table32::{PartialTable32Evaluator, Table32Evaluator};
 use reversi_ai::eval::trained::TrainedEvaluator;
 use reversi_ai::eval::BoardEvaluator;
 use reversi_ai::search::{SearchBudget, SearchEngine, SearchOutcome, SearchResult};
@@ -12,7 +12,7 @@ use reversi_engine::types::{Color, Position};
 use std::time::{Duration, Instant};
 
 fn usage() -> &'static str {
-    "usage: reversi-ai-cli [--evaluator strategic|novice|trained|trained-table32] [--trained-artifact PATH] [--opening-depth N] \
+    "usage: reversi-ai-cli [--evaluator strategic|novice|trained|trained-table32|trained-table32-partial] [--trained-artifact PATH] [--fallback-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
 [--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--unbounded-search] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v2)"
 }
@@ -44,6 +44,7 @@ fn parse_u64(value: &str, option: &str) -> Result<u64, String> {
 struct CliArgs {
     evaluator: String,
     trained_artifact: Option<String>,
+    fallback_artifact: Option<String>,
     config: AiConfig,
     time_limit: Duration,
     node_limit: Option<u64>,
@@ -76,6 +77,7 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
     let mut print_advisor_config_id = false;
     let mut decision_move_phases = false;
     let mut trained_artifact = None;
+    let mut fallback_artifact = None;
 
     while let Some(option) = args.next() {
         let mut value = || {
@@ -106,6 +108,7 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
                 has_explicit_config = true;
             }
             "--trained-artifact" => trained_artifact = Some(value()?),
+            "--fallback-artifact" => fallback_artifact = Some(value()?),
             "--time-limit-ms" => {
                 time_limit = Duration::from_millis(parse_u64(&value()?, "--time-limit-ms")?);
                 explicit_search_limit = true;
@@ -126,22 +129,33 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
 
     if !matches!(
         evaluator.as_str(),
-        "strategic" | "novice" | "trained" | "trained-table32"
+        "strategic" | "novice" | "trained" | "trained-table32" | "trained-table32-partial"
     ) {
         return Err(format!("unknown evaluator {evaluator:?}"));
     }
     if unbounded_search && explicit_search_limit {
         return Err("--unbounded-search conflicts with --time-limit-ms and --node-limit".into());
     }
-    if matches!(evaluator.as_str(), "trained" | "trained-table32") && trained_artifact.is_none() {
+    if matches!(
+        evaluator.as_str(),
+        "trained" | "trained-table32" | "trained-table32-partial"
+    ) && trained_artifact.is_none()
+    {
         return Err(
             "--evaluator trained or trained-table32 requires --trained-artifact PATH".to_string(),
         );
     }
-    if !matches!(evaluator.as_str(), "trained" | "trained-table32") && trained_artifact.is_some() {
+    if !matches!(
+        evaluator.as_str(),
+        "trained" | "trained-table32" | "trained-table32-partial"
+    ) && trained_artifact.is_some()
+    {
         return Err(
             "--trained-artifact requires --evaluator trained or trained-table32".to_string(),
         );
+    }
+    if (evaluator == "trained-table32-partial") != fallback_artifact.is_some() {
+        return Err("--fallback-artifact is required only for trained-table32-partial".into());
     }
     if !matches!(exact_cache_scope.as_str(), "game" | "turn") {
         return Err("--exact-cache-scope must be game or turn".to_string());
@@ -181,6 +195,7 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, St
     Ok(CliArgs {
         evaluator,
         trained_artifact,
+        fallback_artifact,
         config,
         time_limit,
         node_limit,
@@ -271,6 +286,19 @@ fn main() -> Result<(), String> {
             args.trained_artifact
                 .as_deref()
                 .expect("table32 path was validated"),
+        )?),
+        "trained-table32-partial" => Box::new(PartialTable32Evaluator::from_path(
+            args.trained_artifact
+                .as_deref()
+                .expect("partial path was validated"),
+            Box::new(
+                TrainedEvaluator::from_path(
+                    args.fallback_artifact
+                        .as_deref()
+                        .expect("fallback path was validated"),
+                )
+                .map_err(|error| error.to_string())?,
+            ),
         )?),
         _ => unreachable!("evaluator was checked while parsing arguments"),
     };
@@ -433,6 +461,47 @@ mod tests {
         assert_eq!(parsed.evaluator, "trained-table32");
         assert_eq!(parsed.trained_artifact.as_deref(), Some("candidate.json"));
         assert!(args(&["--trained-artifact", "candidate.json"]).is_err());
+    }
+
+    #[test]
+    fn partial_table32_requires_both_artifacts() {
+        assert!(args(&[
+            "--evaluator",
+            "trained-table32-partial",
+            "--trained-artifact",
+            "partial.json"
+        ])
+        .is_err());
+        assert!(args(&["--fallback-artifact", "legacy.json"]).is_err());
+        let parsed = args(&[
+            "--evaluator",
+            "trained-table32-partial",
+            "--trained-artifact",
+            "partial.json",
+            "--fallback-artifact",
+            "legacy.json",
+        ])
+        .unwrap();
+        assert_eq!(parsed.fallback_artifact.as_deref(), Some("legacy.json"));
+    }
+
+    #[test]
+    fn shallow_heuristic_search_finishes_requested_depth_with_one_empty() {
+        let board = board_from_flat_string(&format!("WB.{}", "W".repeat(61))).unwrap();
+        let evaluator = StrategicEvaluator::new();
+        let config = AiConfig::new(4, 4, 4).with_exact_solver_empty_squares(0);
+        let (selected, result) = choose_move(
+            &mut SearchEngine::new(),
+            &evaluator,
+            &board,
+            Color::White,
+            &config,
+            &SearchBudget::unbounded(),
+        );
+        assert_eq!(selected, "c1");
+        assert_eq!(result.completed_depth, 4);
+        assert!(!result.exact);
+        assert_eq!(result.score, Some(64));
     }
 
     #[test]

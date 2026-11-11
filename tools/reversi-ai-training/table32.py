@@ -135,6 +135,18 @@ def settings(args):
                and (value["decision_timeout_seconds"] is not None) == bounded
                and (not bounded or value["decision_timeout_seconds"] * 1000 > value["time_limit_ms"]),
                "search limits must all be zero or all positive with timeout exceeding search time")
+    start = getattr(args, "phase_start", None)
+    end = getattr(args, "phase_end", None)
+    prefix = getattr(args, "generation_prefix", None)
+    if any(v is not None for v in (start, end, prefix)):
+        st.require(all(type(v) is int for v in (start, end, prefix))
+                   and 0 <= prefix <= start <= end <= 59 and prefix <= 58,
+                   "partial training requires valid phase-start, phase-end and generation-prefix")
+        st.require(end >= 12, "partial evaluation requires phase-end >= 12: "
+                   "depth-4 matches require independent openings at phase 8 or later")
+        value["target_phases"] = list(range(start, end + 1))
+        value["generation_prefix"] = prefix
+        value["teacher_exact_solver_empty_squares"] = 20
     return value
 
 
@@ -150,6 +162,12 @@ def prepare(args):
     candidate_commit = candidate_source_commit(args.candidate_source_commit)
     candidate = st.pin(args.candidate_executable)
     st.require(os.access(candidate["path"], os.X_OK), "candidate executable is not executable")
+    if "target_phases" in config:
+        help_result = subprocess.run([candidate["path"], "--help"], capture_output=True,
+                                     text=True, timeout=10, check=False)
+        st.require(help_result.returncode == 0 and "trained-table32-partial" in help_result.stdout
+                   and "--fallback-artifact" in help_result.stdout,
+                   "candidate executable does not support partial table32 and fallback")
     seed=training.require_int(args.seed,"seed",0,2**64-1)
     producer = clean_commit()
     baseline = st.pin(checkout / "models/trained/0019-20261020-02.json")
@@ -159,8 +177,9 @@ def prepare(args):
                                       runtime_receipt=args.oracle_runtime_receipt, seed=seed)
     oracle_identity = originals["oracle_source_identity"]
     runtime = oracle_identity["runtime"]
+    prefixes = (config["generation_prefix"],) if "target_phases" in config else inputs.PREFIX_LENGTHS
     specs = inputs.generation_plan(seed, config["train_per_prefix"],
-                                   config["validation_per_prefix"], config["test_per_prefix"])
+                                   config["validation_per_prefix"], config["test_per_prefix"], prefixes)
     limits = {**st.LIMITS, "games": len(specs), "early_labels": config["early_positions"],
               "training_steps_per_phase": config["max_steps"],
               "export_proposals_per_phase": config["max_proposals"],
@@ -179,6 +198,18 @@ def prepare(args):
                 "settings": config, "limits": limits, "generation_plan": specs,
                 "input_kind": "production", "acceptance_reservation": "not-yet-selected",
                 "production_authorized": False}
+    import_root = getattr(args, "import_games_from", None)
+    if import_root is not None:
+        st.require("target_phases" in config, "import requires partial training")
+        import table32_import
+        manifest["imported_games"] = table32_import.completed_games(
+            import_root, teacher_settings=inputs.search_settings(inputs.TEACHER_SETTINGS, config),
+            baseline=baseline, target_phases=config["target_phases"])
+        imported_ids = {game["spec"]["game_id"]
+                        for game in manifest["imported_games"]["games"]}
+        overlap = sorted(imported_ids.intersection(spec["game_id"] for spec in specs))
+        st.require(not overlap,
+                   "imported game IDs collide with planned games: " + ", ".join(overlap))
     root.mkdir(parents=True, exist_ok=False)
     st.atomic(root / "snapshot.json", snapshot, once=True)
     st.atomic(root / "manifest.json", manifest, once=True)
@@ -344,12 +375,13 @@ def phase_precision_metrics(rows, floats, integers):
                 "export_rate": clipped_export / count if count else None}}
 
 
-def opening_plan(seed, forbidden):
+def opening_plan(seed, forbidden, *, prefix_min=12, prefix_max=30):
     import random
     rng = random.Random(inputs.seed_stream(seed, "independent-match"))
     result, seen = [], set(forbidden)
     for attempt in range(10000):
-        spec = {"prefix_length": 12 + rng.randrange(19), "stream_seed": rng.getrandbits(256)}
+        spec = {"prefix_length": prefix_min + rng.randrange(prefix_max - prefix_min + 1),
+                "stream_seed": rng.getrandbits(256)}
         try:
             opening = inputs.random_prefix(spec)
         except training.TrainingError:
@@ -364,10 +396,11 @@ def opening_plan(seed, forbidden):
     raise ValueError("independent match opening pool exhausted")
 
 
-def match_game(index, opening, choose):
+def match_game(index, opening, choose, config=None):
     board, side, decisions = opening["board"], opening["side"], []
-    config = {**inputs.TEACHER_SETTINGS, "opening_depth": 12, "midgame_depth": 12,
-              "endgame_depth": 12, "exact_solver_empty_squares": 16}
+    if config is None:
+        config = {**inputs.TEACHER_SETTINGS, "opening_depth": 12, "midgame_depth": 12,
+                  "endgame_depth": 12, "exact_solver_empty_squares": 16}
     while inputs.rf.legal_moves(board, side) or inputs.rf.legal_moves(board, inputs.rf.other(side)):
         st.require(len(decisions) < 120, "match decision cap exceeded")
         player = "candidate" if (side == "B") == (index % 2 == 0) else "baseline"
@@ -390,7 +423,8 @@ def learn_phases(driver, folder):
     """
     m, config = driver.m, driver.m["settings"]
     states = driver.root / "trained-phases"
-    for phase in range(60):
+    selected = config.get("target_phases", list(range(60)))
+    for phase in selected:
         train = extraction.phase_rows(folder, "train", phase)
         validation = extraction.phase_rows(folder, "validation", phase)
         state = optimizer.initial_state(train, validation, phase=phase, max_steps=config["max_steps"])
@@ -411,7 +445,7 @@ def learn_phases(driver, folder):
     del state, following, train, validation
 
     phase_weights, phase_diagnostics = {}, []
-    for phase in range(60):
+    for phase in selected:
         train = extraction.phase_rows(folder, "train", phase)
         validation = extraction.phase_rows(folder, "validation", phase)
         state = st.read(states / f"p{phase:02}.json")
@@ -468,20 +502,29 @@ def cycle(driver, snapshot, *, extend=False):
     candidate_pin = None
     def check(identifier, board, side, value, setting, kind="teacher"):
         effective = {**setting,"time_limit_ms":config["time_limit_ms"],"node_limit":config["node_limit"]}
+        if kind == "teacher" and "teacher_exact_solver_empty_squares" in config:
+            effective["exact_solver_empty_squares"] = config["teacher_exact_solver_empty_squares"]
         pins = ({"executable":m["candidate_executable"],
                  "artifact":candidate_pin if kind=="candidate" else m["baseline"]}
                 if m["input_kind"]=="production" else None)
+        if pins is not None and kind == "candidate" and partial:
+            pins["fallback"] = m["baseline"]
         return players.validate_raw_decision(identifier,board,side,value,effective,expected_pins=pins,
-                    expected_evaluator="trained-table32" if kind=="candidate" else "trained")
+                    expected_evaluator=("trained-table32-partial" if partial else "trained-table32")
+                    if kind=="candidate" else "trained")
     choose, solve = (driver.providers if driver.providers is not None else production_providers(driver))
     driver.computed("input-verification", "snapshot", {"snapshot_digest": m["snapshot_digest"],
                      "limits": m["limits"], "acceptance_reservation": "not-yet-selected"})
-    if driver.attempt:
+    target_phases = config.get("target_phases")
+    partial = target_phases is not None
+    if driver.attempt and not partial:
         st.atomic(driver.attempt / "progress.json", {"phase": "teacher-preflight", "unit": "early-pool"})
-    pool = inputs.early_pool(m["seed"], max_sequences=config["pool_sequences"],
-                             total_limit=config["early_positions"], candidate_limit=config["early_candidates_per_phase"])
-    driver.computed("teacher-preflight", "early-pool", pool)
-    roots = snapshot["preflight_roots"]
+    pool = ({"roots": [], "candidates": []} if partial else
+            inputs.early_pool(m["seed"], max_sequences=config["pool_sequences"],
+                              total_limit=config["early_positions"], candidate_limit=config["early_candidates_per_phase"]))
+    if not partial:
+        driver.computed("teacher-preflight", "early-pool", pool)
+    roots = [] if partial else snapshot["preflight_roots"]
     decisions, queries, labels = [], [], []
     for index, position in enumerate(roots):
         identifier, board, side = position["id"], position["board"], position["side"]
@@ -501,13 +544,17 @@ def cycle(driver, snapshot, *, extend=False):
             check(position["id"],position["board"],position["side"],label["decision"],inputs.EARLY_SETTINGS)
             inputs.early_row(label, limits=config)
         labels.append(driver.unit("teacher-preflight", position["id"], create_label, validate_label))
-    driver.computed("teacher-preflight", "complete", inputs.validate_preflight(roots, decisions, queries, labels, limits=config))
+    if not partial:
+        driver.computed("teacher-preflight", "complete", inputs.validate_preflight(roots, decisions, queries, labels, limits=config))
     if hasattr(driver,"close_players"):
         driver.close_players()
     gen_start = driver.journal.cursor
     for index, spec in enumerate(m["generation_plan"]):
         def generate():
-            return inputs.generate_game(spec, lambda i,b,s,c: choose("teacher",i,b,s,c), limits=config)
+            import table32_game_checkpoint
+            checkpoint = table32_game_checkpoint.GameDecisions(
+                root, m, spec, lambda i,b,s,c: choose("teacher",i,b,s,c), check)
+            return inputs.generate_game(spec, checkpoint, limits=config)
         def validate_game(game):
             st.require(game["spec"] == spec, "game plan changed")
             inputs.replay_game(game, limits=config)
@@ -529,11 +576,18 @@ def cycle(driver, snapshot, *, extend=False):
     label_end = driver.journal.cursor
     if hasattr(driver,"close_players"):
         driver.close_players()
+    imported_games = m.get("imported_games", {}).get("games", [])
+    if imported_games:
+        import table32_import
+        table32_import.validate_splits([*imported_games, *_events(root, gen_start, gen_end)])
     def data_build(folder):
         import itertools
-        return extraction.build(_events(root, gen_start, gen_end),
+        return extraction.build(itertools.chain(imported_games, _events(root, gen_start, gen_end)),
             itertools.chain(labels, _events(root, label_start, label_end)),
-            m["generation_plan"], folder, early_limit=config["early_positions"], limits=config)
+            [game["spec"] for game in imported_games] + m["generation_plan"], folder,
+            early_limit=config["early_positions"], limits=config, target_phases=target_phases,
+            expected_prefixes=sorted({spec["prefix_length"] for spec in m["generation_plan"]}),
+            trusted_import_count=len(imported_games))
     folder = root / "extracted"
     def validate_extraction(saved):
         with tempfile.TemporaryDirectory(prefix="table32-replay-") as temporary:
@@ -546,7 +600,8 @@ def cycle(driver, snapshot, *, extend=False):
     phase_weights, phase_diagnostics, paused = learn_phases(driver, folder)
     if paused is not None:
         return final_report(m, driver, "export-paused", {"resume_phase": "export", "phase": paused})
-    artifact = model.make_artifact(phase_weights, {"trainer_version":model.TRAINER,"seed":m["seed"],
+    artifact_factory = model.make_partial_artifact if partial else model.make_artifact
+    artifact = artifact_factory(phase_weights, {"trainer_version":model.TRAINER,"seed":m["seed"],
         "input_manifest_digest": st.digest(m),"producer_commit":m["producer_commit"],
         "source_kind":"project-owned","optimizer":model.OPTIMIZER})
     driver.computed("export", "candidate-artifact", artifact)
@@ -555,23 +610,32 @@ def cycle(driver, snapshot, *, extend=False):
     else:
         st.require(st.read(root / "candidate-artifact.json") == artifact,"candidate artifact changed")
     candidate_pin=st.pin(root/"candidate-artifact.json")
+    if partial:
+        baseline_weights = st.read(m["baseline"]["path"])["weights"]
+        def predict(board, side):
+            return model.predict_partial(artifact, board, side,
+                                         lambda b,s: training.predict(baseline_weights, b, s))
+    else:
+        def predict(board, side):
+            return model.predict(artifact, board, side)
     def metrics(split):
         squared, count = 0, 0
         for phase in range(60):
             for row in extraction.phase_rows(folder,split,phase):
-                squared += (model.predict(artifact,row["board"],row["side"])-row["target"])**2
+                squared += (predict(row["board"],row["side"])-row["target"])**2
                 count += 1
         return {"rows":count,"squared_error":squared,"mse":squared/count if count else None}
     diagnostics = {"phases":phase_diagnostics,"test_once_after_candidate_freeze":metrics("test"),
         "coverage":extracted,"test_limitations":"small sample; phase coverage may be missing"}
     for name in ("validation","held_out"):
         rows = snapshot[name]
-        squared = sum((model.predict(artifact,r["board"],r["side"])-r["target"])**2 for r in rows)
+        squared = sum((predict(r["board"],r["side"])-r["target"])**2 for r in rows)
         diagnostics["exposed_reference_"+name] = {"rows":len(rows),"squared_error":squared,
                                                 "mse":squared/len(rows) if rows else None}
     corpus_regret = {"baseline":0,"candidate":0}
-    match_config = {**inputs.TEACHER_SETTINGS,"opening_depth":12,"midgame_depth":12,
-                    "endgame_depth":12,"exact_solver_empty_squares":16}
+    match_config = {**inputs.TEACHER_SETTINGS,"opening_depth":4 if partial else 12,
+                    "midgame_depth":4 if partial else 12,"endgame_depth":4 if partial else 12,
+                    "exact_solver_empty_squares":0 if partial else 16}
     st.require(len(snapshot["corpus"])==len(snapshot["golden"]),"corpus/golden size differs")
     for index,(position,golden) in enumerate(zip(snapshot["corpus"],snapshot["golden"])):
         board,side=position["board"],position["side_to_move"]
@@ -597,7 +661,23 @@ def cycle(driver, snapshot, *, extend=False):
         game = st.read(root / "units" / f"{index:07d}.json")["value"]
         forbidden.update(inputs.position_key(t["board"],t["side"]) for t in game["opening"]["turns"]+game["decisions"])
         forbidden.update(inputs.position_key(game["terminal_board"],s) for s in ("B","W"))
-    openings = driver.computed("match20","opening-plan",opening_plan(m["seed"],forbidden))
+    for game in imported_games:
+        forbidden.update(inputs.position_key(t["board"],t["side"]) for t in game["opening"]["turns"]+game["decisions"])
+        forbidden.update(inputs.position_key(game["terminal_board"],s) for s in ("B","W"))
+    profile = None
+    if partial:
+        prefix_min = max(8, min(target_phases) - 4)
+        prefix_max = min(58, max(8, max(target_phases) - 4))
+        profile = {"name": "partial-depth4-v1", "opening_depth": 4,
+                   "midgame_depth": 4, "endgame_depth": 4,
+                   "exact_solver_empty_squares": 0,
+                   "opening_prefix_min": prefix_min, "opening_prefix_max": prefix_max,
+                   "target_phases": target_phases}
+        profile = driver.computed("match20", "profile", profile)
+        openings = driver.computed("match20", "opening-plan", opening_plan(
+            m["seed"], forbidden, prefix_min=prefix_min, prefix_max=prefix_max))
+    else:
+        openings = driver.computed("match20","opening-plan",opening_plan(m["seed"],forbidden))
     points, results, overlaps = 0, [], set()
     exposure=set(forbidden)
     exposure.update(o["canonical_key"] for o in openings)
@@ -608,7 +688,7 @@ def cycle(driver, snapshot, *, extend=False):
         phase = "match20" if index < 20 else "explicit-match200"
         opening = openings[index//2]
         def create_match():
-            return match_game(index,opening,choose)
+            return match_game(index,opening,choose,match_config)
         def validate_match(saved):
             rows = iter(saved["decisions"])
             def replay_choose(player,i,b,s,c):
@@ -616,7 +696,7 @@ def cycle(driver, snapshot, *, extend=False):
                 st.require(row["player"]==player and row["board"]==b and row["side"]==s,"match state differs")
                 check(i,b,s,row,c,player)
                 return {k:v for k,v in row.items() if k not in ("board","side","player")}
-            st.require(match_game(index,opening,replay_choose)==saved,"match legal replay differs")
+            st.require(match_game(index,opening,replay_choose,match_config)==saved,"match legal replay differs")
             st.require(next(rows,None) is None,"extra match decisions")
         game = driver.unit(phase,f"game-{index:03d}",create_match,validate_match,index+1,20 if index<20 else 200)
         points += game["points"]
@@ -635,10 +715,13 @@ def cycle(driver, snapshot, *, extend=False):
         st.atomic_bytes(exposure_path,exposure_bytes,once=True)
     else:
         st.require(exposure_path.read_bytes()==exposure_bytes,"exposure keys do not reconstruct")
-    return final_report(m,driver,outcome,{"matches":results,"points":points,"games":count,
+    detail = {"matches":results,"points":points,"games":count,
         "candidate_digest":model.digest(artifact),"diagnostics_digest":st.digest(diagnostics),
         "incidental_overlap_keys":sorted(overlaps),"exposure_keys":{
-            "path":exposure_path.name,"sha256":training.sha256_file(exposure_path),"count":len(exposure)}})
+            "path":exposure_path.name,"sha256":training.sha256_file(exposure_path),"count":len(exposure)}}
+    if profile is not None:
+        detail["match_profile"] = profile
+    return final_report(m,driver,outcome,detail)
 
 
 def final_report(manifest, driver, outcome, detail):
@@ -666,12 +749,15 @@ def production_providers(driver):
         if key not in instances:
             effective = {**config,"time_limit_ms":driver.m["settings"]["time_limit_ms"],
                          "node_limit":driver.m["settings"]["node_limit"]}
+            partial = kind == "candidate" and "target_phases" in driver.m["settings"]
+            pins = {"executable": driver.m["candidate_executable"], "artifact": st.pin(artifact)}
+            if partial:
+                pins["fallback"] = driver.m["baseline"]
             instances[key] = players.Player(driver.m["candidate_executable"]["path"],artifact,effective,
                 driver.m["settings"]["decision_timeout_seconds"],
-                evaluator="trained-table32" if kind=="candidate" else "trained",
-                log=driver.attempt / "decisions.jsonl",expected_pins={
-                    "executable":driver.m["candidate_executable"],
-                    "artifact":st.pin(artifact)})
+                evaluator=("trained-table32-partial" if partial else "trained-table32") if kind=="candidate" else "trained",
+                log=driver.attempt / "decisions.jsonl",expected_pins=pins,
+                fallback_artifact=driver.m["baseline"]["path"] if partial else None)
         return instances[key].decision(identifier,board,side)
     def solve(query):
         st.require(driver.execute,"offline replay attempted to start Oracle")
@@ -696,11 +782,13 @@ def run(args):
         st.require(screening.get("outcome")=="awaiting-explicit-continue" and screening.get("points",0)>=10
                    and not (root/"report.json").exists(),
                    "--extend-to-200 requires a completed20-game screen of at least10 points")
+    partial = "target_phases" in manifest["settings"]
+    phase_count = len(manifest["settings"]["target_phases"]) if partial else 60
     for unit,total in (("planned-games",manifest["limits"]["games"]),
-                       ("planned-early-labels",manifest["limits"]["early_labels"]),
-                       ("planned-preflight-decisions",12),("planned-oracle-queries",24),
-                       ("planned-training-steps",60*config_value(manifest,"max_steps")),
-                       ("planned-export-proposals",60*config_value(manifest,"max_proposals")),
+                       ("planned-early-labels",0 if partial else manifest["limits"]["early_labels"]),
+                       ("planned-preflight-decisions",0 if partial else 12),("planned-oracle-queries",0 if partial else 24),
+                       ("planned-training-steps",phase_count*config_value(manifest,"max_steps")),
+                       ("planned-export-proposals",phase_count*config_value(manifest,"max_proposals")),
                        ("planned-matches",200 if args.extend_to_200 else 20)):
         print(f"table32 phase=input-verification unit={unit} completed=0 total={total} elapsed_seconds=0.000 status=planned",file=sys.stderr,flush=True)
     def worker(attempt):
@@ -732,7 +820,8 @@ def run(args):
             if hasattr(driver,"close_players"):
                 driver.close_players()
     table32_process.supervise(root,manifest,worker,progress_every=args.progress_every,
-                               resume_from=args.resume_from,extend=args.extend_to_200)
+                               resume_from=args.resume_from,extend=args.extend_to_200,
+                               attempt_wall_seconds=getattr(args, "attempt_wall_seconds", None))
     return st.read(root/"status.json")
 
 
@@ -748,6 +837,10 @@ def main(argv):
                  "candidate-executable","oracle-runtime-receipt"):
         prep.add_argument("--"+name,type=Path,required=True)
     prep.add_argument("--candidate-source-commit", required=True)
+    prep.add_argument("--phase-start", type=int)
+    prep.add_argument("--phase-end", type=int)
+    prep.add_argument("--generation-prefix", type=int)
+    prep.add_argument("--import-games-from", type=Path)
     defaults={"seed":inputs.SEED,"train-per-prefix":12,"validation-per-prefix":2,"test-per-prefix":2,
         "early-positions":256,"early-candidates-per-phase":32,"pool-sequences":10000,
         "max-steps":1000,"max-proposals":1000,"decision-timeout-seconds":0,
@@ -761,6 +854,8 @@ def main(argv):
         if action=="run":
             command.add_argument("--resume-from",choices=st.PHASES)
             command.add_argument("--extend-to-200",action="store_true")
+            command.add_argument("--attempt-wall-seconds", type=int, default=None,
+                                 help="elapsed-time limit for this attempt; 0 means unlimited")
     args=parser.parse_args(argv)
     if args.action=="prepare": result=prepare(args)
     elif args.action=="run": result=run(args)

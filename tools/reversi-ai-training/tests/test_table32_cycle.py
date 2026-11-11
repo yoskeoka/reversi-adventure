@@ -78,6 +78,78 @@ def runtime():
 
 
 class Table32CycleTests(unittest.TestCase):
+    def test_partial_candidate_training_and_diagnostics_replay(self):
+        manifest, snapshot = self.fixture()
+        manifest["generation_plan"] = inputs.generation_plan(
+            train_per_prefix=1, validation_per_prefix=1, test_per_prefix=1,
+            prefix_lengths=(40,))
+        manifest["settings"]["target_phases"] = [40]
+        manifest["settings"]["teacher_exact_solver_empty_squares"] = 20
+        imported_spec = inputs.generation_plan(prefix_lengths=(12,))[0]
+        imported = inputs.generate_game(imported_spec,
+            lambda i,b,s,c: Providers().choose("teacher",i,b,s,c), limits=manifest["settings"])
+        manifest["imported_games"] = {"games": [imported]}
+        spec50 = {"prefix_length": 50, "stream_seed": inputs.seed_stream(inputs.SEED, "test", 50)}
+        opening50 = inputs.generation_opening(spec50)
+        snapshot["validation"] = [{"board": opening50["board"], "side": opening50["side"], "target": 0}]
+        manifest["snapshot_digest"] = st.digest(snapshot)
+        providers = Providers()
+        def quick_match(index, opening, choose, config=None):
+            self.assertEqual(config["opening_depth"], 4)
+            self.assertEqual(config["exact_solver_empty_squares"], 0)
+            return {"index": index, "pair": index // 2, "opening": opening,
+                    "decisions": [], "terminal_board": opening["board"],
+                    "score_candidate": -1, "points": 0}
+        replay = inputs.replay_game
+        def replay_new_only(game, **kwargs):
+            if game["spec"]["game_id"] == imported_spec["game_id"]:
+                raise AssertionError("saved imported game replayed")
+            return replay(game, **kwargs)
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(io.StringIO()):
+            root = Path(temporary)
+            baseline = root / "baseline.json"
+            st.atomic(baseline, {"weights": {}})
+            manifest["baseline"] = {"path": str(baseline)}
+            with mock.patch.object(cycle, "match_game", side_effect=quick_match), \
+                 mock.patch.object(inputs, "replay_game", side_effect=replay_new_only), \
+                 mock.patch.object(training, "predict", wraps=training.predict) as fallback:
+                report = self.execute_fixture(root, manifest, snapshot, providers)
+                self.assertEqual(report["outcome"], "not-improved-at-pilot-scale")
+                self.assertEqual(report["match_profile"]["name"], "partial-depth4-v1")
+                self.assertEqual((report["match_profile"]["opening_prefix_min"],
+                                  report["match_profile"]["opening_prefix_max"]), (36, 36))
+                extracted = next(st.read(path)["value"] for path in (root / "units").glob("*.json")
+                                 if st.read(path)["phase"] == "extraction")
+                self.assertEqual(extracted["games"], 4)
+                self.assertFalse(extracted["prefix_missing"])
+                saved_game = next(st.read(path)["value"] for path in (root / "units").glob("*.json")
+                                  if st.read(path)["phase"] == "generation")
+                self.assertEqual(saved_game["teacher_settings"]["exact_solver_empty_squares"], 20)
+                checkpoint_path = next((root / "generation-checkpoints").rglob("000.json"))
+                self.assertEqual(st.read(checkpoint_path)["settings"]["exact_solver_empty_squares"], 20)
+                artifact = st.read(root / "candidate-artifact.json")
+                self.assertEqual(set(artifact["weights"]), {"40"})
+                self.assertGreater(fallback.call_count, 0)
+                self.assertEqual(verifier.verify(root, manifest=manifest, snapshot=snapshot), report)
+
+    def test_partial_cycle_skips_preflight_and_extracts_only_selected_phases(self):
+        manifest, snapshot = self.fixture()
+        manifest["generation_plan"] = inputs.generation_plan(prefix_lengths=(40,))[:1]
+        manifest["settings"]["target_phases"] = [40, 41]
+        providers = Providers()
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(io.StringIO()):
+            root = Path(temporary)
+            with mock.patch.object(inputs, "early_pool", side_effect=AssertionError("early pool called")):
+                report = self.execute_fixture(root, manifest, snapshot, providers)
+                self.assertFalse(providers.queries)
+                self.assertTrue(all(kind == "teacher" and identifier.startswith("p40-train-")
+                                    for kind, identifier in providers.calls))
+                self.assertEqual(report["coverage"]["early_labels"], 0)
+                self.assertEqual(report["coverage"]["games"], 1)
+                rows = report["coverage"]["raw_phase_rows"]["train"]
+                self.assertTrue(all(not count for phase, count in rows.items() if int(phase) not in (40, 41)))
+                self.assertEqual(verifier.verify(root, manifest=manifest, snapshot=snapshot), report)
+
     def test_search_limits_are_explicitly_unbounded_or_consistently_bounded(self):
         base = dict(train_per_prefix=12, validation_per_prefix=2, test_per_prefix=2,
                     early_positions=256, early_candidates_per_phase=32, pool_sequences=10000,
@@ -92,6 +164,12 @@ class Table32CycleTests(unittest.TestCase):
         self.assertEqual(bounded["node_limit"], 100000000)
         with self.assertRaises(training.TrainingError):
             cycle.settings(types.SimpleNamespace(**{**base, "node_limit": 10000000}))
+        with self.assertRaisesRegex(training.TrainingError, "phase-end >= 12"):
+            cycle.settings(types.SimpleNamespace(**{**base, "phase_start": 1,
+                "phase_end": 10, "generation_prefix": 1}))
+        shallow = cycle.settings(types.SimpleNamespace(**{**base, "phase_start": 1,
+            "phase_end": 12, "generation_prefix": 1}))
+        self.assertEqual(shallow["target_phases"], list(range(1, 13)))
 
     @classmethod
     def setUpClass(cls):
@@ -173,6 +251,26 @@ class Table32CycleTests(unittest.TestCase):
         self.assertEqual(st.match_outcome(10, 20), "awaiting-explicit-continue")
         self.assertEqual(st.match_outcome(100, 200), "not-improved-at-pilot-scale")
         self.assertEqual(st.match_outcome(100.5, 200), "promising-at-pilot-scale")
+
+    def test_partial_openings_target_endgame_and_match_uses_supplied_profile(self):
+        openings = cycle.opening_plan(inputs.SEED, set(), prefix_min=36, prefix_max=45)
+        self.assertEqual(len(openings), 100)
+        placements = {60 - opening["board"].count(".") for opening in openings}
+        self.assertTrue(placements <= set(range(36, 46)))
+        self.assertGreater(len(placements), 1)
+        config = {**inputs.TEACHER_SETTINGS, "opening_depth": 4, "midgame_depth": 4,
+                  "endgame_depth": 4, "exact_solver_empty_squares": 0}
+        provider = Providers()
+        seen = []
+        def choose(kind, identifier, board, side, selected):
+            seen.append(selected)
+            return provider.choose(kind, identifier, board, side, selected)
+        cycle.match_game(0, openings[0], choose, config)
+        self.assertTrue(seen)
+        self.assertTrue(all(value == config for value in seen))
+        shallow_openings = cycle.opening_plan(inputs.SEED, set(), prefix_min=8, prefix_max=8)
+        self.assertEqual(len(shallow_openings), 100)
+        self.assertTrue(all(60 - opening["board"].count(".") == 8 for opening in shallow_openings))
 
     def test_disk_extraction_uses_scaled_plan_counts(self):
         specs = inputs.generation_plan(train_per_prefix=24, validation_per_prefix=4, test_per_prefix=4)

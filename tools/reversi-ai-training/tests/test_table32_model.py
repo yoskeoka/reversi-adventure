@@ -46,6 +46,20 @@ class Table32ModelTests(unittest.TestCase):
         self.assertEqual(m.runtime_score(15+15), 1)
         self.assertEqual(m.runtime_score(15)+m.runtime_score(15), 0)
 
+    def test_partial_phase_selection_and_legacy_fallback(self):
+        provenance = self.fixture["artifact"]["provenance"]
+        artifact = m.make_partial_artifact({10: {m.OFFSETS[16]+2: 32}, 30: {}}, provenance)
+        m.validate_partial_artifact(artifact)
+        with self.assertRaises(ValueError):
+            m.validate_artifact(artifact)
+        initial = self.fixture["cases"][0]["board"]
+        self.assertEqual(m.predict_partial(artifact, initial, "B", lambda *_: 17), 1)
+        self.assertEqual(m.predict_partial(artifact, "B" * 48 + "." * 16, "B", lambda *_: 17), 17)
+        with self.assertRaises(ValueError):
+            m.make_partial_artifact({}, provenance)
+        with self.assertRaises(ValueError):
+            m.make_partial_artifact({60: {}}, provenance)
+
     def test_d4_predictions_share_tables_and_reverse_pairs(self):
         for case in self.fixture["cases"]:
             board, side = case["board"], case["side"]
