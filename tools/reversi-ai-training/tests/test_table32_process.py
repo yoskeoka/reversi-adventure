@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import table32_process as process
 import table32_store as st
+from table32_verify import verify_attempts
 
 
 def manifest(wall=10, rss=262144):
@@ -129,6 +130,48 @@ class Table32ProcessTests(unittest.TestCase):
                                  for path in (root / "attempts").iterdir()), 2)
             with self.assertRaisesRegex(Exception, "cumulative execution budget exhausted"):
                 process.supervise(root, settings, worker)
+
+    def test_attempt_budget_can_resume_after_prior_slice_is_exhausted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = manifest(wall=1)
+            with self.assertRaisesRegex(Exception, "attempt wall budget exceeded"):
+                process.supervise(root, settings, lambda attempt: time.sleep(2),
+                                  attempt_wall_seconds=1)
+            first = st.read(root / "attempts/0000/completion.json")
+            self.assertEqual(first["attempt_wall_seconds"], 1)
+            self.assertEqual(first["charged_seconds"], 1)
+            process.supervise(root, settings, lambda attempt: None, attempt_wall_seconds=2)
+            second = st.read(root / "attempts/0001/completion.json")
+            self.assertEqual(second["prior_charged_seconds"], 1)
+            self.assertEqual(second["attempt_wall_seconds"], 2)
+            self.assertEqual(second["status"], "complete")
+            self.assertEqual(verify_attempts(root, settings), 2)
+            with self.assertRaisesRegex(Exception, "cumulative execution budget exhausted"):
+                process.supervise(root, settings, lambda attempt: None)
+
+    def test_unlimited_attempt_bypasses_exhausted_old_budget_without_resetting_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = manifest(wall=1)
+            process.supervise(root, settings, lambda attempt: None)
+            process.supervise(root, settings, lambda attempt: time.sleep(.3),
+                              attempt_wall_seconds=0)
+            completion = st.read(root / "attempts/0001/completion.json")
+            self.assertEqual(completion["attempt_wall_seconds"], 0)
+            self.assertEqual(completion["prior_charged_seconds"], 1)
+            self.assertGreaterEqual(completion["charged_seconds"], 1)
+            self.assertEqual(completion["status"], "complete")
+            self.assertEqual(verify_attempts(root, settings), 2)
+
+    def test_invalid_attempt_budget_rejected_without_creating_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for invalid in (-1, True, 1.5):
+                with self.assertRaisesRegex(Exception, "attempt-wall-seconds"):
+                    process.supervise(root, manifest(), lambda attempt: None,
+                                      attempt_wall_seconds=invalid)
+            self.assertFalse((root / "attempts").exists())
 
     def test_worker_exiting_between_stat_and_status_has_no_live_rss(self):
         def reader(path, *args, **kwargs):

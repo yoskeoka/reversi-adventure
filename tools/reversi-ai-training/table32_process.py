@@ -105,10 +105,14 @@ def _failure(attempt, provenance, error):
                                                           or p.name in ("stdout", "stderr"))}})
 
 
-def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, extend=False):
+def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, extend=False,
+              attempt_wall_seconds=None):
     root = Path(root)
     st.require(type(progress_every) is int and progress_every > 0,
                "progress-every must be positive")
+    st.require(attempt_wall_seconds is None or
+               (type(attempt_wall_seconds) is int and attempt_wall_seconds >= 0),
+               "attempt-wall-seconds must be a nonnegative integer")
     lock = (root / "run.lock").open("a+")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -132,8 +136,15 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                            and completion["charged_seconds"] == budget,
                            "attempt completion/budget identity mismatch")
             charged += budget
-        remaining = manifest["limits"]["wall_seconds"] - charged
-        st.require(remaining > 0, "cumulative execution budget exhausted")
+        if attempt_wall_seconds is None:
+            remaining = manifest["limits"]["wall_seconds"] - charged
+            st.require(remaining > 0, "cumulative execution budget exhausted")
+        else:
+            # Zero explicitly means no elapsed-time limit for this attempt.
+            # Prior charges remain recorded but do not consume the new slice.
+            remaining = attempt_wall_seconds or None
+        def charge(seconds):
+            return min(remaining, seconds) if remaining is not None else seconds
         attempt = attempts / f"{len(prior):04d}"
         attempt.mkdir()
         provenance = {"manifest_digest": st.digest(manifest),
@@ -142,12 +153,14 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                       "resource_limits": manifest["limits"],
                       "resume_from": resume_from, "extend_to_200": extend,
                       "progress_every": progress_every, "prior_charged_seconds": charged}
+        if attempt_wall_seconds is not None:
+            provenance["attempt_wall_seconds"] = attempt_wall_seconds
         st.atomic(attempt / "provenance.json", provenance, once=True)
         st.atomic(attempt / "progress.json", {"phase": "input-verification", "unit": "start"})
         # Reserve the first accounting interval before executing.  The worker
         # parent-death guard ends the process group if the supervisor is lost;
         # the final reserved interval remains charged on an ungraceful exit.
-        st.atomic(attempt / "budget.json", {"charged_seconds": min(remaining, 1)})
+        st.atomic(attempt / "budget.json", {"charged_seconds": charge(1)})
         started = time.monotonic()
         parent = os.getpid()
         pid = os.fork()
@@ -179,7 +192,7 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                     break
                 elapsed = time.monotonic() - started
                 st.atomic(attempt / "budget.json", {
-                    "charged_seconds": min(remaining, math.ceil(elapsed + 1))})
+                    "charged_seconds": charge(math.ceil(elapsed + 1))})
                 metrics = process_resources(pid, pid)
                 if metrics["unavailable"]:
                     incomplete_samples += 1
@@ -195,7 +208,10 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                           f"total=1 elapsed_seconds={elapsed:.3f} status=running",
                           file=sys.stderr, flush=True)
                     next_heartbeat = elapsed + 60.0
-                st.require(elapsed < remaining, "cumulative wall budget exceeded")
+                if remaining is not None:
+                    st.require(elapsed < remaining,
+                               "cumulative wall budget exceeded" if attempt_wall_seconds is None
+                               else "attempt wall budget exceeded")
                 st.require(metrics["producer_rss_kib"] is None
                            or metrics["producer_rss_kib"] <= manifest["limits"]["producer_rss_kib"],
                            "producer RSS budget exceeded")
@@ -213,7 +229,7 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
             for signum, handler in previous.items():
                 signal.signal(signum, handler)
         elapsed = time.monotonic() - started
-        charged_attempt = min(remaining, math.ceil(elapsed))
+        charged_attempt = charge(math.ceil(elapsed))
         st.atomic(attempt / "budget.json", {"charged_seconds": charged_attempt,
                                              "elapsed_seconds": elapsed})
         if (status != 0 or failure_error is not None) and not (attempt / "failure.json").exists():

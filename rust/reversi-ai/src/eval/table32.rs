@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use super::{stable_context_fingerprint, BoardEvaluator, EvalFactors, EvalResult};
 
 pub const IDENTITY: &str = "reversi-ai-pattern-table32-v1";
+pub const PARTIAL_IDENTITY: &str = "reversi-ai-pattern-table32-partial-v1";
 pub const PHASE_COUNT: usize = 60;
 pub const PARAMETER_COUNT: usize = 612425;
 const LIMIT: i64 = 4091;
@@ -144,7 +145,7 @@ fn sha(value: &Value, length: usize) -> bool {
 
 /// Validated sparse tables, sharing addresses across the four placements.
 pub struct Table32Evaluator {
-    tables: Vec<HashMap<usize, i16>>,
+    tables: Vec<Option<HashMap<usize, i16>>>,
     context: u64,
 }
 
@@ -157,8 +158,12 @@ impl Table32Evaluator {
     }
 
     pub fn from_json_value(artifact: Value) -> Result<Self, String> {
+        Self::parse(artifact, false)
+    }
+
+    fn parse(artifact: Value, partial: bool) -> Result<Self, String> {
         let invalid = || "invalid table32 artifact".to_owned();
-        if artifact["identity"] != IDENTITY
+        if artifact["identity"] != if partial { PARTIAL_IDENTITY } else { IDENTITY }
             || artifact["score_contract"] != crate::search::SCORE_CONTRACT
             || artifact["feature_contract"] != feature_contract()
         {
@@ -175,12 +180,21 @@ impl Table32Evaluator {
             return Err("invalid table32 provenance".into());
         }
         let weights = artifact["weights"].as_object().ok_or_else(invalid)?;
-        if weights.len() != 60 {
+        if (!partial && weights.len() != 60) || weights.is_empty() || weights.len() > 60 {
             return Err("table32 requires all 60 learned phases".into());
+        }
+        for key in weights.keys() {
+            let index = key.parse::<usize>().map_err(|_| invalid())?;
+            if index >= 60 || index.to_string() != *key {
+                return Err(invalid());
+            }
         }
         let mut tables = Vec::with_capacity(60);
         for phase in 0..60 {
-            let value = weights.get(&phase.to_string()).ok_or_else(invalid)?;
+            let Some(value) = weights.get(&phase.to_string()) else {
+                tables.push(None);
+                continue;
+            };
             let mut table = HashMap::new();
             for (key, weight) in value.as_object().ok_or_else(invalid)? {
                 let index = key.parse::<usize>().map_err(|_| invalid())?;
@@ -199,7 +213,7 @@ impl Table32Evaluator {
                     return Err("table32 reverse sharing mismatch".into());
                 }
             }
-            tables.push(table);
+            tables.push(Some(table));
         }
         if artifact["weight_digest"].as_str() != Some(digest(&artifact["weights"]).as_str()) {
             return Err("table32 weight digest mismatch".into());
@@ -221,7 +235,9 @@ impl Table32Evaluator {
 
 impl BoardEvaluator for Table32Evaluator {
     fn evaluate(&self, board: &Board, color: Color) -> EvalResult {
-        let table = &self.tables[phase(board)];
+        let table = self.tables[phase(board)]
+            .as_ref()
+            .expect("full table32 phase");
         let raw: i32 = extract_features(board, color)
             .iter()
             .map(|i| i32::from(table.get(i).copied().unwrap_or(0)))
@@ -239,11 +255,140 @@ impl BoardEvaluator for Table32Evaluator {
     }
 }
 
+/// Evaluates using a later learned phase when needed, then the legacy evaluator.
+pub struct PartialTable32Evaluator {
+    partial: Table32Evaluator,
+    fallback: Box<dyn BoardEvaluator>,
+    context: u64,
+}
+
+impl PartialTable32Evaluator {
+    pub fn from_path(
+        path: impl AsRef<Path>,
+        fallback: Box<dyn BoardEvaluator>,
+    ) -> Result<Self, String> {
+        let bytes =
+            fs::read(path).map_err(|e| format!("cannot read partial table32 artifact: {e}"))?;
+        let artifact =
+            serde_json::from_slice(&bytes).map_err(|e| format!("invalid table32 JSON: {e}"))?;
+        Self::from_json_value(artifact, fallback)
+    }
+
+    pub fn from_json_value(
+        artifact: Value,
+        fallback: Box<dyn BoardEvaluator>,
+    ) -> Result<Self, String> {
+        let partial = Table32Evaluator::parse(artifact, true)?;
+        let context = stable_context_fingerprint(&[
+            0x7061727469616c01,
+            partial.context,
+            fallback.context_fingerprint(),
+        ]);
+        Ok(Self {
+            partial,
+            fallback,
+            context,
+        })
+    }
+}
+
+impl BoardEvaluator for PartialTable32Evaluator {
+    fn evaluate(&self, board: &Board, color: Color) -> EvalResult {
+        let selected = self.partial.tables[phase(board)..]
+            .iter()
+            .find_map(Option::as_ref);
+        match selected {
+            Some(table) => {
+                let raw = extract_features(board, color)
+                    .iter()
+                    .map(|index| i32::from(table.get(index).copied().unwrap_or(0)))
+                    .sum();
+                EvalResult {
+                    score: runtime_score(raw),
+                    factors: EvalFactors::default(),
+                }
+            }
+            None => self.fallback.evaluate(board, color),
+        }
+    }
+    fn name(&self) -> &str {
+        "trained-table32-partial"
+    }
+    fn context_fingerprint(&self) -> u64 {
+        self.context
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct Fallback(u64);
+    impl BoardEvaluator for Fallback {
+        fn evaluate(&self, _: &Board, _: Color) -> EvalResult {
+            EvalResult {
+                score: 17,
+                factors: EvalFactors::default(),
+            }
+        }
+        fn name(&self) -> &str {
+            "test-fallback"
+        }
+        fn context_fingerprint(&self) -> u64 {
+            self.0
+        }
+    }
+    fn partial_fixture(phases: &[usize]) -> Value {
+        let mut artifact = fixture()["artifact"].clone();
+        artifact["identity"] = json!(PARTIAL_IDENTITY);
+        let weights = phases.iter().map(|p| (p.to_string(), json!({}))).collect();
+        artifact["weights"] = Value::Object(weights);
+        artifact["weight_digest"] = json!(digest(&artifact["weights"]));
+        let mut content = artifact.as_object().unwrap().clone();
+        content.remove("artifact_digest");
+        artifact["artifact_digest"] = json!(digest(&Value::Object(content)));
+        artifact
+    }
     fn fixture() -> Value {
         serde_json::from_str(include_str!("../../data/table32-fixture.json")).unwrap()
+    }
+    #[test]
+    fn partial_uses_nearest_later_learned_phase_and_falls_back_after_it() {
+        let mut artifact = partial_fixture(&[10, 30]);
+        artifact["weights"]["10"] = json!({(OFFSETS[16] + 2).to_string(): 32});
+        artifact["weights"]["30"] = json!({(OFFSETS[16] + 2).to_string(): 64});
+        artifact["weight_digest"] = json!(digest(&artifact["weights"]));
+        let mut content = artifact.as_object().unwrap().clone();
+        content.remove("artifact_digest");
+        artifact["artifact_digest"] = json!(digest(&Value::Object(content)));
+        assert!(Table32Evaluator::from_json_value(artifact.clone()).is_err());
+        let evaluator =
+            PartialTable32Evaluator::from_json_value(artifact.clone(), Box::new(Fallback(1)))
+                .unwrap();
+        let initial = Board::from_string(
+            "........\n........\n........\n...WB...\n...BW...\n........\n........\n........",
+        )
+        .unwrap();
+        assert_eq!(evaluator.evaluate(&initial, Color::Black).score, 1);
+        let middle = Board::from_string(
+            "BBWWWWWW\nWWWWWWWW\nWWW.....\n........\n........\n........\n........\n........",
+        )
+        .unwrap();
+        assert_eq!(phase(&middle), 15);
+        assert_eq!(evaluator.evaluate(&middle, Color::Black).score, 2);
+        let later = Board::from_string(
+            "BBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\nBBBBBBBB\n........\n........",
+        )
+        .unwrap();
+        assert_eq!(phase(&later), 44);
+        assert_eq!(evaluator.evaluate(&later, Color::Black).score, 17);
+        let other =
+            PartialTable32Evaluator::from_json_value(artifact, Box::new(Fallback(2))).unwrap();
+        assert_ne!(evaluator.context_fingerprint(), other.context_fingerprint());
+        assert!(PartialTable32Evaluator::from_json_value(
+            partial_fixture(&[]),
+            Box::new(Fallback(1))
+        )
+        .is_err());
     }
     #[test]
     fn shared_python_fixture_matches_geometry_prediction_and_digest() {

@@ -39,6 +39,65 @@ class Table32PlayerTests(unittest.TestCase):
             players.player_argv("/fixture/cli", "/fixture/model",
                                 {**config, "time_limit_ms": 1}, "trained")
 
+    def test_partial_argv_and_raw_evidence_include_legacy_fallback(self):
+        config = dict(inputs.TEACHER_SETTINGS)
+        pins = {"executable": {"path": "/fixture/cli"},
+                "artifact": {"path": "/fixture/partial"},
+                "fallback": {"path": "/fixture/legacy"}}
+        argv = players.player_argv(pins["executable"]["path"], pins["artifact"]["path"],
+                                   config, "trained-table32-partial", pins["fallback"]["path"])
+        self.assertEqual(argv[1:7], ["--evaluator", "trained-table32-partial",
+                                    "--trained-artifact", "/fixture/partial",
+                                    "--fallback-artifact", "/fixture/legacy"])
+        raw = {"request": "unit\t" + rf.INITIAL + "\tB", "stdout": "unit\td3\n",
+               "reset": {"request": "new_game\tunit", "stdout": "new_game\tunit\tready\n"},
+               "stderr": "search_diagnostic_v1\tposition_id=unit\toutcome=move\tscore=3\tcompleted_depth=11\texact=false\tnodes=3\telapsed_us=1001",
+               "argv": argv, "pins_before": pins, "pins_after": copy.deepcopy(pins)}
+        result = {"move": "d3", "score": 3, "completed_depth": 11,
+                  "exact": False, "nodes": 3, "elapsed_ms": 2, "raw": raw}
+        players.validate_raw_decision("unit", rf.INITIAL, "B", result, config,
+                                      expected_pins=pins, expected_evaluator="trained-table32-partial")
+        changed = copy.deepcopy(result)
+        changed["raw"]["argv"][6] = "/fixture/other-legacy"
+        with self.assertRaisesRegex(training.TrainingError, "argv differs"):
+            players.validate_raw_decision("unit", rf.INITIAL, "B", changed, config,
+                                          expected_pins=pins, expected_evaluator="trained-table32-partial")
+        changed = copy.deepcopy(result)
+        changed["raw"]["pins_after"]["fallback"]["path"] = "/fixture/other-legacy"
+        with self.assertRaisesRegex(training.TrainingError, "live pins differ"):
+            players.validate_raw_decision("unit", rf.INITIAL, "B", changed, config,
+                                          expected_pins=pins, expected_evaluator="trained-table32-partial")
+
+    def test_partial_player_rejects_changed_fallback_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable, artifact, fallback = (root / name for name in ("cli", "partial", "legacy"))
+            for path in (executable, artifact, fallback):
+                path.write_text(path.name)
+            pins = {"executable": st.pin(executable), "artifact": st.pin(artifact),
+                    "fallback": st.pin(fallback)}
+            player = players.Player.__new__(players.Player)
+            player.expected_pins, player.config, player.log = pins, dict(inputs.TEACHER_SETTINGS), None
+            player.evaluator = "trained-table32-partial"
+            result = player.decision("pass", "WB." + "W" * 61, "B")
+            self.assertEqual(result["raw"]["pins_before"], pins)
+            fallback.write_text("modified fallback")
+            with self.assertRaisesRegex(training.TrainingError, "input digest changed"):
+                player.decision("pass", "WB." + "W" * 61, "B")
+            with mock.patch.object(players.subprocess, "Popen", side_effect=AssertionError("no subprocess")):
+                with self.assertRaisesRegex(training.TrainingError, "pin paths differ"):
+                    players.Player(executable, artifact, inputs.TEACHER_SETTINGS, 1,
+                                   evaluator="trained-table32-partial", expected_pins=pins,
+                                   fallback_artifact=root / "wrong-legacy")
+
+    def test_partial_match_accepts_completed_depth_four_with_one_empty(self):
+        config = {**inputs.TEACHER_SETTINGS, "opening_depth": 4, "midgame_depth": 4,
+                  "endgame_depth": 4, "exact_solver_empty_squares": 0}
+        board = "WB." + "W" * 61
+        result = {"move": "c1", "score": 64, "completed_depth": 4,
+                  "exact": False, "nodes": 8, "elapsed_ms": 21}
+        self.assertEqual(inputs.validate_decision(board, "W", result, config), result)
+
     def test_unbounded_request_waits_without_timeout_and_checks_response(self):
         player = players.Player.__new__(players.Player)
         stdin, stdout = mock.Mock(), mock.Mock()

@@ -838,7 +838,7 @@ attemptの `completion.json` に欠測として記録し、取得失敗だけで
 Ctrl-C（SIGINT）/SIGTERMや資源停止ではprocess groupを終了し、完成済みのgame、label、query、
 Adam step、export提案のatomic receipt/stateと過去attemptを保持する。同じroot・clean commit・
 設定で `resume` するとprepare時に記録したcandidate binaryとOracle runtimeのidentityおよび連続完成prefixを
-照合し、未完gameは同じopeningの先頭から、
+照合し、未完gameは最後の完成着手から、
 未完step/提案は直前の完成stateから再実行する。exportの60秒sliceによる `export-paused` も
 同じ再開経路を使う。失敗記録やcheckpointを消して再開しない。
 
@@ -860,12 +860,28 @@ rtk python3 tools/reversi-ai-training/start_table32.py resume \
 本計画のOracle対戦は0局で、0018受け入れと候補採用は別判断である。
 
 run実行wallは全attempt累積で既定72時間まで、人間待ちを除く。resumeで予算をリセットしない。
+必要なら `run` / `resume` の `--attempt-wall-seconds N` で、その試行だけの経過時間上限を
+秒単位で指定できる。0はその試行の時間上限なしを意味する。指定時は過去の試行の累積時間を
+その上限から差し引かないため、以前の累積上限に達したrootも、producerと入力が
+変更されていなければ再開できる。
+省略時は従来の累積上限を使う。選択した値と過去の時間はattemptに記録される。
+ここでの経過時間はCPU時間ではなく、Linuxの通常のスリープ中は進まないmonotonic clockで測る。
 producer RSSは既定262144KiB、子process群は1572864KiBの観測上限で停止する。
 `attempts/` に設定・資源・累積課金・失敗とログdigest、`units/` に連鎖receipt/state、
 rootにmanifest/snapshot、candidate artifact、screening/reportとexposure keysを保管する。
 通常進捗の `--progress-every` は正整数で既定1。stderr形式は
 `table32 phase=PHASE unit=UNIT completed=N total=T elapsed_seconds=S status=STATUS`。
 phase境界・停止・完了は間隔によらず表示する。
+
+リソースの限られた環境では、prepareに `--phase-start 40 --phase-end 49
+--generation-prefix 40` を追加して部分学習できる。split別局数は既存の
+`--train-per-prefix`、`--validation-per-prefix`、`--test-per-prefix` で指定する。
+`--import-games-from OLD_ROOT` を指定すると、保存済み完成局を学習入力として利用する。
+入力元は変更せず、教師設定とsplitの互換性を確認する。検証用とテスト用の局は別に必要。
+部分候補は指定区間の後方最近傍の学習済み表を使い、後方に表がない場合は旧評価器へ切り替える。
+対象外の序盤labelと完全読みpreflightは省略するが、対局は終局まで続ける。
+教師は空き20マス以下を完全読みする。部分候補の対局は深さ4・完全読み閾値0で評価し、
+従来の深さ12・閾値16の結果とは区別する。部分評価器対応の新しいcandidate CLIのビルドが必要。
 
 完成出力または有効な停止結果の独立検証と結論記録が残るため、0054計画は保持する。
 fixture成功やtoolingのマージを、実学習の完了・強度改善・0018合格とは扱わない。

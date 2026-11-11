@@ -11,6 +11,7 @@ from bisect import bisect_right
 from pathlib import Path
 
 IDENTITY = "reversi-ai-pattern-table32-v1"
+PARTIAL_IDENTITY = "reversi-ai-pattern-table32-partial-v1"
 TRAINER = "reversi-ai-table32-training-v1"
 OPTIMIZER = "table32_full_batch_adam_v1"
 SCORE_CONTRACT = "winner-empty-v1"
@@ -96,21 +97,37 @@ def _sha(value, size=64):
 
 
 def make_artifact(phases, provenance: dict) -> dict:
+    return _make_artifact(phases, provenance, partial=False)
+
+
+def make_partial_artifact(phases, provenance: dict) -> dict:
+    return _make_artifact(phases, provenance, partial=True)
+
+
+def _make_artifact(phases, provenance: dict, *, partial: bool) -> dict:
     if isinstance(phases, list):
         phases = dict(enumerate(phases))
     weights = {str(p): {str(i): v for i, v in sorted(rows.items(), key=lambda x: int(x[0])) if v != 0}
                for p, rows in sorted(phases.items(), key=lambda x: int(x[0]))}
-    artifact = {"identity": IDENTITY, "score_contract": SCORE_CONTRACT,
+    artifact = {"identity": PARTIAL_IDENTITY if partial else IDENTITY, "score_contract": SCORE_CONTRACT,
                 "feature_contract": feature_contract(), "provenance": provenance,
                 "weights": weights, "weight_digest": digest(weights)}
     artifact["artifact_digest"] = digest(artifact)
-    return validate_artifact(artifact)
+    return _validate_artifact(artifact, partial=partial)
 
 
 def validate_artifact(artifact: dict) -> dict:
+    return _validate_artifact(artifact, partial=False)
+
+
+def validate_partial_artifact(artifact: dict) -> dict:
+    return _validate_artifact(artifact, partial=True)
+
+
+def _validate_artifact(artifact: dict, *, partial: bool) -> dict:
     if not isinstance(artifact, dict):
         raise ValueError("table32 artifact must be an object")
-    if artifact.get("identity") != IDENTITY or artifact.get("score_contract") != SCORE_CONTRACT:
+    if artifact.get("identity") != (PARTIAL_IDENTITY if partial else IDENTITY) or artifact.get("score_contract") != SCORE_CONTRACT:
         raise ValueError("table32 identity/score contract mismatch")
     if artifact.get("feature_contract") != feature_contract():
         raise ValueError("table32 feature contract mismatch")
@@ -121,7 +138,8 @@ def validate_artifact(artifact: dict) -> dict:
             or not _sha(provenance.get("producer_commit"), 40)):
         raise ValueError("invalid table32 provenance")
     weights = artifact.get("weights")
-    if not isinstance(weights, dict) or set(weights) != {str(x) for x in range(60)}:
+    valid_phases = {str(x) for x in range(60)}
+    if not isinstance(weights, dict) or (not weights if partial else set(weights) != valid_phases) or not set(weights) <= valid_phases:
         raise ValueError("table32 requires all 60 learned phases")
     for table in weights.values():
         if not isinstance(table, dict):
@@ -143,4 +161,14 @@ def validate_artifact(artifact: dict) -> dict:
 
 def predict(artifact: dict, board: str, side: str) -> int:
     table = artifact["weights"][str(phase(board))]
+    return runtime_score(sum(table.get(str(i), 0) for i in features(board, side)))
+
+
+def predict_partial(artifact: dict, board: str, side: str, fallback) -> int:
+    current = phase(board)
+    selected = next((p for p in range(current, PHASE_COUNT)
+                     if str(p) in artifact["weights"]), None)
+    if selected is None:
+        return fallback(board, side)
+    table = artifact["weights"][str(selected)]
     return runtime_score(sum(table.get(str(i), 0) for i in features(board, side)))
