@@ -13,6 +13,7 @@ import table32
 import table32_store as st
 import table32_players as players
 import table32_inputs as inputs
+import table32_import
 import production_cycle
 
 
@@ -140,6 +141,27 @@ class Table32CliTests(unittest.TestCase):
                 with self.assertRaisesRegex(Exception,"candidate source commit"):
                     self.prepare_fixture(folder,["--candidate-source-commit",commit])
                 self.assertFalse((folder/"run").exists())
+
+    def test_partial_import_rejects_planned_game_id_collisions_before_creating_root(self):
+        extra = ["--phase-start", "40", "--phase-end", "49",
+                 "--generation-prefix", "40", "--import-games-from", "/saved",
+                 "--train-per-prefix", "1", "--validation-per-prefix", "1",
+                 "--test-per-prefix", "1"]
+        help_result = mock.Mock(returncode=0,
+                                stdout="trained-table32-partial --fallback-artifact")
+        for imported_id, collides in (("p40-train-00", True), ("p12-train-00", False)):
+            with self.subTest(imported_id=imported_id), tempfile.TemporaryDirectory() as temporary:
+                folder = Path(temporary)
+                imported = {"games": [{"spec": {"game_id": imported_id}}]}
+                with mock.patch.object(table32_import, "completed_games", return_value=imported), \
+                     mock.patch.object(table32.subprocess, "run", return_value=help_result):
+                    if collides:
+                        with self.assertRaisesRegex(Exception, "imported game IDs collide.*p40-train-00"):
+                            self.prepare_fixture(folder, extra)
+                        self.assertFalse((folder / "run").exists())
+                    else:
+                        manifest, _ = self.prepare_fixture(folder, extra)
+                        self.assertEqual(manifest["imported_games"], imported)
 
     def test_changed_candidate_is_rejected_by_load_run_resume_and_verify(self):
         with tempfile.TemporaryDirectory() as temporary:

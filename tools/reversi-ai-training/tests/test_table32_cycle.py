@@ -164,6 +164,12 @@ class Table32CycleTests(unittest.TestCase):
         self.assertEqual(bounded["node_limit"], 100000000)
         with self.assertRaises(training.TrainingError):
             cycle.settings(types.SimpleNamespace(**{**base, "node_limit": 10000000}))
+        with self.assertRaisesRegex(training.TrainingError, "phase-end >= 12"):
+            cycle.settings(types.SimpleNamespace(**{**base, "phase_start": 1,
+                "phase_end": 10, "generation_prefix": 1}))
+        shallow = cycle.settings(types.SimpleNamespace(**{**base, "phase_start": 1,
+            "phase_end": 12, "generation_prefix": 1}))
+        self.assertEqual(shallow["target_phases"], list(range(1, 13)))
 
     @classmethod
     def setUpClass(cls):
@@ -262,6 +268,9 @@ class Table32CycleTests(unittest.TestCase):
         cycle.match_game(0, openings[0], choose, config)
         self.assertTrue(seen)
         self.assertTrue(all(value == config for value in seen))
+        shallow_openings = cycle.opening_plan(inputs.SEED, set(), prefix_min=8, prefix_max=8)
+        self.assertEqual(len(shallow_openings), 100)
+        self.assertTrue(all(60 - opening["board"].count(".") == 8 for opening in shallow_openings))
 
     def test_disk_extraction_uses_scaled_plan_counts(self):
         specs = inputs.generation_plan(train_per_prefix=24, validation_per_prefix=4, test_per_prefix=4)

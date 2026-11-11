@@ -22,6 +22,10 @@ def build(games, labels, specs, folder, *, early_limit, limits=None, target_phas
                "invalid target phases")
     if expected_prefixes is None:
         expected_prefixes = sorted({spec["prefix_length"] for spec in specs})
+    # Preserve legacy keys while reporting operator-selected and imported
+    # prefixes, including those whose rows were all excluded.
+    reported_prefixes = sorted(set(inputs.PREFIX_LENGTHS) | set(expected_prefixes)
+                               | {spec["prefix_length"] for spec in specs})
     counts, prefix, raw_counts = collections.Counter(), collections.Counter(), collections.Counter()
     raw_prefix,side_counts=collections.Counter(),collections.Counter()
     with tempfile.TemporaryDirectory(prefix="table32-split-") as temporary:
@@ -106,8 +110,8 @@ def build(games, labels, specs, folder, *, early_limit, limits=None, target_phas
     return {"outputs": paths, "games": game_count, "early_labels": label_count,
             "raw_phase_rows": {s: {str(p): raw_counts[(s,p)] for p in range(60)} for s in ("train", "validation", "test")},
             "phase_rows": {s: {str(p): counts[(s,p)] for p in range(60)} for s in ("train", "validation", "test")},
-            "prefix_rows": {s: {str(p): prefix[(s,p)] for p in inputs.PREFIX_LENGTHS} for s in ("train", "validation", "test")},
-            "raw_prefix_rows": {s: {str(p):raw_prefix[(s,p)] for p in inputs.PREFIX_LENGTHS} for s in ("train","validation","test")},
+            "prefix_rows": {s: {str(p): prefix[(s,p)] for p in reported_prefixes} for s in ("train", "validation", "test")},
+            "raw_prefix_rows": {s: {str(p):raw_prefix[(s,p)] for p in reported_prefixes} for s in ("train","validation","test")},
             "side_rows":{s:{side:side_counts[(s,side)] for side in ("B","W")} for s in ("train","validation","test")},
             "training_unavailable": missing, "validation_unavailable": missing_validation,
             "split_missing": split_missing, "prefix_missing": prefix_missing,

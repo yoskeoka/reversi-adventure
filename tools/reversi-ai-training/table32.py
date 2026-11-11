@@ -142,6 +142,8 @@ def settings(args):
         st.require(all(type(v) is int for v in (start, end, prefix))
                    and 0 <= prefix <= start <= end <= 59 and prefix <= 58,
                    "partial training requires valid phase-start, phase-end and generation-prefix")
+        st.require(end >= 12, "partial evaluation requires phase-end >= 12: "
+                   "depth-4 matches require independent openings at phase 8 or later")
         value["target_phases"] = list(range(start, end + 1))
         value["generation_prefix"] = prefix
         value["teacher_exact_solver_empty_squares"] = 20
@@ -203,6 +205,11 @@ def prepare(args):
         manifest["imported_games"] = table32_import.completed_games(
             import_root, teacher_settings=inputs.search_settings(inputs.TEACHER_SETTINGS, config),
             baseline=baseline, target_phases=config["target_phases"])
+        imported_ids = {game["spec"]["game_id"]
+                        for game in manifest["imported_games"]["games"]}
+        overlap = sorted(imported_ids.intersection(spec["game_id"] for spec in specs))
+        st.require(not overlap,
+                   "imported game IDs collide with planned games: " + ", ".join(overlap))
     root.mkdir(parents=True, exist_ok=False)
     st.atomic(root / "snapshot.json", snapshot, once=True)
     st.atomic(root / "manifest.json", manifest, once=True)
@@ -659,8 +666,8 @@ def cycle(driver, snapshot, *, extend=False):
         forbidden.update(inputs.position_key(game["terminal_board"],s) for s in ("B","W"))
     profile = None
     if partial:
-        prefix_min = max(0, min(target_phases) - 4)
-        prefix_max = min(58, max(0, max(target_phases) - 4))
+        prefix_min = max(8, min(target_phases) - 4)
+        prefix_max = min(58, max(8, max(target_phases) - 4))
         profile = {"name": "partial-depth4-v1", "opening_depth": 4,
                    "midgame_depth": 4, "endgame_depth": 4,
                    "exact_solver_empty_squares": 0,
