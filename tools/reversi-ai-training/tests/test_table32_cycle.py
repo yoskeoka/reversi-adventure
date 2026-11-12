@@ -170,6 +170,44 @@ class Table32CycleTests(unittest.TestCase):
         shallow = cycle.settings(types.SimpleNamespace(**{**base, "phase_start": 1,
             "phase_end": 12, "generation_prefix": 1}))
         self.assertEqual(shallow["target_phases"], list(range(1, 13)))
+        early = cycle.settings(types.SimpleNamespace(**{**base, "phase_start": 0,
+            "phase_end": 11, "generation_prefix": 0, "training_only": True}))
+        self.assertEqual(early["target_phases"], list(range(12)))
+        self.assertTrue(early["training_only"])
+
+    def test_training_only_early_phases_and_offline_replay(self):
+        import hashlib
+        class VariedProviders(Providers):
+            def choose(self, kind, identifier, board, side, config):
+                result = super().choose(kind, identifier, board, side, config)
+                legal = sorted(rf.legal_moves(board, side))
+                if legal:
+                    seed = int.from_bytes(hashlib.sha256(identifier.encode()).digest()[:8], "big")
+                    move = legal[seed % len(legal)]
+                    result["move"] = move
+                    result["raw"]["stdout"] = f"{identifier}\t{move}\n"
+                return result
+        manifest, snapshot = self.fixture()
+        manifest["generation_plan"] = inputs.generation_plan(
+            train_per_prefix=3, validation_per_prefix=3, test_per_prefix=3, prefix_lengths=(0,))
+        manifest["settings"].update(target_phases=list(range(12)), training_only=True,
+                                    teacher_exact_solver_empty_squares=20)
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(io.StringIO()):
+            root = Path(temporary)
+            with mock.patch.object(cycle, "match_game", side_effect=AssertionError("match started")):
+                report = self.execute_fixture(root, manifest, snapshot, VariedProviders())
+            self.assertEqual(report["outcome"], "training-complete")
+            self.assertFalse(report["cycle成立"])
+            self.assertEqual(set(st.read(root / "candidate-artifact.json")["weights"]), {str(p) for p in range(12)})
+            self.assertEqual(report["coverage"]["phase_rows"]["train"]["0"], 1)
+            self.assertEqual(report["coverage"]["phase_rows"]["validation"]["0"], 0)
+            sets = [{row["canonical_key"] for phase in range(12)
+                     for row in extraction.phase_rows(root / "extracted", split, phase)}
+                    for split in ("train", "validation", "test")]
+            self.assertFalse(sets[0] & sets[1] or sets[0] & sets[2] or sets[1] & sets[2])
+            with mock.patch.object(cycle.subprocess, "run", side_effect=AssertionError("offline run")), \
+                 mock.patch.object(cycle.subprocess, "Popen", side_effect=AssertionError("offline Popen")):
+                self.assertEqual(verifier.verify(root, manifest=manifest, snapshot=snapshot), report)
 
     @classmethod
     def setUpClass(cls):

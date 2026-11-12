@@ -883,7 +883,38 @@ phase境界・停止・完了は間隔によらず表示する。
 教師は空き20マス以下を完全読みする。部分候補の対局は深さ4・完全読み閾値0で評価し、
 従来の深さ12・閾値16の結果とは区別する。部分評価器対応の新しいcandidate CLIのビルドが必要。
 比較用の独立した開始点は8着手以降を使うため、対象区間の `--phase-end` は12以上にする。
-1〜10手など序盤だけを対象とする実行は、別の評価方式に対応するまで準備時に拒否される。
+対局を後回しにする場合は prepare に `--training-only` を加える。例えば
+`--phase-start 0 --phase-end 11 --generation-prefix 0 --training-only` で序盤だけを
+学習できる。生成局数と `--max-steps`、`--max-proposals`、資源上限は従来どおり指定する。
+`training-complete` は export と offline verify の完了を表し、対局結果ではない。
+
+### 部分候補の結合と独立評価
+
+以下は人間が実行する例。`SOURCE_A`、`SOURCE_B` は検証 receipt のある完了 root、
+`COMBINED_ROOT` は未作成の checkout 外の絶対パス、`CANDIDATE_CLI` は結合 provenance と
+partial evaluator に対応する CLI、`CANDIDATE_COMMIT` はそのソース commit とする。
+入力 root は繰り返し指定し、phase の重複は拒否される。過去の not-improved 結果も入力に
+選択できる。元 root は変更せず、結合 root の manifest と receipt に来歴を固定する。
+prepare と run は同じ clean producer commit で行い、再開時もその commit と入力を保持する。
+
+```sh
+python3 tools/reversi-ai-training/table32_combine.py prepare \
+  --run-root "$COMBINED_ROOT" --source-root "$SOURCE_A" --source-root "$SOURCE_B" \
+  --candidate-executable "$CANDIDATE_CLI" --candidate-source-commit "$CANDIDATE_COMMIT"
+python3 tools/reversi-ai-training/table32_combine.py run --run-root "$COMBINED_ROOT" \
+  --attempt-wall-seconds 3600 --progress-every 10
+python3 tools/reversi-ai-training/table32_combine.py verify --run-root "$COMBINED_ROOT"
+```
+
+停止後は同じ設定と入力のまま `resume --run-root "$COMBINED_ROOT"
+--attempt-wall-seconds 3600 --progress-every 10` で続ける。入力や固定設定を変更する場合は
+新しい root を使う。prepare の `--time-limit-ms`、`--node-limit`、
+`--decision-timeout-seconds` と wall/RSS 上限を選択でき、attempt の時間上限は run ごとに選べる。
+20局で10点以上なら人間が `resume --run-root "$COMBINED_ROOT" --extend-to-200` を
+明示して200局へ延長できる。100点超のみ promising とする。既存の対局点は流用しない。
+全60 phase 以外は後方最近傍と S0 fallback を使う partial で深さ4、全60 phase は深さ12。
+report に条件と入力ごとの学習設定を残す。全被覆でも従来の full pilot と同一条件や
+強度を意味せず、自動採用も0018合格もしない。verify は保存証拠を再構成し外部プロセスを起動しない。
 
 完成出力または有効な停止結果の独立検証と結論記録が残るため、0054計画は保持する。
 fixture成功やtoolingのマージを、実学習の完了・強度改善・0018合格とは扱わない。

@@ -13,7 +13,7 @@ import table32_store as st
 
 
 def build(games, labels, specs, folder, *, early_limit, limits=None, target_phases=None,
-          expected_prefixes=None, trusted_import_count=0):
+          expected_prefixes=None, trusted_import_count=0, train_collision_priority=False):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     selected = tuple(range(60)) if target_phases is None else tuple(target_phases)
@@ -65,6 +65,11 @@ def build(games, labels, specs, folder, *, early_limit, limits=None, target_phas
             add(inputs.early_row(label, limits=limits))
         db.execute("CREATE INDEX key_split ON rows(key,split)")
         db.execute("CREATE TABLE collisions AS SELECT key FROM rows GROUP BY key HAVING COUNT(DISTINCT split)>1")
+        db.execute("CREATE TABLE train_priority (key TEXT PRIMARY KEY)")
+        if train_collision_priority:
+            # An initial position is necessarily shared by all games. Assign
+            # shared positions to training only; never expose them to validation.
+            db.execute("INSERT INTO train_priority SELECT DISTINCT rows.key FROM rows JOIN collisions c ON rows.key=c.key WHERE rows.split='train'")
         db.execute("CREATE INDEX collisions_key ON collisions(key)")
         db.execute("CREATE TABLE first_row AS SELECT key,split,MIN(ordinal) ordinal FROM rows GROUP BY key,split")
         db.execute("CREATE INDEX first_key_split ON first_row(key,split)")
@@ -75,7 +80,8 @@ def build(games, labels, specs, folder, *, early_limit, limits=None, target_phas
                 path = folder / f"{split}-{phase:02d}.jsonl"
                 with path.open("wb") as stream:
                     query = ("SELECT rows.value FROM rows JOIN first_row f ON rows.ordinal=f.ordinal "
-                             "LEFT JOIN collisions c ON rows.key=c.key WHERE c.key IS NULL "
+                             "LEFT JOIN collisions c ON rows.key=c.key LEFT JOIN train_priority t ON rows.key=t.key "
+                             "WHERE (c.key IS NULL OR (t.key IS NOT NULL AND rows.split='train')) "
                              "AND rows.split=? ORDER BY rows.ordinal")
                     for (encoded,) in db.execute(query, (split,)):
                         row = json.loads(encoded)
@@ -92,7 +98,9 @@ def build(games, labels, specs, folder, *, early_limit, limits=None, target_phas
             query = ("SELECT rows.id,rows.key,rows.split,c.key IS NOT NULL FROM rows "
                      "JOIN first_row f ON rows.key=f.key AND rows.split=f.split "
                      "LEFT JOIN collisions c ON rows.key=c.key "
-                     "WHERE c.key IS NOT NULL OR rows.ordinal<>f.ordinal ORDER BY rows.ordinal")
+                     "LEFT JOIN train_priority t ON rows.key=t.key "
+                     "WHERE (c.key IS NOT NULL AND NOT (t.key IS NOT NULL AND rows.split='train')) "
+                     "OR rows.ordinal<>f.ordinal ORDER BY rows.ordinal")
             for identifier, key, split, collision in db.execute(query):
                 stream.write(st.blob({"id": identifier, "key": key, "split": split,
                     "reason": "cross-split-canonical-collision" if collision else "within-split-canonical-duplicate"}))

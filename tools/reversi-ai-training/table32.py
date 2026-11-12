@@ -142,11 +142,14 @@ def settings(args):
         st.require(all(type(v) is int for v in (start, end, prefix))
                    and 0 <= prefix <= start <= end <= 59 and prefix <= 58,
                    "partial training requires valid phase-start, phase-end and generation-prefix")
-        st.require(end >= 12, "partial evaluation requires phase-end >= 12: "
+        st.require(end >= 12 or getattr(args, "training_only", False), "partial evaluation requires phase-end >= 12: "
                    "depth-4 matches require independent openings at phase 8 or later")
         value["target_phases"] = list(range(start, end + 1))
         value["generation_prefix"] = prefix
         value["teacher_exact_solver_empty_squares"] = 20
+    if getattr(args, "training_only", False):
+        st.require("target_phases" in value, "training-only requires partial phase selection")
+        value["training_only"] = True
     return value
 
 
@@ -587,7 +590,8 @@ def cycle(driver, snapshot, *, extend=False):
             [game["spec"] for game in imported_games] + m["generation_plan"], folder,
             early_limit=config["early_positions"], limits=config, target_phases=target_phases,
             expected_prefixes=sorted({spec["prefix_length"] for spec in m["generation_plan"]}),
-            trusted_import_count=len(imported_games))
+            trusted_import_count=len(imported_games),
+            train_collision_priority=config.get("training_only", False))
     folder = root / "extracted"
     def validate_extraction(saved):
         with tempfile.TemporaryDirectory(prefix="table32-replay-") as temporary:
@@ -610,6 +614,28 @@ def cycle(driver, snapshot, *, extend=False):
     else:
         st.require(st.read(root / "candidate-artifact.json") == artifact,"candidate artifact changed")
     candidate_pin=st.pin(root/"candidate-artifact.json")
+    if config.get("training_only", False):
+        st.require(not extend, "training-only run cannot extend matches")
+        forbidden = set(snapshot["excluded_keys"])
+        with (folder / "exposure-keys.jsonl").open() as stream:
+            forbidden.update(json.loads(line) for line in stream)
+        forbidden.update(inputs.position_key(r["board"], r["side"]) for r in roots)
+        forbidden.update(inputs.position_key(q["query"]["board"], q["query"]["side"]) for q in queries)
+        forbidden.update(r["canonical_key"] for r in pool["candidates"])
+        import itertools
+        for game in itertools.chain(_events(root, gen_start, gen_end), imported_games):
+            forbidden.update(inputs.position_key(t["board"], t["side"]) for t in game["opening"]["turns"] + game["decisions"])
+            forbidden.update(inputs.position_key(game["terminal_board"], side) for side in ("B", "W"))
+        exposure_path = root / "training-exposure-keys.jsonl"
+        exposure_bytes = b"".join(st.blob(key) for key in sorted(forbidden))
+        if driver.execute:
+            st.atomic_bytes(exposure_path, exposure_bytes, once=True)
+        else:
+            st.require(exposure_path.read_bytes() == exposure_bytes, "training exposure keys do not reconstruct")
+        exposure = {"path": exposure_path.name, "sha256": training.sha256_file(exposure_path), "count": len(forbidden)}
+        driver.computed("export", "training-exposure", exposure)
+        return final_report(m, driver, "training-complete", {"candidate_digest": model.digest(artifact),
+            "exposure_keys": exposure, "coverage": extracted, "phases": phase_diagnostics})
     if partial:
         baseline_weights = st.read(m["baseline"]["path"])["weights"]
         def predict(board, side):
@@ -774,6 +800,7 @@ def run(args):
     manifest,snapshot = load(root,verify_originals=False)
     st.require(clean_commit()==manifest["producer_commit"],"execution commit changed; use prepared producer")
     if args.extend_to_200:
+        st.require(not manifest["settings"].get("training_only", False), "training-only run cannot extend matches")
         from table32_verify import verify
         st.require((root/"screening-report.json").is_file(),
                    "--extend-to-200 requires an existing completed20-game screen")
@@ -789,7 +816,7 @@ def run(args):
                        ("planned-preflight-decisions",0 if partial else 12),("planned-oracle-queries",0 if partial else 24),
                        ("planned-training-steps",phase_count*config_value(manifest,"max_steps")),
                        ("planned-export-proposals",phase_count*config_value(manifest,"max_proposals")),
-                       ("planned-matches",200 if args.extend_to_200 else 20)):
+                       ("planned-matches",0 if manifest["settings"].get("training_only", False) else 200 if args.extend_to_200 else 20)):
         print(f"table32 phase=input-verification unit={unit} completed=0 total={total} elapsed_seconds=0.000 status=planned",file=sys.stderr,flush=True)
     def worker(attempt):
         import contextlib
@@ -840,6 +867,7 @@ def main(argv):
     prep.add_argument("--phase-start", type=int)
     prep.add_argument("--phase-end", type=int)
     prep.add_argument("--generation-prefix", type=int)
+    prep.add_argument("--training-only", action="store_true", help="finish after export without evaluation")
     prep.add_argument("--import-games-from", type=Path)
     defaults={"seed":inputs.SEED,"train-per-prefix":12,"validation-per-prefix":2,"test-per-prefix":2,
         "early-positions":256,"early-candidates-per-phase":32,"pool-sequences":10000,

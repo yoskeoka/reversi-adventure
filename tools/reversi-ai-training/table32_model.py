@@ -14,6 +14,7 @@ IDENTITY = "reversi-ai-pattern-table32-v1"
 PARTIAL_IDENTITY = "reversi-ai-pattern-table32-partial-v1"
 TRAINER = "reversi-ai-table32-training-v1"
 OPTIMIZER = "table32_full_batch_adam_v1"
+COMBINE_VERSION = "table32-combine-v1"
 SCORE_CONTRACT = "winner-empty-v1"
 PHASE_COUNT = 60
 FEATURE_COUNT = 65
@@ -132,10 +133,15 @@ def _validate_artifact(artifact: dict, *, partial: bool) -> dict:
     if artifact.get("feature_contract") != feature_contract():
         raise ValueError("table32 feature contract mismatch")
     provenance = artifact.get("provenance", {})
-    if (not isinstance(provenance, dict) or provenance.get("trainer_version") != TRAINER or provenance.get("optimizer") != OPTIMIZER
-            or provenance.get("source_kind") != "project-owned" or type(provenance.get("seed")) is not int
-            or not 0 <= provenance["seed"] < 2**64 or not _sha(provenance.get("input_manifest_digest"))
-            or not _sha(provenance.get("producer_commit"), 40)):
+    common = (isinstance(provenance, dict) and _sha(provenance.get("input_manifest_digest"))
+              and _sha(provenance.get("producer_commit"), 40))
+    trained = (common and provenance.get("trainer_version") == TRAINER and provenance.get("optimizer") == OPTIMIZER
+               and provenance.get("source_kind") == "project-owned" and type(provenance.get("seed")) is int
+               and 0 <= provenance["seed"] < 2**64)
+    combined = (common and set(provenance) == {"source_kind", "combine_version", "input_manifest_digest", "producer_commit"}
+                and provenance.get("source_kind") == "combined-project-owned"
+                and provenance.get("combine_version") == COMBINE_VERSION)
+    if not (trained or combined):
         raise ValueError("invalid table32 provenance")
     weights = artifact.get("weights")
     valid_phases = {str(x) for x in range(60)}
