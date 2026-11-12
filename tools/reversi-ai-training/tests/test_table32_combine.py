@@ -3,6 +3,7 @@ import contextlib
 import io
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -47,6 +48,8 @@ class CombineTests(unittest.TestCase):
             base = Path(temp)
             self.source(base / "early", list(range(12)))
             self.source(base / "late", list(range(12, 60)), "not-improved-at-pilot-scale")
+            with self.assertRaisesRegex(training.TrainingError, "trained phase >= 12"):
+                combine.prepare(types.SimpleNamespace(run_root=base / "output", source_root=[base / "early"]))
             records, weights, exposure = combine.collect([base / "early", base / "late"])
             self.assertEqual(len(weights), 60)
             self.assertEqual(exposure, {"known-exposure"})
@@ -134,6 +137,23 @@ class CombineTests(unittest.TestCase):
                 with mock.patch.object(combine, "load", return_value=(manifest, artifact, {"old"})), \
                      mock.patch("subprocess.Popen", side_effect=AssertionError("offline subprocess")):
                     self.assertEqual(combine.verify(root), report)
+                    # A completed unit prefix must recover publication after interruption.
+                    (root / "report.json").unlink()
+                    (root / "exposure-keys-200.jsonl").unlink()
+                    attempt = root / "fixture-attempt"
+                    attempt.mkdir()
+                    args = types.SimpleNamespace(run_root=root, extend_to_200=True,
+                        progress_every=1, resume_from=None, attempt_wall_seconds=None)
+                    with mock.patch.object(table32, "clean_commit", return_value="a" * 40), \
+                         mock.patch.object(table32, "production_providers", return_value=(provider.choose, provider.solve)), \
+                         mock.patch("table32_process.supervise", side_effect=lambda root, manifest, worker, **kw: worker(attempt)):
+                        self.assertEqual(combine.run(args), report)
+                    # A report already published before its receipt can also be recovered.
+                    (root / "offline-verification.receipt.json").unlink()
+                    with mock.patch.object(table32, "clean_commit", return_value="a" * 40), \
+                         mock.patch.object(table32, "production_providers", return_value=(provider.choose, provider.solve)), \
+                         mock.patch("table32_process.supervise", side_effect=lambda root, manifest, worker, **kw: worker(attempt)):
+                        self.assertEqual(combine.run(args), report)
                     st.atomic(root / "screening-report.json", {**screen, "points": 0})
                     with self.assertRaisesRegex(training.TrainingError, "screening report differs"):
                         combine.verify(root)

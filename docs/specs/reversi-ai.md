@@ -2355,5 +2355,6 @@ phase解決規則は探索キャッシュのcontextに含める。既存artifact
 結合は新しい root で行い、保存済みの完了証跡を信頼しつつ、参照する manifest、artifact、receipt と露出情報の整合性および意味互換性を検証する。既存の verify 済み `0054-20261111-partial-01` を読み取り専用で受け入れ、not-improved の入力も明示的に選択できる。phase ごとの入力、digest、形式、baseline、生成・教師条件、producer と設定を合成 manifest に固定する。重複 phase は明示選択なしに受け入れない。全 60 phase のみ full とし、それ以外は partial の後方最近傍と S0 fallback を使う。元 root は変更せず、入力変更や未知の来歴は停止する。
 
 結合候補は入力の生成、学習、検証、test、import、比較と 0018 予約局面の露出を除外した新 opening で独立評価する。S0 との 20 局が 10 点未満なら終了し、10 点以上なら人間の明示指示で 200 局へ進み、100 点超のみ promising とする。対局中の偶発重複、探索 profile、fallback、phase 範囲、入力間の学習設定差を report に残す。旧評価の点数は流用しない。full 被覆は従来の full pilot と同一の学習条件や強度、採用または 0018 合格を意味しない。
+現行の深さ4評価では独立 opening が8着手以降のため、phase 0–11 のみの候補は評価準備時に拒否する。後の phase と結合してから評価する。保存済み最終局の後に出力公開が中断された場合も、完了 unit を再検証して不足する出力を再生成する。
 
 manifest、完了 unit、候補と比較結果は固定し、中断後は検証済みの成果から再開する。設定や入力の変更には新 root を使う。attempt ごとの資源と累積、unit の進捗、phase と停止理由を記録し、既存の進捗形式と rate 制御に従う。offline verify は結合元との対応、露出、対局、gate と report を再構成し、trainer、candidate CLI、Oracle を起動しない。

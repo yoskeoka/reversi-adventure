@@ -112,6 +112,8 @@ def prepare(args):
     st.require(args.run_root.is_absolute() and root != checkout and checkout not in root.parents
                and not root.exists(), "choose a new absolute checkout-external run root")
     records, weights, exposure = collect(args.source_root)
+    phases = sorted(map(int, weights))
+    st.require(phases[-1] >= 12, "independent depth-4 evaluation requires a trained phase >= 12")
     st.require(all(root != Path(r["root"]) and Path(r["root"]) not in root.parents
                    and root not in Path(r["root"]).parents for r in records), "source and output roots overlap")
     executable = st.pin(args.candidate_executable)
@@ -124,7 +126,6 @@ def prepare(args):
                args.decision_timeout_seconds)) and
                (not any(settings.values()) or (all(settings.values()) and
                args.decision_timeout_seconds * 1000 > args.time_limit_ms)), "invalid search resource settings")
-    phases = sorted(map(int, weights))
     partial = len(phases) != 60
     if partial:
         settings["target_phases"] = phases
@@ -158,6 +159,10 @@ def load(root):
     records, weights, exposure = collect([r["root"] for r in manifest["source_runs"]])
     st.require(records == manifest["source_runs"] and st.digest(sorted(exposure)) == manifest["exposure_digest"],
                "source inputs changed; use a new root")
+    phases = sorted(map(int, weights))
+    st.require(phases and phases[-1] >= 12 and manifest["phases"] == phases
+               and manifest["coverage"] == ("full" if len(phases) == 60 else "partial"),
+               "combined phase coverage differs")
     artifact = candidate(manifest, weights)
     st.require(st.read(root / "candidate-artifact.json") == artifact, "combined candidate differs")
     st.require(st.read(root / "prepare.receipt.json") == st.seal({"manifest_digest": st.digest(manifest),
@@ -299,11 +304,11 @@ def run(args):
         receipt = st.read(root / "screening-verification.receipt.json")
         st.require(screen == st.seal(screen) and screen.get("outcome") == "awaiting-explicit-continue"
                    and screen["points"] >= 10 and receipt == st.seal({"report_digest": st.digest(screen),
-                       "manifest_digest": st.digest(manifest), "prefix_digest": screen["completed_prefix_digest"]})
-                   and not (root / "report.json").exists(), "extension requires verified 20-game screen")
-        verified = verify(root)
-        st.require(verified.get("outcome") in ("awaiting-explicit-continue", "saved-prefix-verified"),
-                   "extension prefix differs")
+                       "manifest_digest": st.digest(manifest), "prefix_digest": screen["completed_prefix_digest"]}),
+                   "extension requires verified 20-game screen")
+        replay = table32.Driver(root, manifest, execute=False)
+        st.require(evaluate(replay, artifact, exposure) == screen,
+                   "screening report differs from offline replay")
     def worker(attempt):
         driver = table32.Driver(root, manifest, execute=True, every=args.progress_every, attempt=attempt,
                                 resume_from=args.resume_from)

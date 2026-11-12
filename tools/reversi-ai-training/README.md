@@ -895,6 +895,8 @@ phase境界・停止・完了は間隔によらず表示する。
 partial evaluator に対応する CLI、`CANDIDATE_COMMIT` はそのソース commit とする。
 入力 root は繰り返し指定し、phase の重複は拒否される。過去の not-improved 結果も入力に
 選択できる。元 root は変更せず、結合 root の manifest と receipt に来歴を固定する。
+phase 0–11 のみの候補は現行の深さ4評価では評価できないため、phase 12 以降を含む
+別の完了 root と結合してから prepare する。
 prepare と run は同じ clean producer commit で行い、再開時もその commit と入力を保持する。
 
 ```sh
