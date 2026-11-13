@@ -60,6 +60,16 @@ class Table32ModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.make_partial_artifact({60: {}}, provenance)
 
+    def test_combined_provenance_for_partial_and_full_artifacts(self):
+        provenance = {"source_kind": "combined-project-owned", "combine_version": m.COMBINE_VERSION,
+                      "input_manifest_digest": "a" * 64, "producer_commit": "b" * 40}
+        m.validate_partial_artifact(m.make_partial_artifact({0: {}, 40: {}}, provenance))
+        m.validate_artifact(m.make_artifact({i: {} for i in range(60)}, provenance))
+        for changed in ({"input_manifest_digest": "bad"}, {"producer_commit": "bad"},
+                        {"combine_version": "other"}, {"seed": 1}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "provenance"):
+                m.make_partial_artifact({0: {}}, {**provenance, **changed})
+
     def test_d4_predictions_share_tables_and_reverse_pairs(self):
         for case in self.fixture["cases"]:
             board, side = case["board"], case["side"]

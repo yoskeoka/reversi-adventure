@@ -170,10 +170,16 @@ impl Table32Evaluator {
             return Err("table32 identity/feature/score contract mismatch".into());
         }
         let provenance = &artifact["provenance"];
-        if provenance["trainer_version"] != "reversi-ai-table32-training-v1"
-            || provenance["optimizer"] != "table32_full_batch_adam_v1"
-            || provenance["source_kind"] != "project-owned"
-            || provenance["seed"].as_u64().is_none()
+        let trained = provenance["trainer_version"] == "reversi-ai-table32-training-v1"
+            && provenance["optimizer"] == "table32_full_batch_adam_v1"
+            && provenance["source_kind"] == "project-owned"
+            && provenance["seed"].as_u64().is_some();
+        let combined = provenance
+            .as_object()
+            .is_some_and(|object| object.len() == 4)
+            && provenance["source_kind"] == "combined-project-owned"
+            && provenance["combine_version"] == "table32-combine-v1";
+        if !(trained || combined)
             || !sha(&provenance["input_manifest_digest"], 64)
             || !sha(&provenance["producer_commit"], 40)
         {
@@ -350,6 +356,36 @@ mod tests {
     }
     fn fixture() -> Value {
         serde_json::from_str(include_str!("../../data/table32-fixture.json")).unwrap()
+    }
+    #[test]
+    fn combined_provenance_is_valid_for_both_loaders_and_cannot_claim_a_single_seed() {
+        let provenance = json!({"source_kind":"combined-project-owned", "combine_version":"table32-combine-v1",
+            "input_manifest_digest":"a".repeat(64), "producer_commit":"b".repeat(40)});
+        for partial in [false, true] {
+            let mut artifact = if partial {
+                partial_fixture(&[0, 40])
+            } else {
+                fixture()["artifact"].clone()
+            };
+            artifact["provenance"] = provenance.clone();
+            let mut content = artifact.as_object().unwrap().clone();
+            content.remove("artifact_digest");
+            artifact["artifact_digest"] = json!(digest(&Value::Object(content)));
+            assert!(Table32Evaluator::parse(artifact.clone(), partial).is_ok());
+            for (key, value) in [
+                ("input_manifest_digest", json!("bad")),
+                ("producer_commit", json!("bad")),
+                ("combine_version", json!("other")),
+                ("seed", json!(1)),
+            ] {
+                let mut bad = artifact.clone();
+                bad["provenance"][key] = value;
+                assert_eq!(
+                    Table32Evaluator::parse(bad, partial).err().unwrap(),
+                    "invalid table32 provenance"
+                );
+            }
+        }
     }
     #[test]
     fn partial_uses_nearest_later_learned_phase_and_falls_back_after_it() {
