@@ -18,13 +18,15 @@ from test_table32_cycle import Providers
 
 
 class CombineTests(unittest.TestCase):
-    def source(self, root, phases, outcome="training-complete"):
+    def source(self, root, phases, outcome="training-complete", fixed_zero=False):
         root.mkdir()
         manifest = {"version": st.VERSION, "score_contract": training.SCORE_CONTRACT,
                     "catalog_digest": model.CATALOG_DIGEST, "input_kind": "production",
                     "seed": 4, "producer_commit": "a" * 40, "snapshot_digest": "b" * 64,
                     "baseline": {"path": "/fixture/baseline", "sha256": st.BASELINE_SHA},
                     "settings": {"target_phases": phases}, "generation_plan": [], "historical": {}}
+        if fixed_zero:
+            manifest["settings"]["opening_coverage"] = {"version": "opening-coverage-v1"}
         provenance = {"source_kind": "project-owned", "trainer_version": model.TRAINER,
                       "optimizer": model.OPTIMIZER, "seed": 4,
                       "producer_commit": "a" * 40, "input_manifest_digest": st.digest(manifest)}
@@ -36,12 +38,54 @@ class CombineTests(unittest.TestCase):
         st.atomic_bytes(root / "exposure.jsonl", st.blob("known-exposure"))
         report = st.seal({"manifest_digest": st.digest(manifest), "status": "complete", "outcome": outcome,
                           "candidate_digest": model.digest(artifact), "completed_prefix_digest": "c" * 64,
+                          **({"phases": [{"phase": 0, "source": "fixed-zero", "trained": False,
+                                          "weights": {}}]} if fixed_zero else {}),
                           "exposure_keys": {"path": "exposure.jsonl", "count": 1,
                                             "sha256": training.sha256_file(root / "exposure.jsonl")}})
         st.atomic(root / "report.json", report)
         st.atomic(root / "offline-verification.receipt.json", st.seal({"report_digest": st.digest(report),
                   "manifest_digest": st.digest(manifest), "prefix_digest": report["completed_prefix_digest"]}))
         return manifest, artifact
+
+    def test_fixed_zero_provenance_survives_combination_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            self.source(base / "early", list(range(10)), fixed_zero=True)
+            roots = [base / "early"]
+            for start in range(10, 60, 10):
+                root = base / f"phase{start}"
+                self.source(root, list(range(start, start + 10)))
+                roots.append(root)
+            records, weights, _ = combine.collect(roots)
+            self.assertEqual(records[0]["fixed_zero_phases"], [0])
+            self.assertEqual(len(weights), 60)
+            self.assertEqual(weights["0"], {})
+            artifact = combine.candidate({"producer_commit": "d" * 40, "source_runs": records}, weights)
+            self.assertEqual(artifact["identity"], model.IDENTITY)
+            self.assertEqual(artifact["weights"]["0"], {})
+            report_path = base / "early" / "report.json"
+            report = st.read(report_path)
+            report["phases"][0]["trained"] = True
+            report = st.seal(report)
+            st.atomic(report_path, report)
+            st.atomic(base / "early" / "offline-verification.receipt.json", st.seal({
+                "report_digest": st.digest(report), "manifest_digest": report["manifest_digest"],
+                "prefix_digest": report["completed_prefix_digest"]}))
+            with self.assertRaisesRegex(training.TrainingError, "fixed-zero phase provenance"):
+                combine.collect(roots)
+            report["phases"][0]["trained"] = False
+            source_artifact = st.read(base / "early" / "candidate-artifact.json")
+            altered_weights = {**source_artifact["weights"], "0": {"0": 1}}
+            source_artifact = model.make_partial_artifact(altered_weights, source_artifact["provenance"])
+            st.atomic(base / "early" / "candidate-artifact.json", source_artifact)
+            report["candidate_digest"] = model.digest(source_artifact)
+            report = st.seal(report)
+            st.atomic(report_path, report)
+            st.atomic(base / "early" / "offline-verification.receipt.json", st.seal({
+                "report_digest": st.digest(report), "manifest_digest": report["manifest_digest"],
+                "prefix_digest": report["completed_prefix_digest"]}))
+            with self.assertRaisesRegex(training.TrainingError, "fixed-zero phase provenance"):
+                combine.collect(roots)
 
     def test_saved_sources_overlap_corruption_and_full_coverage(self):
         with tempfile.TemporaryDirectory() as temp:

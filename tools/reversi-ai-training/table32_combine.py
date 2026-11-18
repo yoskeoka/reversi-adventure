@@ -61,6 +61,11 @@ def source(root):
     phases = sorted(int(p) for p in artifact["weights"])
     st.require(phases == manifest["settings"].get("target_phases", list(range(60))),
                "source phase selection differs")
+    if "opening_coverage" in manifest["settings"] and 0 in phases:
+        fixed = [phase for phase in report.get("phases", []) if phase.get("phase") == 0]
+        st.require(artifact["weights"]["0"] == {} and len(fixed) == 1
+                   and fixed[0] == {"phase": 0, "source": "fixed-zero", "trained": False, "weights": {}},
+                   "fixed-zero phase provenance differs")
     exposure = report["exposure_keys"]
     name = exposure["path"]
     st.require(isinstance(name, str) and Path(name).name == name, "invalid exposure path")
@@ -82,7 +87,8 @@ def source(root):
             "report_digest": st.digest(report), "outcome": report["outcome"],
             "phases": phases, "baseline": baseline, "producer_commit": manifest["producer_commit"],
             "settings": manifest["settings"], "generation_plan_digest": st.digest(manifest["generation_plan"]),
-            "historical": manifest["historical"], "seed": manifest["seed"]}, artifact, set(keys)
+            "historical": manifest["historical"], "seed": manifest["seed"],
+            **({"fixed_zero_phases": [0]} if "opening_coverage" in manifest["settings"] and 0 in phases else {})}, artifact, set(keys)
 
 
 def collect(roots):

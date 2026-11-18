@@ -33,6 +33,51 @@ def saved_game(seed):
 
 
 class Table32InputTests(unittest.TestCase):
+    def test_coverage_plan_deduplicates_across_splits_and_records_limits(self):
+        counts = {"train": 2, "validation": 1, "test": 1}
+        plan = inputs.coverage_plan(inputs.SEED, [0, 1, 2], counts, 10, 1000)
+        self.assertEqual(plan, inputs.coverage_plan(inputs.SEED, [0, 1, 2], counts, 10, 1000))
+        self.assertNotIn("0", plan["coverage"])
+        self.assertEqual(plan["coverage"]["1"]["train"]["acquired"], 1)
+        self.assertEqual(plan["coverage"]["1"]["train"]["stop_reason"], "duplicate-limit")
+        self.assertEqual(plan["coverage"]["1"]["validation"]["acquired"], 0)
+        accepted = [attempt for attempt in plan["attempts"] if attempt["outcome"] == "accepted"]
+        self.assertEqual(len({(row["phase"], row["canonical_key"]) for row in accepted}), len(accepted))
+        self.assertEqual([row["game_id"] for row in accepted], [game["game_id"] for game in plan["games"]])
+        for game, attempt in zip(plan["games"], accepted):
+            opening = inputs.generation_opening(game)
+            self.assertEqual(inputs.position_key(opening["board"], opening["side"]), attempt["canonical_key"])
+        limited = inputs.coverage_plan(inputs.SEED, [1, 2], counts, 10, 1)
+        self.assertEqual(len(limited["attempts"]), 1)
+        self.assertEqual(limited["coverage"]["2"]["train"]["stop_reason"], "attempt-limit")
+
+    def test_early_legal_canonical_counts(self):
+        positions = {(rf.INITIAL, "B")}
+        counts = []
+        for depth in range(5):
+            counts.append(len({inputs.position_key(board, side) for board, side in positions}))
+            following = set()
+            for board, side in positions:
+                legal = rf.legal_moves(board, side)
+                if not legal and rf.legal_moves(board, rf.other(side)):
+                    board, side = inputs.advance(board, side, "pass")
+                    legal = rf.legal_moves(board, side)
+                for move in legal:
+                    following.add(inputs.advance(board, side, move))
+            positions = following
+        self.assertEqual(counts, [1, 1, 3, 14, 60])
+
+    def test_phase_counts_placements_not_passes_and_clamps_terminal_boundary(self):
+        board = ".BBBBBBB.BWWWWWWBBBBWBWWBBWWWWWBBBWWBWWBBWWWWBWBWWWWWWBBBBBBBBBB"
+        self.assertEqual(inputs.phase(board), 58)
+        self.assertFalse(rf.legal_moves(board, "B"))
+        passed_board, side = inputs.advance(board, "B", "pass")
+        self.assertEqual((passed_board, side), (board, "W"))
+        self.assertEqual(inputs.phase(passed_board), 58)
+        next_board, _ = inputs.advance(passed_board, side, sorted(rf.legal_moves(passed_board, side))[0])
+        self.assertEqual(inputs.phase(next_board), 59)
+        self.assertEqual(inputs.phase("B" * 64), 59)
+
     def test_partial_teacher_exact_threshold_and_legacy_default(self):
         limits = {"time_limit_ms": None, "node_limit": None,
                   "teacher_exact_solver_empty_squares": 20}

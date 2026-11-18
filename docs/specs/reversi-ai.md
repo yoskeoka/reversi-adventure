@@ -2284,6 +2284,34 @@ offline再構成が上限内で完了すれば学習サイクルの成立を確�
 有効な資源停止・負の対戦結果も保存・検証して結論を記録する。
 新artifactの自動採用や0018合格は行わず、完了済み0019 cycle/0037を再開しない。
 
+### Bounded partial coverage (0056)
+
+The opt-in partial coverage policy freezes a new run's seed, requested counts,
+consecutive duplicate limit (default 10), and finite total attempt limit in its
+manifest. For each selected phase and split it generates legal project-owned
+positions deterministically, counts placements rather than passes, and assigns
+each canonical position to at most one split. A new position resets the
+consecutive duplicate count; reaching the limit stops that phase and split
+without claiming exhaustive enumeration. Saved generation units and their
+assignments are verified and reused on resume. Reports record requested and
+acquired counts, attempts, duplicates, stop reasons and unavailable splits.
+Attempt limits and actual coverage apply to every selected phase, independent
+of a fixed early-phase boundary or a particular game count.
+
+Phase 0 is an explicitly provisional fixed-zero table, with all weights zero
+and provenance distinguishing it from learned weights. Other phases require at
+least one training position; unavailable validation or test is reported as
+unavailable, never as zero error or a successful check. Training may continue
+with fewer positions than requested. New artifacts and receipts identify the
+policy and fixed phase, support offline replay and combination with compatible
+partial artifacts, and reject overlap or missing phases rather than substituting
+zero for them. Existing artifacts retain their original verification contract.
+Any reuse of completed games is read-only, verifies compatibility, records all
+source exposures, and uses an explicit policy for reassignment and collision
+removal. Production runs use a fresh root and remain operator-controlled;
+combination and independent evaluation do not imply model adoption or 0018
+acceptance.
+
 ## 資源・進捗・保存・再開
 
 - 生成128局、序盤label最大256root（preflightの先頭2は内数）、preflight自前exact12decision、

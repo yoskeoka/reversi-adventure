@@ -13,7 +13,8 @@ import table32_store as st
 
 
 def build(games, labels, specs, folder, *, early_limit, limits=None, target_phases=None,
-          expected_prefixes=None, trusted_import_count=0, train_collision_priority=False):
+          expected_prefixes=None, trusted_import_count=0, train_collision_priority=False,
+          opening_coverage=False):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     selected = tuple(range(60)) if target_phases is None else tuple(target_phases)
@@ -56,6 +57,10 @@ def build(games, labels, specs, folder, *, early_limit, limits=None, target_phas
                         for cursor, turn in enumerate(game["decisions"]))
             else:
                 rows = inputs.replay_game(game, limits=limits)
+            if opening_coverage:
+                # Only the selected opening belongs to this phase/split. Later
+                # decisions remain exposures but cannot leak into another split.
+                rows = rows[:1]
             for row in rows:
                 add(row)
         st.require(game_count == len(specs), "generation incomplete")
@@ -110,7 +115,7 @@ def build(games, labels, specs, folder, *, early_limit, limits=None, target_phas
         db.close()
     for name in ("excluded.jsonl", "exposure-keys.jsonl"):
         paths[name] = st.pin(folder / name)["sha256"]
-    missing = [p for p in selected if not counts[("train", p)]]
+    missing = [p for p in selected if not counts[("train", p)] and not (opening_coverage and p == 0)]
     missing_validation = [p for p in selected if not counts[("validation", p)]]
     split_missing = [s for s in ("train", "validation", "test") if not any(counts[(s,p)] for p in range(60))]
     prefix_missing = [[s, length] for s in ("train", "validation", "test")
@@ -122,9 +127,11 @@ def build(games, labels, specs, folder, *, early_limit, limits=None, target_phas
             "raw_prefix_rows": {s: {str(p):raw_prefix[(s,p)] for p in reported_prefixes} for s in ("train","validation","test")},
             "side_rows":{s:{side:side_counts[(s,side)] for side in ("B","W")} for s in ("train","validation","test")},
             "training_unavailable": missing, "validation_unavailable": missing_validation,
+            **({"test_unavailable": [p for p in selected if not counts[("test", p)]],
+                "fixed_zero_phases": [0] if 0 in selected else []} if opening_coverage else {}),
             "split_missing": split_missing, "prefix_missing": prefix_missing,
             "status": "training-phase-unavailable" if missing else
-                      "input-coverage-unavailable" if split_missing or prefix_missing else "ready"}
+                      "input-coverage-unavailable" if not opening_coverage and (split_missing or prefix_missing) else "ready"}
 
 
 def phase_rows(folder, split, phase):

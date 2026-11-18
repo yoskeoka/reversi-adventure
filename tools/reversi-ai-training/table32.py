@@ -150,6 +150,15 @@ def settings(args):
     if getattr(args, "training_only", False):
         st.require("target_phases" in value, "training-only requires partial phase selection")
         value["training_only"] = True
+    if getattr(args, "opening_coverage", False):
+        st.require(value.get("training_only", False), "opening coverage requires training-only partial selection")
+        duplicate_limit = getattr(args, "duplicate_limit", 10)
+        attempt_limit = getattr(args, "coverage_attempt_limit", 10000)
+        st.require(type(duplicate_limit) is int and duplicate_limit > 0
+                   and type(attempt_limit) is int and attempt_limit > 0,
+                   "coverage limits must be positive")
+        value["opening_coverage"] = {"version": "opening-coverage-v1",
+                                     "duplicate_limit": duplicate_limit, "attempt_limit": attempt_limit}
     return value
 
 
@@ -181,9 +190,14 @@ def prepare(args):
     oracle_identity = originals["oracle_source_identity"]
     runtime = oracle_identity["runtime"]
     prefixes = (config["generation_prefix"],) if "target_phases" in config else inputs.PREFIX_LENGTHS
-    specs = inputs.generation_plan(seed, config["train_per_prefix"],
-                                   config["validation_per_prefix"], config["test_per_prefix"], prefixes)
-    limits = {**st.LIMITS, "games": len(specs), "early_labels": config["early_positions"],
+    coverage = None
+    if "opening_coverage" in config:
+        # Sampling is journaled under the execution attempt, not performed by prepare.
+        specs = []
+    else:
+        specs = inputs.generation_plan(seed, config["train_per_prefix"],
+                                       config["validation_per_prefix"], config["test_per_prefix"], prefixes)
+    limits = {**st.LIMITS, "games": config["opening_coverage"]["attempt_limit"] if "opening_coverage" in config else len(specs), "early_labels": config["early_positions"],
               "training_steps_per_phase": config["max_steps"],
               "export_proposals_per_phase": config["max_proposals"],
               "wall_seconds": args.max_wall_seconds, "producer_rss_kib": args.producer_rss_kib,
@@ -204,6 +218,7 @@ def prepare(args):
     import_root = getattr(args, "import_games_from", None)
     if import_root is not None:
         st.require("target_phases" in config, "import requires partial training")
+        st.require("opening_coverage" not in config, "opening coverage does not support imported games")
         import table32_import
         manifest["imported_games"] = table32_import.completed_games(
             import_root, teacher_settings=inputs.search_settings(inputs.TEACHER_SETTINGS, config),
@@ -428,6 +443,9 @@ def learn_phases(driver, folder):
     states = driver.root / "trained-phases"
     selected = config.get("target_phases", list(range(60)))
     for phase in selected:
+        if phase == 0 and "opening_coverage" in config:
+            driver.computed("phase-training", "p00-fixed-zero", {"phase": 0, "source": "fixed-zero", "trained": False})
+            continue
         train = extraction.phase_rows(folder, "train", phase)
         validation = extraction.phase_rows(folder, "validation", phase)
         state = optimizer.initial_state(train, validation, phase=phase, max_steps=config["max_steps"])
@@ -445,10 +463,14 @@ def learn_phases(driver, folder):
             if not path.is_file():
                 raise MissingUnit("phase-training", f"p{phase:02}-final-state")
             st.require(st.read(path) == state, f"final trained phase materialization differs: {phase}")
-    del state, following, train, validation
-
     phase_weights, phase_diagnostics = {}, []
     for phase in selected:
+        if phase == 0 and "opening_coverage" in config:
+            fixed = {"phase": 0, "source": "fixed-zero", "trained": False, "weights": {}}
+            driver.computed("export", "p00-fixed-zero", fixed)
+            phase_weights["0"] = {}
+            phase_diagnostics.append(fixed)
+            continue
         train = extraction.phase_rows(folder, "train", phase)
         validation = extraction.phase_rows(folder, "validation", phase)
         state = st.read(states / f"p{phase:02}.json")
@@ -520,6 +542,36 @@ def cycle(driver, snapshot, *, extend=False):
                      "limits": m["limits"], "acceptance_reservation": "not-yet-selected"})
     target_phases = config.get("target_phases")
     partial = target_phases is not None
+    coverage_plan = None
+    generation_plan = m["generation_plan"]
+    if "opening_coverage" in config:
+        policy = config["opening_coverage"]
+        st.require(not generation_plan, "opening coverage generation plan must be sampled during execution")
+        def saved_opening(spec):
+            def validate(opening):
+                board, side = inputs.rf.INITIAL, "B"
+                placements = 0
+                for turn in opening["turns"]:
+                    st.require(turn == {"board": board, "side": side, "move": turn["move"],
+                                        "kind": "random-prefix"}, "opening turn differs")
+                    board, side = inputs.advance(board, side, turn["move"])
+                    placements += turn["move"] != "pass"
+                st.require(opening["board"] == board and opening["side"] == side
+                           and placements <= spec["prefix_length"], "saved opening differs")
+                if not driver.execute:
+                    st.require(opening == inputs.random_prefix(spec, allow_terminal=True),
+                               "saved opening sampling differs")
+            opening = driver.unit("generation", f"opening-{spec['game_id']}",
+                lambda: inputs.random_prefix(spec, allow_terminal=True), validate,
+                len(sampled) + 1, policy["attempt_limit"])
+            sampled.append(opening)
+            return opening
+        sampled = []
+        coverage_plan = inputs.coverage_plan(m["seed"], target_phases,
+            {split: config[f"{split}_per_prefix"] for split in ("train", "validation", "test")},
+            policy["duplicate_limit"], policy["attempt_limit"], opening_provider=saved_opening)
+        generation_plan = coverage_plan["games"]
+        driver.computed("generation", "opening-coverage-plan", coverage_plan)
     if driver.attempt and not partial:
         st.atomic(driver.attempt / "progress.json", {"phase": "teacher-preflight", "unit": "early-pool"})
     pool = ({"roots": [], "candidates": []} if partial else
@@ -552,7 +604,7 @@ def cycle(driver, snapshot, *, extend=False):
     if hasattr(driver,"close_players"):
         driver.close_players()
     gen_start = driver.journal.cursor
-    for index, spec in enumerate(m["generation_plan"]):
+    for index, spec in enumerate(generation_plan):
         def generate():
             import table32_game_checkpoint
             checkpoint = table32_game_checkpoint.GameDecisions(
@@ -563,7 +615,7 @@ def cycle(driver, snapshot, *, extend=False):
             inputs.replay_game(game, limits=config)
             for turn, row in enumerate(game["decisions"]):
                 check(f"{spec['game_id']}-{turn:03}",row["board"],row["side"],row,inputs.TEACHER_SETTINGS)
-        driver.unit("generation", spec["game_id"], generate, validate_game,index+1,len(m["generation_plan"]))
+        driver.unit("generation", spec["game_id"], generate, validate_game,index+1,len(generation_plan))
     gen_end = driver.journal.cursor
     if hasattr(driver,"close_players"):
         driver.close_players()
@@ -587,11 +639,12 @@ def cycle(driver, snapshot, *, extend=False):
         import itertools
         return extraction.build(itertools.chain(imported_games, _events(root, gen_start, gen_end)),
             itertools.chain(labels, _events(root, label_start, label_end)),
-            [game["spec"] for game in imported_games] + m["generation_plan"], folder,
+            [game["spec"] for game in imported_games] + generation_plan, folder,
             early_limit=config["early_positions"], limits=config, target_phases=target_phases,
-            expected_prefixes=sorted({spec["prefix_length"] for spec in m["generation_plan"]}),
+            expected_prefixes=sorted({spec["prefix_length"] for spec in generation_plan}),
             trusted_import_count=len(imported_games),
-            train_collision_priority=config.get("training_only", False))
+            train_collision_priority=config.get("training_only", False),
+            opening_coverage=coverage_plan is not None)
     folder = root / "extracted"
     def validate_extraction(saved):
         with tempfile.TemporaryDirectory(prefix="table32-replay-") as temporary:
@@ -600,7 +653,8 @@ def cycle(driver, snapshot, *, extend=False):
             st.require(training.sha256_file(folder / name) == sha, f"extracted rows changed: {name}")
     extracted = driver.unit("extraction", "rows", lambda: data_build(folder), validate_extraction)
     if extracted["status"] != "ready":
-        return final_report(m, driver, extracted["status"], {"coverage": extracted})
+        return final_report(m, driver, extracted["status"], {"coverage": extracted,
+            **({"opening_coverage": coverage_plan["coverage"]} if coverage_plan is not None else {})})
     phase_weights, phase_diagnostics, paused = learn_phases(driver, folder)
     if paused is not None:
         return final_report(m, driver, "export-paused", {"resume_phase": "export", "phase": paused})
@@ -622,6 +676,10 @@ def cycle(driver, snapshot, *, extend=False):
         forbidden.update(inputs.position_key(r["board"], r["side"]) for r in roots)
         forbidden.update(inputs.position_key(q["query"]["board"], q["query"]["side"]) for q in queries)
         forbidden.update(r["canonical_key"] for r in pool["candidates"])
+        if coverage_plan is not None:
+            for attempt, opening in zip(coverage_plan["attempts"], sampled):
+                forbidden.add(attempt["canonical_key"])
+                forbidden.update(inputs.position_key(t["board"], t["side"]) for t in opening["turns"])
         import itertools
         for game in itertools.chain(_events(root, gen_start, gen_end), imported_games):
             forbidden.update(inputs.position_key(t["board"], t["side"]) for t in game["opening"]["turns"] + game["decisions"])
@@ -635,7 +693,8 @@ def cycle(driver, snapshot, *, extend=False):
         exposure = {"path": exposure_path.name, "sha256": training.sha256_file(exposure_path), "count": len(forbidden)}
         driver.computed("export", "training-exposure", exposure)
         return final_report(m, driver, "training-complete", {"candidate_digest": model.digest(artifact),
-            "exposure_keys": exposure, "coverage": extracted, "phases": phase_diagnostics})
+            "exposure_keys": exposure, "coverage": extracted, "phases": phase_diagnostics,
+            **({"opening_coverage": coverage_plan["coverage"]} if coverage_plan is not None else {})})
     if partial:
         baseline_weights = st.read(m["baseline"]["path"])["weights"]
         def predict(board, side):
@@ -811,7 +870,9 @@ def run(args):
                    "--extend-to-200 requires a completed20-game screen of at least10 points")
     partial = "target_phases" in manifest["settings"]
     phase_count = len(manifest["settings"]["target_phases"]) if partial else 60
-    for unit,total in (("planned-games",manifest["limits"]["games"]),
+    game_budget_unit = ("planned-opening-attempt-limit" if "opening_coverage" in manifest["settings"]
+                        else "planned-games")
+    for unit,total in ((game_budget_unit,manifest["limits"]["games"]),
                        ("planned-early-labels",0 if partial else manifest["limits"]["early_labels"]),
                        ("planned-preflight-decisions",0 if partial else 12),("planned-oracle-queries",0 if partial else 24),
                        ("planned-training-steps",phase_count*config_value(manifest,"max_steps")),
@@ -869,6 +930,9 @@ def main(argv):
     prep.add_argument("--generation-prefix", type=int)
     prep.add_argument("--training-only", action="store_true", help="finish after export without evaluation")
     prep.add_argument("--import-games-from", type=Path)
+    prep.add_argument("--opening-coverage", action="store_true")
+    prep.add_argument("--duplicate-limit", type=int, default=10)
+    prep.add_argument("--coverage-attempt-limit", type=int, default=10000)
     defaults={"seed":inputs.SEED,"train-per-prefix":12,"validation-per-prefix":2,"test-per-prefix":2,
         "early-positions":256,"early-candidates-per-phase":32,"pool-sequences":10000,
         "max-steps":1000,"max-proposals":1000,"decision-timeout-seconds":0,
