@@ -79,7 +79,7 @@ def advance(board: str, side: str, move: str) -> tuple[str, str]:
 
 
 def random_prefix(spec: dict, *, allow_terminal: bool = False) -> dict:
-    require(type(spec.get("prefix_length")) is int and 0 <= spec["prefix_length"] <= 58,
+    require(type(spec.get("prefix_length")) is int and 0 <= spec["prefix_length"] <= 59,
             "invalid prefix length")
     board, side, turns, placements = rf.INITIAL, "B", [], 0
     rng = random.Random(spec["stream_seed"])
@@ -96,6 +96,65 @@ def random_prefix(spec: dict, *, allow_terminal: bool = False) -> dict:
         turns.append({"board": board, "side": side, "move": move, "kind": "random-prefix"})
         board, side = advance(board, side, move)
     return {"board": board, "side": side, "turns": turns}
+
+
+def coverage_plan(seed: int, phases, split_counts: dict, duplicate_limit: int = 10,
+                  attempt_limit: int = 10000, opening_provider=None) -> dict:
+    """Build a bounded, replayable set of distinct project-owned openings.
+
+    A duplicate limit indicates sampling saturation, not exhaustive enumeration.
+    The attempt ceiling is shared by all phases and splits in their given order.
+    """
+    phases = tuple(phases)
+    require(phases and len(set(phases)) == len(phases)
+            and all(type(p) is int and 0 <= p <= 59 for p in phases), "invalid coverage phases")
+    require(set(split_counts) == set(SPLIT_COUNTS)
+            and all(type(split_counts[s]) is int and split_counts[s] > 0 for s in SPLIT_COUNTS),
+            "invalid coverage split counts")
+    require(type(duplicate_limit) is int and duplicate_limit > 0
+            and type(attempt_limit) is int and attempt_limit > 0, "invalid coverage limits")
+    games, attempts, coverage = [], [], {}
+    for phase_number in phases:
+        if phase_number == 0:
+            continue
+        seen = set()
+        phase_coverage = coverage[str(phase_number)] = {}
+        for split in SPLIT_COUNTS:
+            requested = split_counts[split]
+            acquired = duplicate_count = consecutive = count = 0
+            while acquired < requested and consecutive < duplicate_limit and len(attempts) < attempt_limit:
+                ordinal = count
+                stream = seed_stream(seed, "coverage-opening", phase_number, split, ordinal)
+                spec = {"game_id": f"coverage-p{phase_number:02}-{split}-{ordinal:06}",
+                        "split": split, "prefix_length": phase_number, "ordinal": ordinal,
+                        "seed": seed, "stream_seed": stream}
+                opening = (random_prefix(spec, allow_terminal=True) if opening_provider is None
+                           else opening_provider(spec))
+                board, side = opening["board"], opening["side"]
+                key = position_key(board, side)
+                count += 1
+                if phase(board) != phase_number or not (rf.legal_moves(board, side)
+                                                        or rf.legal_moves(board, rf.other(side))):
+                    outcome = "terminal"
+                elif key in seen:
+                    outcome = "duplicate"
+                    duplicate_count += 1
+                    consecutive += 1
+                else:
+                    outcome = "accepted"
+                    consecutive = 0
+                    seen.add(key)
+                    acquired += 1
+                    games.append(spec)
+                attempts.append({"game_id": spec["game_id"], "phase": phase_number, "split": split,
+                                 "ordinal": ordinal, "stream_seed": stream,
+                                 "canonical_key": key, "outcome": outcome})
+            reason = ("requested" if acquired == requested else
+                      "duplicate-limit" if consecutive >= duplicate_limit else "attempt-limit")
+            phase_coverage[split] = {"requested": requested, "acquired": acquired, "attempts": count,
+                                     "duplicates": duplicate_count, "consecutive_duplicates": consecutive,
+                                     "stop_reason": reason}
+    return {"games": games, "coverage": coverage, "attempts": attempts}
 
 
 def generation_opening(spec: dict, *, max_candidates: int = 1000) -> dict:

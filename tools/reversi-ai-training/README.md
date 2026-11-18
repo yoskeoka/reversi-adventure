@@ -884,9 +884,52 @@ phase境界・停止・完了は間隔によらず表示する。
 従来の深さ12・閾値16の結果とは区別する。部分評価器対応の新しいcandidate CLIのビルドが必要。
 比較用の独立した開始点は8着手以降を使うため、対象区間の `--phase-end` は12以上にする。
 対局を後回しにする場合は prepare に `--training-only` を加える。例えば
-`--phase-start 0 --phase-end 11 --generation-prefix 0 --training-only` で序盤だけを
-学習できる。生成局数と `--max-steps`、`--max-proposals`、資源上限は従来どおり指定する。
+`--phase-start 0 --phase-end 11 --generation-prefix 0 --training-only` で序盤を
+指定できるが、同一開始局面から生成する従来方式ではsplitが不足し得る。下記の0056方式を使う。
+生成局数と `--max-steps`、`--max-proposals`、資源上限は従来どおり指定する。
 `training-complete` は export と offline verify の完了を表し、対局結果ではない。
+
+### 0056: 序盤のcoverageを限定した部分学習
+
+以下は実装のマージ後に人間が行う例。上記と同様にclean checkoutからCLIをbuildし、
+`TABLE32_CANDIDATE_EXECUTABLE`、`TABLE32_CANDIDATE_SOURCE_COMMIT`、検証済み
+`TABLE32_ORACLE_RECEIPT` を設定する。rootは未作成の新しいcheckout外パスを選ぶ。
+旧0–9 rootの保存局はsplit間で重複するため、この方式の入力には使わない。旧rootや
+採用済みモデルは変更しない。prepareとrunは同一のclean producer commitで行う。
+
+```sh
+TABLE32_EARLY_ROOT=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0056-early-01
+rtk python3 tools/reversi-ai-training/start_table32.py prepare \
+  --run-root "$TABLE32_EARLY_ROOT" \
+  --source-manifest /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0019-20261020-02/manifest.json \
+  --source-comparison-root /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0052-20261026-01 \
+  --source-evaluation-root /home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs/0053-20261026-01 \
+  --candidate-executable "$TABLE32_CANDIDATE_EXECUTABLE" \
+  --candidate-source-commit "$TABLE32_CANDIDATE_SOURCE_COMMIT" \
+  --oracle-runtime-receipt "$TABLE32_ORACLE_RECEIPT" \
+  --phase-start 0 --phase-end 9 --generation-prefix 0 --training-only \
+  --opening-coverage --duplicate-limit 10 --coverage-attempt-limit 10000 \
+  --seed 2026111701 --train-per-prefix 12 --validation-per-prefix 2 --test-per-prefix 2 \
+  --max-steps 1000 --max-proposals 1000 \
+  --decision-timeout-seconds 0 --time-limit-ms 0 --node-limit 0 \
+  --max-wall-seconds 259200 --producer-rss-kib 262144 --child-rss-kib 1572864
+
+# 人間が開始し、必要なら同じrootで再開する。
+rtk python3 tools/reversi-ai-training/start_table32.py run --run-root "$TABLE32_EARLY_ROOT" --progress-every 10
+rtk python3 tools/reversi-ai-training/start_table32.py resume --run-root "$TABLE32_EARLY_ROOT" --attempt-wall-seconds 3600 --progress-every 10
+rtk python3 tools/reversi-ai-training/start_table32.py verify --run-root "$TABLE32_EARLY_ROOT"
+```
+
+3種類の `--*-per-prefix` は各phase・splitで要求する局面数。`--duplicate-limit` は
+同じphase・splitで新局面を得ない連続重複の上限で、新局面を採用すると0に戻る。
+`--coverage-attempt-limit` は全体の有限試行上限。seedとこれらの値はmanifestに固定される。
+上限に達しても合法局面を列挙し尽くした証明にはならない。phase 0は学習値ではなく
+全重み0の暫定固定値。その他のphaseはtrainが0なら停止し、要求数未満でもtrainがあれば
+続ける。`report.json` の `opening_coverage` で要求数・獲得数・試行・重複・停止理由を、
+`coverage.validation_unavailable`、`coverage.test_unavailable`、`coverage.fixed_zero_phases`
+で欠測と固定値を確認する。欠測は成功や誤差0ではない。入力・seed・上限を変更する場合は
+新rootでprepareし、保存済みunitを削除して同じrootをやり直さない。
+`--import-games-from` はこの方式と併用できない。実学習、対局、Oracle診断は人間が別途実行する。
 
 ### 部分候補の結合と独立評価
 
@@ -906,6 +949,24 @@ python3 tools/reversi-ai-training/table32_combine.py prepare \
 python3 tools/reversi-ai-training/table32_combine.py run --run-root "$COMBINED_ROOT" \
   --attempt-wall-seconds 3600 --progress-every 10
 python3 tools/reversi-ai-training/table32_combine.py verify --run-root "$COMBINED_ROOT"
+```
+
+0056の0–9が完成・検証された後、既存10–59と結合する場合は各原本を指定する。以下の
+`COMBINED_ROOT` は新しい未作成rootで、0055の結合済みrootを入力として指定しない。
+入力rootのreceipt、identityと互換性はprepare時に再検証される。これは人間が行う独立評価である。
+
+```sh
+TABLE32_RUNS=/home/yoske/src/github.com/yoskeoka/vibe-coding-workspace/.local/reversi-ai-runs
+rtk python3 tools/reversi-ai-training/table32_combine.py prepare \
+  --run-root "$COMBINED_ROOT" --source-root "$TABLE32_EARLY_ROOT" \
+  --source-root "$TABLE32_RUNS/0054-20261114-phase10-19" \
+  --source-root "$TABLE32_RUNS/0054-20261114-phase20-29" \
+  --source-root "$TABLE32_RUNS/0054-20261114-phase30-39" \
+  --source-root "$TABLE32_RUNS/0054-20261111-partial-01" \
+  --source-root "$TABLE32_RUNS/0054-20261114-phase50-59" \
+  --candidate-executable "$TABLE32_CANDIDATE_EXECUTABLE" --candidate-source-commit "$TABLE32_CANDIDATE_SOURCE_COMMIT"
+rtk python3 tools/reversi-ai-training/table32_combine.py run --run-root "$COMBINED_ROOT" --attempt-wall-seconds 3600 --progress-every 10
+rtk python3 tools/reversi-ai-training/table32_combine.py verify --run-root "$COMBINED_ROOT"
 ```
 
 停止後は同じ設定と入力のまま `resume --run-root "$COMBINED_ROOT"

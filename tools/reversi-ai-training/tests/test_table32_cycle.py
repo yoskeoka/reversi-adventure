@@ -78,6 +78,48 @@ def runtime():
 
 
 class Table32CycleTests(unittest.TestCase):
+    def test_opening_coverage_resumes_and_offline_replays_fixed_zero(self):
+        manifest, snapshot = self.fixture()
+        manifest["generation_plan"] = []
+        manifest["settings"].update(target_phases=[0, 1], training_only=True,
+            teacher_exact_solver_empty_squares=20, train_per_prefix=1,
+            validation_per_prefix=1, test_per_prefix=1,
+            opening_coverage={"version": "opening-coverage-v1", "duplicate_limit": 3, "attempt_limit": 100})
+        class Interrupted(Providers):
+            def choose(self, kind, identifier, board, side, config):
+                raise RuntimeError("interrupted coverage game")
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(io.StringIO()):
+            root = Path(temporary)
+            original_unit = cycle.Driver.unit
+            def interrupt_sampling(driver, phase, name, *args):
+                if name.startswith("opening-coverage-p") and driver.journal.cursor >= 2:
+                    raise RuntimeError("interrupted opening sampling")
+                return original_unit(driver, phase, name, *args)
+            with mock.patch.object(cycle.Driver, "unit", interrupt_sampling):
+                with self.assertRaisesRegex(RuntimeError, "interrupted opening sampling"):
+                    self.execute_fixture(root, manifest, snapshot, Providers())
+            prefix = verifier.verify(root, manifest=manifest, snapshot=snapshot)
+            self.assertEqual(prefix["resume_phase"], "generation")
+            self.assertTrue(prefix["missing_unit"].startswith("opening-coverage-p"))
+            with self.assertRaisesRegex(RuntimeError, "interrupted coverage game"):
+                self.execute_fixture(root, manifest, snapshot, Interrupted())
+            self.assertEqual(verifier.verify(root, manifest=manifest, snapshot=snapshot)["status"], "incomplete")
+            report = self.execute_fixture(root, manifest, snapshot, Providers())
+            self.assertEqual(report["outcome"], "training-complete")
+            self.assertEqual(report["coverage"]["fixed_zero_phases"], [0])
+            self.assertIn(1, report["coverage"]["validation_unavailable"])
+            self.assertEqual(st.read(root / "candidate-artifact.json")["weights"]["0"], {})
+            with mock.patch.object(cycle.subprocess, "run", side_effect=AssertionError("offline run")), \
+                 mock.patch.object(cycle.subprocess, "Popen", side_effect=AssertionError("offline Popen")):
+                self.assertEqual(verifier.verify(root, manifest=manifest, snapshot=snapshot), report)
+            attempt_path = next(path for path in sorted((root / "units").glob("*.json"))
+                                if st.read(path)["unit"].startswith("opening-coverage-p"))
+            altered = st.read(attempt_path)
+            altered["value"]["board"] = "tampered"
+            st.atomic(attempt_path, altered)
+            with self.assertRaises(training.TrainingError):
+                verifier.verify(root, manifest=manifest, snapshot=snapshot)
+
     def test_partial_candidate_training_and_diagnostics_replay(self):
         manifest, snapshot = self.fixture()
         manifest["generation_plan"] = inputs.generation_plan(

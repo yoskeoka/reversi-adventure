@@ -4,6 +4,7 @@ import io
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -18,6 +19,44 @@ import production_cycle
 
 
 class Table32CliTests(unittest.TestCase):
+    def test_opening_coverage_prepare_freezes_policy_without_sampling(self):
+        help_result = mock.Mock(returncode=0,
+                                stdout="trained-table32-partial --fallback-artifact")
+        with tempfile.TemporaryDirectory() as temporary, \
+             mock.patch.object(table32.subprocess, "run", return_value=help_result), \
+             mock.patch.object(inputs, "coverage_plan", side_effect=AssertionError("prepare sampled")):
+            folder = Path(temporary)
+            manifest, _ = self.prepare_fixture(folder, ["--phase-start", "0", "--phase-end", "9",
+                "--generation-prefix", "0", "--training-only", "--opening-coverage",
+                "--duplicate-limit", "7", "--coverage-attempt-limit", "200"])
+            self.assertEqual(manifest["generation_plan"], [])
+            self.assertEqual(manifest["settings"]["target_phases"], list(range(10)))
+            self.assertEqual(manifest["settings"]["opening_coverage"],
+                {"version": "opening-coverage-v1", "duplicate_limit": 7, "attempt_limit": 200})
+            self.assertEqual(manifest["limits"]["games"], 200)
+            self.assertEqual(st.read(folder / "run/prepare.receipt.json"), st.seal({
+                "manifest_digest": st.digest(manifest), "snapshot_digest": manifest["snapshot_digest"]}))
+
+    def test_opening_coverage_run_reports_attempt_limit_as_a_limit(self):
+        import table32_process
+        manifest = {"producer_commit": "a" * 40,
+                    "limits": {"games": 200, "early_labels": 12},
+                    "settings": {"target_phases": [0, 1], "training_only": True,
+                        "opening_coverage": {"attempt_limit": 200},
+                        "max_steps": 1, "max_proposals": 1}}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            st.atomic(root / "status.json", {"outcome": "fixture"})
+            args = types.SimpleNamespace(run_root=root, extend_to_200=False,
+                progress_every=1, resume_from=None, attempt_wall_seconds=None)
+            output = io.StringIO()
+            with mock.patch.object(table32, "load", return_value=(manifest, {})), \
+                 mock.patch.object(table32, "clean_commit", return_value="a" * 40), \
+                 mock.patch.object(table32_process, "supervise"), contextlib.redirect_stderr(output):
+                table32.run(args)
+            self.assertIn("unit=planned-opening-attempt-limit completed=0 total=200", output.getvalue())
+            self.assertNotIn("unit=planned-games ", output.getvalue())
+
     def test_historical_match_exposure_includes_decisions_and_terminal_both_sides(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
