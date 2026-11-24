@@ -4,6 +4,12 @@
 
 Pure Rust library implementing core Reversi (Othello) game logic. No UI, no Godot dependency. Exposed to GDScript via a separate godot-rust GDExtension bridge.
 
+## XOT openings
+
+The engine embeds the original [XOT lists](../references/xot.md). Large is the default and small is opt-in. Builds verify both lists against pinned SHA-256 digests. Each distinct row in the selected list has equal probability. Callers can supply a random source or select a zero-based row explicitly for reproducible results.
+
+An opening is eight lowercase coordinates (`a1`–`h8`) with no separators. The engine replays them on a standard `Game` in Black/White order. Invalid coordinates, illegal moves, implicit passes, premature game over, and out-of-range row indices are errors. A successful opening exposes the original notation, eight positions in order, and a playable `Game` containing the opening history and twelve discs, with Black to make move 9. This engine API is usable directly by the Godot Rust bridge.
+
 ## Coordinate System
 
 - 8x8 board. Rows 0-7 (top to bottom), columns 0-7 (left to right).

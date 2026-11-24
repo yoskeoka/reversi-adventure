@@ -51,6 +51,17 @@ function validatedSeat(value, config) {
   return { id: value.id };
 }
 
+function validatedOpening(value) {
+  if (value === undefined) return { kind: 'standard' };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid opening settings');
+  if (value.kind === 'standard' && !Object.hasOwn(value, 'list')) return { kind: 'standard' };
+  if (value.kind === 'xot') {
+    const list = value.list === undefined ? 'large' : value.list;
+    if (list === 'large' || list === 'small') return { kind: 'xot', list };
+  }
+  throw new Error('invalid opening settings');
+}
+
 function validatedSearch(value, config) {
   if (value.id === 'trained-baseline' && !config.trained) throw new Error('trained artifact is unavailable');
   if (value.id === 'oracle' && !config.oracle) throw new Error('oracle is unavailable');
@@ -101,6 +112,8 @@ export class Session {
     this.thinkingTimeMs = { B: 0, W: 0 };
     this.black = validatedSeat(request.black, config);
     this.white = validatedSeat(request.white, config);
+    this.opening = validatedOpening(request.opening);
+    this.openingStart = null;
     if (request.seed !== undefined && (!Number.isInteger(request.seed) || request.seed < 0 || request.seed > 0xffffffff)) throw new Error('seed must be an unsigned 32-bit integer');
     this.randomState = (request.seed ?? Math.floor(Math.random() * 0xffffffff)) >>> 0;
     this.seed = this.randomState;
@@ -118,7 +131,7 @@ export class Session {
       counts: { B: [...this.board].filter(cell => cell === 'B').length, W: [...this.board].filter(cell => cell === 'W').length },
       lastMove: this.lastMove, lastPass: this.lastPass, thinking: this.thinking, result: this.result, error: this.error,
       thinkingTimeMs: { ...this.thinkingTimeMs },
-      identities: this.identities, seed: this.seed, advisor: this.advisor };
+      identities: this.identities, seed: this.seed, advisor: this.advisor, opening: this.opening };
   }
   publish(withToken = false) { if (!this.closed) this.send({ type: 'snapshot', snapshot: this.snapshot(), ...(withToken ? { token: this.token } : {}) }); }
   open() {
@@ -137,6 +150,41 @@ export class Session {
         this.processes[side] = new LineProcess(this.config.oracle.binary,
           ['-nobook', '-thread', '1', '-hash', '16', ...oracleDepthArgs(seat), '-gtp', '-quiet'], this.config.oracle.dataDir, 15000);
       }
+    }
+  }
+  async initializeOpening() {
+    if (this.opening.kind !== 'xot' || this.closed) return;
+    const controller = new AbortController();
+    this.openingStart = controller;
+    try {
+      const { stdout } = await execFileAsync(this.config.cli, ['--xot-opening', this.opening.list], {
+        cwd: this.config.repoRoot, encoding: 'utf8', timeout: 12000, maxBuffer: 1024, signal: controller.signal
+      });
+      if (this.closed) return;
+      const { notation, board, turn } = JSON.parse(stdout);
+      if (typeof notation !== 'string' || !/^(?:[a-h][1-8]){8}$/.test(notation) ||
+          typeof board !== 'string' || !/^[BW.]{64}$/.test(board) || board.replaceAll('.', '').length !== 12 ||
+          turn !== 'B' || !legalMoves(board, turn).length) throw new Error('invalid opening position response');
+
+      const moves = notation.match(/../g);
+      const oracleSeats = ['B', 'W'].filter(side => this.seat(side).id === 'oracle');
+      await Promise.all(oracleSeats.map(async side => {
+        for (const [index, move] of moves.entries()) {
+          if (this.closed) return;
+          await this.processes[side].gtp(`play ${index % 2 === 0 ? 'black' : 'white'} ${move}`);
+        }
+      }));
+      if (this.closed) return;
+
+      this.opening = { ...this.opening, notation };
+      this.board = board;
+      this.turn = turn;
+      this.revision = moves.length;
+      this.lastMove = { side: 'W', move: moves.at(-1) };
+    } catch (error) {
+      throw new Error(`XOT initialization failed: ${error.message}`, { cause: error });
+    } finally {
+      this.openingStart = null;
     }
   }
   async startAdvisorProcess(side) {
@@ -223,6 +271,7 @@ export class Session {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.openingStart?.abort();
     for (const controller of Object.values(this.advisorStarts)) controller.abort();
     for (const process of Object.values(this.processes)) process.close();
     for (const process of Object.values(this.advisorProcesses)) process.close();

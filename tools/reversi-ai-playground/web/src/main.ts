@@ -1,6 +1,7 @@
 import "./style.css";
 
 type Color = "black" | "white";
+type Opening = { kind: "standard" } | { kind: "xot"; list: "large" | "small"; notation: string };
 type Player = { id: string; label?: string; available?: boolean; reason?: string };
 type SearchSettings = { id: string; openingDepth: number; midgameDepth: number; exact: number };
 type Seat = { id: string; openingDepth?: number; midgameDepth?: number; exact?: number; advisor?: SearchSettings | null };
@@ -13,6 +14,7 @@ type Snapshot = {
   legal: string[];
   black: Seat;
   white: Seat;
+  opening: Opening;
   counts: { B: number; W: number };
   thinkingTimeMs: { B: number; W: number };
   lastMove?: { side: "B" | "W"; move: string } | null;
@@ -27,7 +29,7 @@ type Snapshot = {
 type ServerMessage =
   | { type: "catalog"; players: Player[]; limits?: { openingDepth?: [number, number]; midgameDepth?: [number, number]; exact?: [number, number] } }
   | { type: "snapshot"; snapshot: Snapshot; token?: string }
-  | { type: "error"; error?: string; message?: string };
+  | { type: "error"; error?: string; message?: string; request?: "start" | "resume"; replaced?: boolean };
 
 const tokenKey = "reversi-ai-playground-token";
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -40,11 +42,15 @@ app.innerHTML = `
         <fieldset data-seat="black"><legend><span class="disc black"></span> 黒</legend><label>対局者 <select name="player"></select></label><div class="ai-settings search-settings"><label>序盤探索深さ（1〜20手） <input name="openingDepth" type="number" min="1" max="12" value="4"></label><label>中盤探索深さ（21〜60手） <input name="midgameDepth" type="number" min="1" max="16" value="4"></label><label>完全読み開始空き数 <input name="exact" type="number" min="0" max="30" value="12"></label></div><div class="advisor-settings"><label>Human Advisor <select name="advisor"></select></label><div class="ai-settings advisor-search-settings"><label>序盤探索深さ（1〜20手） <input name="advisorOpeningDepth" type="number" min="1" max="12" value="4"></label><label>中盤探索深さ（21〜60手） <input name="advisorMidgameDepth" type="number" min="1" max="16" value="4"></label><label>完全読み開始空き数 <input name="advisorExact" type="number" min="0" max="30" value="12"></label></div></div></fieldset>
         <fieldset data-seat="white"><legend><span class="disc white"></span> 白</legend><label>対局者 <select name="player"></select></label><div class="ai-settings search-settings"><label>序盤探索深さ（1〜20手） <input name="openingDepth" type="number" min="1" max="12" value="4"></label><label>中盤探索深さ（21〜60手） <input name="midgameDepth" type="number" min="1" max="16" value="4"></label><label>完全読み開始空き数 <input name="exact" type="number" min="0" max="30" value="12"></label></div><div class="advisor-settings"><label>Human Advisor <select name="advisor"></select></label><div class="ai-settings advisor-search-settings"><label>序盤探索深さ（1〜20手） <input name="advisorOpeningDepth" type="number" min="1" max="12" value="4"></label><label>中盤探索深さ（21〜60手） <input name="advisorMidgameDepth" type="number" min="1" max="16" value="4"></label><label>完全読み開始空き数 <input name="advisorExact" type="number" min="0" max="30" value="12"></label></div></div></fieldset>
       </div>
-      <div class="start-row"><label>Random seed（任意）<input id="seed" inputmode="numeric" pattern="[0-9]*" placeholder="固定する場合に入力"></label><button id="start" type="button" disabled>対局を開始</button></div>
+      <div class="start-row">
+        <label>開始局面 <select id="opening"><option value="standard">通常</option><option value="xot">XOT（large）</option><option value="xot-small">XOT（small）</option></select></label>
+        <label>Random seed（任意）<input id="seed" inputmode="numeric" pattern="[0-9]*" placeholder="固定する場合に入力"></label>
+        <button id="start" type="button" disabled>対局を開始</button>
+      </div>
     </section>
     <section class="game" aria-label="対局">
       <div class="board-panel"><div class="board-labels" aria-hidden="true"><span></span><span>a</span><span>b</span><span>c</span><span>d</span><span>e</span><span>f</span><span>g</span><span>h</span></div><div class="board-with-ranks"><div class="ranks" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span></div><div id="board" class="board" role="group" aria-label="Reversi 盤面"></div></div></div>
-      <aside class="game-info"><p class="eyebrow">CURRENT GAME</p><h2 id="turn">対局を開始してください</h2><p id="activity" class="activity" aria-live="polite"></p><div class="score"><p><span class="disc black"></span> 黒 <strong id="black-count">2</strong></p><p><span class="disc white"></span> 白 <strong id="white-count">2</strong></p></div><dl><dt>黒</dt><dd><span id="black-seat">—</span> <span id="black-advisor-status" class="advisor-status" role="status"></span></dd><dt>白</dt><dd><span id="white-seat">—</span> <span id="white-advisor-status" class="advisor-status" role="status"></span></dd><dt>黒の総思考時間</dt><dd id="black-thinking-time">0.0 秒</dd><dt>白の総思考時間</dt><dd id="white-thinking-time">0.0 秒</dd><dt>最後の着手</dt><dd id="last-move">—</dd></dl><p id="result" class="result" role="status"></p><p id="advisor-error" class="error" role="alert"></p><p id="error" class="error" role="alert"></p><details><summary>実行情報</summary><pre id="identities">—</pre></details></aside>
+      <aside class="game-info"><p class="eyebrow">CURRENT GAME</p><h2 id="turn">対局を開始してください</h2><p id="activity" class="activity" aria-live="polite"></p><div class="score"><p><span class="disc black"></span> 黒 <strong id="black-count">2</strong></p><p><span class="disc white"></span> 白 <strong id="white-count">2</strong></p></div><dl><dt>開始局面</dt><dd id="game-opening">—</dd><dt>黒</dt><dd><span id="black-seat">—</span> <span id="black-advisor-status" class="advisor-status" role="status"></span></dd><dt>白</dt><dd><span id="white-seat">—</span> <span id="white-advisor-status" class="advisor-status" role="status"></span></dd><dt>黒の総思考時間</dt><dd id="black-thinking-time">0.0 秒</dd><dt>白の総思考時間</dt><dd id="white-thinking-time">0.0 秒</dd><dt>最後の着手</dt><dd id="last-move">—</dd></dl><p id="result" class="result" role="status"></p><p id="advisor-error" class="error" role="alert"></p><p id="error" class="error" role="alert"></p><details><summary>実行情報</summary><pre id="identities">—</pre></details></aside>
     </section>
   </main>`;
 
@@ -85,8 +91,11 @@ startButton.addEventListener("click", () => {
   if (!black || !white) return;
   const seed = (byId("seed") as HTMLInputElement).value.trim();
   if (seed && (!/^(0|[1-9][0-9]*)$/.test(seed) || !Number.isInteger(Number(seed)) || Number(seed) > 0xffffffff)) { showError("Random seed は 0〜4294967295 の整数を入力してください。"); return; }
+  const openingChoice = (byId("opening") as HTMLSelectElement).value;
+  const opening = openingChoice === "standard" ? { kind: "standard" } :
+    openingChoice === "xot-small" ? { kind: "xot", list: "small" } : { kind: "xot" };
   showError("");
-  send({ type: "start", black, white, ...(seed ? { seed: Number(seed) } : {}) });
+  send({ type: "start", black, white, opening, ...(seed ? { seed: Number(seed) } : {}) });
 });
 
 connect();
@@ -111,8 +120,11 @@ function connect() {
       snapshot = message.snapshot;
       renderSnapshot(message.snapshot);
     } else if (message.type === "error") {
+      if (message.request === "resume" || message.replaced) {
+        localStorage.removeItem(tokenKey);
+        clearGame();
+      }
       showError(message.error ?? message.message ?? "サーバーエラー");
-      if (localStorage.getItem(tokenKey)) localStorage.removeItem(tokenKey);
     }
   });
   socket.addEventListener("close", () => {
@@ -220,6 +232,8 @@ function renderSnapshot(state: Snapshot) {
   });
   byId("black-count").textContent = String(state.counts.B);
   byId("white-count").textContent = String(state.counts.W);
+  byId("game-opening").textContent = state.opening.kind === "xot"
+    ? `XOT（${state.opening.list}） ${state.opening.notation}` : "通常";
   byId("black-seat").textContent = seatLabel(state.black);
   byId("white-seat").textContent = seatLabel(state.white);
   for (const [color, side] of [["black", "B"], ["white", "W"]] as const) {
@@ -233,6 +247,25 @@ function renderSnapshot(state: Snapshot) {
   byId("result").textContent = state.result === "draw" ? "引き分け" : state.result ? `${colorLabel(state.result)}の勝ち` : "";
   byId("identities").textContent = state.identities ? JSON.stringify(state.identities, null, 2) : "—";
   showError(state.error ?? "");
+}
+
+function clearGame() {
+  snapshot = undefined;
+  for (const cell of cells) {
+    cell.replaceChildren();
+    cell.classList.remove("last");
+    cell.disabled = true;
+    cell.setAttribute("aria-label", cell.dataset.move!);
+  }
+  for (const color of ["black", "white"]) {
+    byId(`${color}-count`).textContent = "2";
+    byId(`${color}-thinking-time`).textContent = "0.0 秒";
+    byId(`${color}-seat`).textContent = "—";
+    byId(`${color}-advisor-status`).textContent = "";
+  }
+  for (const id of ["game-opening", "last-move", "identities"]) byId(id).textContent = "—";
+  for (const id of ["activity", "result", "advisor-error"]) byId(id).textContent = "";
+  byId("turn").textContent = "対局を開始してください";
 }
 
 function canMove(state: Snapshot) {
