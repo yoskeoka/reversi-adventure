@@ -6,9 +6,11 @@ Pure Rust library implementing core Reversi (Othello) game logic. No UI, no Godo
 
 ## XOT openings
 
-The engine embeds the original [XOT lists](../references/xot.md). Large is the default and small is opt-in. Builds verify both lists against pinned SHA-256 digests. Each distinct row in the selected list has equal probability. Callers can supply a random source or select a zero-based row explicitly for reproducible results.
+The engine ships with both [XOT lists](../references/xot.md). Use large by default. Choose small to use the shorter list. The build checks the SHA-256 of each file. All rows in a list have the same chance of being picked. To get the same row again, supply a fixed random source or pass a row index that starts at zero.
 
-An opening is eight lowercase coordinates (`a1`–`h8`) with no separators. The engine replays them on a standard `Game` in Black/White order. Invalid coordinates, illegal moves, implicit passes, premature game over, and out-of-range row indices are errors. A successful opening exposes the original notation, eight positions in order, and a playable `Game` containing the opening history and twelve discs, with Black to make move 9. This engine API is usable directly by the Godot Rust bridge.
+Each row holds eight moves such as `a1` through `h8`, in lowercase and with no spaces or other marks. Play the moves from a new `Game`, with Black and White taking turns. A bad row index, bad square, illegal move, pass, or early end is an error.
+
+The result gives the row as read, the eight squares in order, and the `Game` with its move log. With twelve discs on the board, Black plays move 9. Use this API from the Godot Rust bridge.
 
 ## Coordinate System
 
