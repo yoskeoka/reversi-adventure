@@ -19,6 +19,15 @@ test('silent process times out within its bound', async () => {
   finally { child.close(); }
 });
 
+test('a GTP child that closes stdin rejects the pending command', async () => {
+  const script = "require('node:fs').closeSync(0); console.log('ready'); setInterval(() => {}, 1000);";
+  const child = new LineProcess(process.execPath, ['-e', script], process.cwd(), 2000);
+  try {
+    assert.equal(await child.line(), 'ready');
+    await assert.rejects(child.gtp('play black d3'), { code: 'EPIPE' });
+  } finally { child.close(); }
+});
+
 test('closing a process group also cancels its grandchild', { skip: process.platform === 'win32' }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'reversi-advisor-group-'));
   const marker = join(directory, 'grandchild-finished');

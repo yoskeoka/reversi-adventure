@@ -28,6 +28,10 @@ The manifest and pnpm lockfile belong in `tools/reversi-ai-playground`. Its `nod
 `make start-playground` requires the install and builds `reversi-ai-cli` in release mode, computes its SHA-256 digest, starts the backend on `127.0.0.1:8787`, and serves the UI at `http://127.0.0.1:5173`. Stop with Ctrl-C.
 `PLAYGROUND_PORT` and `PLAYGROUND_WEB_PORT` can select different local backend and UI ports when those defaults are occupied.
 
+## Starting position
+
+Choose **通常**, **XOT（large）**, or **XOT（small）** under **開始局面**. Standard is selected initially. XOT samples an opening from the selected [official list](../../docs/references/xot.md), plays its eight moves, and starts with Black to play move 9. The current game shows the selected list and its eight-move notation. Reconnecting restores that same game and opening. Edits to the setup take effect at the next start. The optional Random seed controls the Random player independently of the XOT opening.
+
 ## Optional local players
 
 現在採用するTrainedEvaluatorのartifact pathとdigestは

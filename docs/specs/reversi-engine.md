@@ -4,6 +4,14 @@
 
 Pure Rust library implementing core Reversi (Othello) game logic. No UI, no Godot dependency. Exposed to GDScript via a separate godot-rust GDExtension bridge.
 
+## XOT openings
+
+The engine ships with both [XOT lists](../references/xot.md). Use large by default. Choose small to use the shorter list. The build checks the SHA-256 of each file. All rows in a list have the same chance of being picked. To get the same row again, supply a fixed random source or pass a row index that starts at zero.
+
+Each row holds eight moves such as `a1` through `h8`, in lowercase and with no spaces or other marks. Play the moves from a new `Game`, with Black and White taking turns. A bad row index, bad square, illegal move, pass, or early end is an error.
+
+The result gives the row as read, the eight squares in order, and the `Game` with its move log. With twelve discs on the board, Black plays move 9. Use this API from the Godot Rust bridge.
+
 ## Coordinate System
 
 - 8x8 board. Rows 0-7 (top to bottom), columns 0-7 (left to right).

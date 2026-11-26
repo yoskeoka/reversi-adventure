@@ -4,15 +4,173 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Session, catalog, oracleDepthArgs, verifyConfig } from './session.mjs';
-import { legalMoves } from './rules.mjs';
+import { INITIAL_BOARD, legalMoves } from './rules.mjs';
 
 const config = { cli: '/unused', cliSha256: 'fixed', repoRoot: '/tmp', trained: null, oracle: null };
 const strategic = { id: 'strategic', openingDepth: 2, midgameDepth: 4, exact: 16 };
+const human = { id: 'human' };
+const oracle = { ...strategic, id: 'oracle' };
+const xotPosition = {
+  notation: 'd3e3f2e2f1g1h1c2',
+  board: '.....BBB..W.BW.....WW......BW......BW...........................',
+  turn: 'B'
+};
+function deferred() {
+  let resolve;
+  const promise = new Promise(complete => { resolve = complete; });
+  return { promise, resolve };
+}
+
+function xotFixture(t, script) {
+  const directory = mkdtempSync(join(tmpdir(), 'reversi-xot-session-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const cli = join(directory, 'cli');
+  writeFileSync(cli, `#!${process.execPath}\n${script}\n`, { mode: 0o755 });
+  return { ...config, cli, repoRoot: directory, oracle: { binary: '/unused', dataDir: directory } };
+}
+
 function game(black = { id: 'human' }, white = { id: 'human' }, now) {
   const messages = [];
   const session = new Session({ black, white, seed: 42 }, config, message => messages.push(message), now);
   return { session, messages };
 }
+
+test('opening settings default to standard and reject invalid kinds, objects and lists', () => {
+  const { session } = game();
+  assert.deepEqual(session.snapshot().opening, { kind: 'standard' });
+  assert.equal(session.snapshot().revision, 0);
+  assert.equal(session.snapshot().lastMove, null);
+  for (const opening of [null, [], 'xot', {}, { kind: 'other' }, { kind: 'xot', list: null },
+    { kind: 'xot', list: 'medium' }, { kind: 'standard', list: 'large' }]) {
+    assert.throws(() => new Session({ black: human, white: human, opening }, config, () => {}), /invalid opening/);
+  }
+});
+
+test('XOT waits for all eight plays on both Oracle seats before committing the position', async t => {
+  const local = xotFixture(t, `
+    if (process.argv.slice(2).join(' ') !== '--xot-opening large') process.exit(2);
+    console.log(JSON.stringify(${JSON.stringify(xotPosition)}));
+  `);
+  let clock = 0;
+  const messages = [];
+  const session = new Session({ black: oracle, white: oracle, opening: { kind: 'xot' }, seed: 4 }, local,
+    message => messages.push(message), () => clock);
+  t.after(() => session.close());
+  const expected = xotPosition.notation.match(/../g).map((move, i) => `play ${i % 2 ? 'white' : 'black'} ${move}`);
+  const commands = { B: [], W: [] };
+  const finalWhitePlay = deferred();
+  const whiteIsWaiting = deferred();
+  for (const side of ['B', 'W']) {
+    session.processes[side] = { gtp: async command => {
+      commands[side].push(command);
+      clock += 50;
+      if (side === 'W' && commands.W.length === 8) {
+        whiteIsWaiting.resolve();
+        await finalWhitePlay.promise;
+      }
+      return ['='];
+    }, close() {} };
+  }
+  const initializing = session.initializeOpening();
+  await Promise.race([whiteIsWaiting.promise, initializing]);
+  assert.equal(session.board, INITIAL_BOARD);
+  assert.equal(session.revision, 0);
+  assert.deepEqual(messages, []);
+  finalWhitePlay.resolve();
+  await initializing;
+  assert.deepEqual(commands, { B: expected, W: expected });
+  session.publish(true);
+  const { snapshot } = messages.at(-1);
+  assert.deepEqual(snapshot.opening, { kind: 'xot', list: 'large', notation: xotPosition.notation });
+  assert.equal(snapshot.board, xotPosition.board);
+  assert.equal(snapshot.turn, 'B');
+  assert.equal(snapshot.revision, 8);
+  assert.deepEqual(snapshot.lastMove, { side: 'W', move: 'c2' });
+  assert.equal(snapshot.lastPass, null);
+  assert.deepEqual(snapshot.thinkingTimeMs, { B: 0, W: 0 });
+  assert.equal(snapshot.seed, 4);
+
+  const blackMove = legalMoves(snapshot.board, 'B')[0];
+  session.processes.B.gtp = async command => {
+    assert.equal(command, 'genmove black');
+    clock += 7;
+    return [`= ${blackMove}`];
+  };
+  session.processes.W.gtp = async command => {
+    commands.W.push(command);
+    if (command.startsWith('play ')) return ['='];
+    assert.equal(command, 'genmove white');
+    session.close();
+    return ['= pass'];
+  };
+  await session.drive();
+  assert.equal(session.revision, 9);
+  assert.deepEqual(commands.W.slice(8), [`play black ${blackMove}`, 'genmove white']);
+  assert.deepEqual(session.thinkingTimeMs, { B: 7, W: 0 });
+});
+
+test('XOT uses the selected list and passes the replayed position to the first project AI and Advisor queries', async t => {
+  const local = xotFixture(t, `
+    if (process.argv.slice(2).join(' ') !== '--xot-opening small') process.exit(2);
+    console.log(JSON.stringify(${JSON.stringify(xotPosition)}));
+  `);
+  const opening = { kind: 'xot', list: 'small' };
+  const ai = new Session({ black: strategic, white: human, opening }, local, () => {});
+  const advisor = new Session({ black: { ...human, advisor: strategic }, white: human, opening }, local, () => {});
+  t.after(() => { ai.close(); advisor.close(); });
+  const legal = legalMoves(xotPosition.board, 'B');
+  const received = [];
+  ai.processes.B = { command: async query => {
+    received.push(query);
+    return `${ai.sessionId}:8\t${legal[0]}`;
+  }, close() {} };
+  advisor.advisorConfigIds.B = 'project-ai-advisor-v2:0123456789abcdef';
+  advisor.advisorProcesses.B = { command: async query => {
+    received.push(query);
+    return JSON.stringify({ schema_version: 2, score_contract: 'winner-empty-v1', position_id: `${advisor.sessionId}:8:advisor`,
+      board: xotPosition.board, side: 'B', config_id: advisor.advisorConfigIds.B, outcome: 'move', completed_depth: 2, exact: false,
+      scores: legal.map(move => ({ move, value: 0, completed_depth: 2, exact: false })) });
+  }, close() {} };
+  await ai.initializeOpening();
+  await ai.drive();
+  await advisor.initializeOpening();
+  advisor.beginAdvisor();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(received, [`${ai.sessionId}:8\t${xotPosition.board}\tB`, `${advisor.sessionId}:8:advisor\t${xotPosition.board}\tB`]);
+  assert.equal(ai.revision, 9);
+  assert.equal(advisor.revision, 8);
+  assert.deepEqual(advisor.snapshot().advisor.scores, legal.map(move => ({ move, value: 0 })));
+  assert.deepEqual(advisor.snapshot().opening, { ...opening, notation: xotPosition.notation });
+});
+
+test('XOT failures and cancellation leave the initial board and publish no snapshots', async t => {
+  const local = xotFixture(t, `console.log(JSON.stringify(${JSON.stringify(xotPosition)}));`);
+  const messages = [];
+  const session = new Session({ black: oracle, white: human, opening: { kind: 'xot' } }, local, message => messages.push(message));
+  t.after(() => session.close());
+  session.processes.B = { gtp: async () => { throw new Error('Oracle rejected opening'); }, close() {} };
+  await assert.rejects(session.initializeOpening(), /XOT initialization failed: Oracle rejected opening/);
+  assert.equal(session.board, INITIAL_BOARD);
+  assert.equal(session.revision, 0);
+  assert.deepEqual(messages, []);
+
+  const playStarted = deferred();
+  const playResponse = deferred();
+  const calls = [];
+  session.processes.B = { gtp: async command => {
+    calls.push(command);
+    playStarted.resolve();
+    return playResponse.promise;
+  }, close() {} };
+  const initializing = session.initializeOpening();
+  await Promise.race([playStarted.promise, initializing]);
+  session.close();
+  playResponse.resolve(['=']);
+  await initializing;
+  assert.deepEqual(calls, ['play black d3']);
+  assert.equal(session.revision, 0);
+  assert.deepEqual(messages, []);
+});
 
 test('human move advances revision and stale or illegal move leaves board unchanged', async () => {
   const { session, messages } = game();

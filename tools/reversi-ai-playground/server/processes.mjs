@@ -24,6 +24,7 @@ export class LineProcess {
         if (this.lines.length > 64) this.fail(new Error('unsolicited process output'));
       }
     });
+    this.child.stdin.on('error', error => this.fail(error));
     this.child.stderr.on('data', () => {});
     this.child.on('error', error => this.fail(error));
     this.child.on('exit', (code, signal) => this.fail(new Error(`process exited (${code ?? signal})`)));

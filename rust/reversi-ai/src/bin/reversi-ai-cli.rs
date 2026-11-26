@@ -9,12 +9,13 @@ use reversi_ai::eval::BoardEvaluator;
 use reversi_ai::search::{SearchBudget, SearchEngine, SearchOutcome, SearchResult};
 use reversi_engine::board::Board;
 use reversi_engine::types::{Color, Position};
+use reversi_engine::xot::XotList;
 use std::time::{Duration, Instant};
 
 fn usage() -> &'static str {
     "usage: reversi-ai-cli [--evaluator strategic|novice|trained|trained-table32|trained-table32-partial] [--trained-artifact PATH] [--fallback-artifact PATH] [--opening-depth N] \
 --midgame-depth N --endgame-depth N [--exact-solver-empty-squares N] \
-[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--unbounded-search] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v2)"
+[--profile strong-engine-hcap-v1] [--time-limit-ms N] [--node-limit N] [--unbounded-search] [--exact-cache-scope turn|game] (default: turn; explicit game is diagnostic only)\n\nadvisor mode: --advisor-analysis [--print-advisor-config-id] --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\ndecision-move match mode: --decision-move-phases --opening-depth N --midgame-depth N --exact-solver-empty-squares N\n\nstdin/stdout protocol: position_id<TAB>64-char-board<TAB>B|W -> position_id<TAB>move|pass (advisor: JSON v2)\n\nXOT opening mode: --xot-opening [large|small]"
 }
 
 fn parse_u8(value: &str, option: &str) -> Result<u8, String> {
@@ -53,10 +54,6 @@ struct CliArgs {
     decision_move_config: Option<DecisionMoveConfig>,
     print_advisor_config_id: bool,
     exact_cache_scope: String,
-}
-
-fn parse_args() -> Result<CliArgs, String> {
-    parse_args_from(std::env::args().skip(1))
 }
 
 fn parse_args_from(mut args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
@@ -269,8 +266,40 @@ fn choose_move<E: BoardEvaluator + ?Sized>(
     (selected, result)
 }
 
+fn print_xot_opening(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    let list = match args.next().as_deref() {
+        None => XotList::default(),
+        Some("large") => XotList::Large,
+        Some("small") => XotList::Small,
+        Some(value) => return Err(format!("unknown XOT list {value:?}")),
+    };
+    if args.next().is_some() {
+        return Err("usage: reversi-ai-cli --xot-opening [large|small]".into());
+    }
+    let opening = list.random().map_err(|error| error.to_string())?;
+    let game = opening.game();
+    let turn = match game.current_turn() {
+        Color::Black => "B",
+        Color::White => "W",
+    };
+    println!(
+        "{}",
+        serde_json::json!({
+            "notation": opening.notation(),
+            "board": game.board().to_board_string().replace('\n', ""),
+            "turn": turn,
+        })
+    );
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
-    let args = parse_args()?;
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "--xot-opening") {
+        args.next();
+        return print_xot_opening(args);
+    }
+    let args = parse_args_from(args)?;
     let evaluator: Box<dyn BoardEvaluator> = match args.evaluator.as_str() {
         "strategic" => Box::new(StrategicEvaluator::new()),
         "novice" => Box::new(NoviceEvaluator::new()),
