@@ -1334,7 +1334,8 @@ mod tests {
         let mut solver = EndgameSolver::new(&keys, &mut table, &mut nodes);
         let mut current = Board::new();
         let mut side = Color::Black;
-        for (ply, mv) in transcript.as_bytes().chunks_exact(2).enumerate() {
+        let (move_bytes, _) = transcript.as_bytes().as_chunks::<2>();
+        for (ply, mv) in move_bytes.iter().enumerate() {
             if recipe["warm_prefix_plies"]
                 .as_array()
                 .unwrap()
@@ -1563,9 +1564,7 @@ mod tests {
             }] = true;
             // Check both sides at every reached board, including forced passes.
             check_all(board, color.opponent(), seen, counts, outcomes);
-            if legal == 0 {
-                return;
-            } else {
+            if legal != 0 {
                 for position in order_endgame_moves(&board, color, legal, None) {
                     check_all(
                         moves::make_move(&board, color, position),

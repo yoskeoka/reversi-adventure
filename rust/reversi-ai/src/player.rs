@@ -124,7 +124,7 @@ mod tests {
         let mut pass_count = 0;
 
         while !game.is_game_over() {
-            let board = game.board().clone();
+            let board = *game.board();
             let color = game.current_turn();
 
             if !moves::has_legal_move(&board, color) {
