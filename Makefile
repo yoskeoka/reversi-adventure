@@ -30,6 +30,17 @@ start-playground:
 
 playground: start-playground
 CARGO ?= cargo
+
+# Keep these package names in sync with the workspace members in Cargo.toml.
+WORKSPACE_PACKAGES := reversi-engine reversi-ai reversi-godot
+
+.PHONY: rust-clippy-local
+rust-clippy-local: export CARGO_BUILD_JOBS ?= 2
+rust-clippy-local:
+	$(if $(strip $(CLIPPY_PACKAGES)),,$(error Set CLIPPY_PACKAGES to one or more of: $(WORKSPACE_PACKAGES)))
+	$(if $(filter-out $(WORKSPACE_PACKAGES),$(CLIPPY_PACKAGES)),$(error Invalid CLIPPY_PACKAGES: $(filter-out $(WORKSPACE_PACKAGES),$(CLIPPY_PACKAGES))))
+	$(CARGO) clippy $(addprefix -p ,$(CLIPPY_PACKAGES)) $(if $(filter 1,$(CLIPPY_ALL_TARGETS)),--all-targets) -- --no-deps -D warnings
+
 ORACLE_TOOL := tools/reversi-ai-oracle/oracle.py
 ORACLE_CORPUS := tools/reversi-ai-oracle/corpus.jsonl
 ORACLE_GOLDEN := tools/reversi-ai-oracle/golden-winner-empty-v1.jsonl

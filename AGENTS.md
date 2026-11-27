@@ -104,10 +104,15 @@ Keep the main context window clean by delegating to subagents.
 
 ## Build & Lint Commands
 
+- **Local lint (engine and AI)**: `make rust-clippy-local CLIPPY_PACKAGES="reversi-engine reversi-ai"`
+- **Local lint (GDExtension, all targets)**: `make rust-clippy-local CLIPPY_PACKAGES=reversi-godot CLIPPY_ALL_TARGETS=1`
+- **CI lint**: `cargo clippy --workspace --all-targets -- -D warnings`
 - **Test (engine)**: `cargo test -p reversi-engine`
 - **Test (AI)**: `cargo test -p reversi-ai`
 - **Build (GDExtension)**: `cargo build -p reversi-godot`
-- **Lint**: `cargo clippy --workspace -- -D warnings`
+
+See [Rust quality gates](docs/specs/rust-quality-gates.md) for crate selection,
+targets, features, and handoff requirements.
 
 ## Tech Stack
 
