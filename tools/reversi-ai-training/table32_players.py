@@ -31,7 +31,9 @@ def full_solve_profile():
 
 
 def player_argv(executable,artifact,config,evaluator,fallback_artifact=None):
-    argv=[str(executable),"--evaluator",evaluator,"--trained-artifact",str(artifact)]
+    argv = [str(executable), "--evaluator", evaluator]
+    if artifact is not None:
+        argv += ["--trained-artifact", str(artifact)]
     if fallback_artifact is not None:
         argv += ["--fallback-artifact", str(fallback_artifact)]
     for key in ("opening_depth","midgame_depth","endgame_depth",
@@ -72,7 +74,7 @@ def validate_raw_decision(identifier, board, side, result, config, *, expected_p
     if expected_pins is not None:
         fallback = expected_pins.get("fallback")
         st.require(raw.get("argv")==player_argv(expected_pins["executable"]["path"],
-            expected_pins["artifact"]["path"],config,expected_evaluator,
+            expected_pins.get("artifact", {}).get("path"),config,expected_evaluator,
             fallback["path"] if fallback else None),"candidate search argv differs")
     st.require(raw.get("request") == f"{identifier}\t{board}\t{side}"
                and raw.get("stdout") == f"{identifier}\t{result.get('move')}\n",
@@ -130,11 +132,14 @@ class Player(rf.Candidate):
                  expected_pins=None, fallback_artifact=None):
         self.expected_pins = expected_pins
         if expected_pins is not None:
-            st.require(set(expected_pins) == ({"executable", "artifact", "fallback"} if fallback_artifact is not None else {"executable", "artifact"})
-                       and Path(expected_pins["executable"]["path"]).resolve() == Path(executable).resolve()
-                       and Path(expected_pins["artifact"]["path"]).resolve() == Path(artifact).resolve()
-                       and (fallback_artifact is None or Path(expected_pins["fallback"]["path"]).resolve() == Path(fallback_artifact).resolve()),
-                       "candidate live pin paths differ")
+            identities = {"executable": executable}
+            if artifact is not None:
+                identities["artifact"] = artifact
+            if fallback_artifact is not None:
+                identities["fallback"] = fallback_artifact
+            st.require(set(expected_pins) == set(identities) and all(
+                Path(expected_pins[name]["path"]).resolve() == Path(path).resolve()
+                for name, path in identities.items()), "candidate live pin paths differ")
             self._check_live_pins()
         argv = player_argv(executable,artifact,config,evaluator,fallback_artifact)
         self.evaluator=evaluator

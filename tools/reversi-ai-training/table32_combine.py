@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import table32
+import table32_data
 import table32_inputs as inputs
 import table32_model as model
 import table32_store as st
@@ -53,7 +54,8 @@ def source(root):
     else:
         model.validate_artifact(artifact)
     provenance = artifact["provenance"]
-    st.require(provenance.get("source_kind") == "project-owned"
+    source_kind = table32_data.FIXED_SOURCE if manifest.get("fixed_openings") else "project-owned"
+    st.require(provenance.get("source_kind") == source_kind
                and provenance.get("input_manifest_digest") == st.digest(manifest)
                and provenance.get("seed") == manifest["seed"]
                and provenance.get("producer_commit") == manifest["producer_commit"]
@@ -106,7 +108,10 @@ def collect(roots):
 
 
 def candidate(manifest, weights):
-    provenance = {"source_kind": "combined-project-owned", "combine_version": VERSION,
+    fixed = any(min(source["phases"]) < 10 and "data_0058" in source["settings"]
+                for source in manifest.get("source_runs", ()))
+    source_kind = "0058-combined-opening-labels" if fixed else "combined-project-owned"
+    provenance = {"source_kind": source_kind, "combine_version": VERSION,
                   "input_manifest_digest": st.digest(manifest), "producer_commit": manifest["producer_commit"]}
     factory = model.make_artifact if len(weights) == 60 else model.make_partial_artifact
     return factory(weights, provenance)
@@ -119,7 +124,13 @@ def prepare(args):
                and not root.exists(), "choose a new absolute checkout-external run root")
     records, weights, exposure = collect(args.source_root)
     phases = sorted(map(int, weights))
-    st.require(phases[-1] >= 12, "independent depth-4 evaluation requires a trained phase >= 12")
+    opponent = getattr(args, "opponent", None)
+    if any("data_0058" in record["settings"] for record in records):
+        opponent = opponent or "s0"
+    if opponent is None:
+        st.require(phases[-1] >= 12, "independent depth-4 evaluation requires a trained phase >= 12")
+    else:
+        st.require(phases[-1] >= 10, "0058 independent matches require a later trained phase")
     st.require(all(root != Path(r["root"]) and Path(r["root"]) not in root.parents
                    and root not in Path(r["root"]).parents for r in records), "source and output roots overlap")
     executable = st.pin(args.candidate_executable)
@@ -147,6 +158,22 @@ def prepare(args):
                 "candidate_executable": executable, "candidate_source_commit": args.candidate_source_commit,
                 "input_kind": "production", "phases": phases,
                 "coverage": "partial" if partial else "full", "exposure_digest": st.digest(sorted(exposure))}
+    if opponent is not None:
+        depth = args.match_depth if args.match_depth is not None else (4 if partial else 12)
+        exact = args.match_exact_empty if args.match_exact_empty is not None else (0 if partial else 16)
+        st.require(1 <= depth <= 60 and 0 <= exact <= 60 and 1 <= args.match_pairs <= 100,
+                   "invalid independent match depth, exact threshold or pair count")
+        pins, snapshot = table32_data.input_keys(args)
+        exposure.update(snapshot["excluded_keys"])
+        manifest["exposure_digest"] = st.digest(sorted(exposure))
+        manifest["comparison"] = {"opponent": opponent, "pairs": args.match_pairs,
+                                  "depth": depth, "exact_empty": exact, "input_pins": pins,
+                                  "reserved_keys": snapshot["reserved_keys"],
+                                  "excluded_keys": snapshot["excluded_keys"]}
+    else:
+        st.require(not any(getattr(args, name, None) for name in
+            ("match_depth", "match_exact_empty", "exclude_exposure_keys", "reserved_opening_keys"))
+            and getattr(args, "match_pairs", 10) == 10, "comparison options require --opponent")
     root.mkdir(parents=True, exist_ok=False)
     st.atomic(root / "manifest.json", manifest, once=True)
     st.atomic(root / "candidate-artifact.json", candidate(manifest, weights), once=True)
@@ -163,10 +190,15 @@ def load(root):
     st.check_pin(manifest["baseline"])
     st.check_pin(manifest["candidate_executable"])
     records, weights, exposure = collect([r["root"] for r in manifest["source_runs"]])
+    comparison = manifest.get("comparison")
+    if comparison is not None:
+        for pin in comparison["input_pins"]:
+            st.check_pin(pin)
+        exposure.update(comparison["excluded_keys"])
     st.require(records == manifest["source_runs"] and st.digest(sorted(exposure)) == manifest["exposure_digest"],
                "source inputs changed; use a new root")
     phases = sorted(map(int, weights))
-    st.require(phases and phases[-1] >= 12 and manifest["phases"] == phases
+    st.require(phases and phases[-1] >= (10 if comparison is not None else 12) and manifest["phases"] == phases
                and manifest["coverage"] == ("full" if len(phases) == 60 else "partial"),
                "combined phase coverage differs")
     artifact = candidate(manifest, weights)
@@ -176,50 +208,95 @@ def load(root):
     return manifest, artifact, exposure
 
 
+def random_decision(seed, identifier, board, side):
+    import random
+
+    moves = sorted(inputs.rf.legal_moves(board, side))
+    if not moves:
+        st.require(bool(inputs.rf.legal_moves(board, inputs.rf.other(side))), "terminal random decision")
+    rng = random.Random(inputs.seed_stream(seed, f"random-opponent:{identifier}"))
+    return {"move": rng.choice(moves) if moves else "pass", "policy": "uniform-legal-v1"}
+
+
 def evaluate(driver, artifact, forbidden, *, extend=False):
     import table32_players as players
 
     m, root = driver.m, driver.root
     partial = m["coverage"] == "partial"
     phases = m["phases"]
+    comparison = m.get("comparison")
+    opponent = comparison["opponent"] if comparison is not None else "s0"
+    reserved = set(comparison["reserved_keys"]) if comparison is not None else set()
+    st.require(not (comparison is not None and extend), "0058 comparison uses its frozen match count")
     config = {**inputs.TEACHER_SETTINGS, "opening_depth": 4 if partial else 12,
               "midgame_depth": 4 if partial else 12, "endgame_depth": 4 if partial else 12,
               "exact_solver_empty_squares": 0 if partial else 16}
     low = max(8, min(phases) - 4) if partial else 12
     high = min(58, max(8, max(phases) - 4)) if partial else 30
+    if comparison is not None:
+        config.update({key: comparison["depth"] for key in ("opening_depth", "midgame_depth", "endgame_depth")})
+        config["exact_solver_empty_squares"] = comparison["exact_empty"]
+        low, high = max(10, low), max(10, high)
     profile = {"name": "partial-depth4-v1" if partial else "full-depth12-v1",
                **{k: config[k] for k in ("opening_depth", "midgame_depth", "endgame_depth",
                                          "exact_solver_empty_squares")},
                "opening_prefix_min": low, "opening_prefix_max": high, "target_phases": phases,
                "fallback": "next-trained-phase-then-s0" if partial else "none"}
+    if comparison is not None:
+        profile.update(name="table32-0058-comparison-v1", opponent=opponent,
+                       pairs=comparison["pairs"], seed=m["seed"],
+                       seats="swap-per-pair", cache_scope="turn", book="off",
+                       time_limit_ms=m["settings"]["time_limit_ms"], node_limit=m["settings"]["node_limit"],
+                       decision_timeout_seconds=m["settings"]["decision_timeout_seconds"])
     driver.computed("input-verification", "sources", {"exposure_digest": m["exposure_digest"],
                     "candidate_digest": model.digest(artifact)})
     driver.computed("match20", "profile", profile)
     openings = driver.computed("match20", "opening-plan", table32.opening_plan(
-        m["seed"], forbidden, prefix_min=low, prefix_max=high))
+        m["seed"], forbidden, prefix_min=low, prefix_max=high,
+        pairs=comparison["pairs"] if comparison is not None else 100, reserved=reserved))
     choose, _ = driver.providers if driver.providers is not None else table32.production_providers(driver)
     candidate_pin = st.pin(root / "candidate-artifact.json")
+    def check_reserved(board, side):
+        st.require(not reserved or inputs.position_key(board, side) not in reserved,
+                   "comparison reached a reserved opening")
+
+    def comparison_decision(player, identifier, board, side, effective):
+        check_reserved(board, side)
+        if player == "baseline" and opponent == "random":
+            return random_decision(m["seed"], identifier, board, side)
+        return choose("strategic" if player == "baseline" and opponent == "strategic" else player,
+                      identifier, board, side, effective)
+
     def validate_decision(identifier, board, side, value, player):
+        check_reserved(board, side)
+        if player == "baseline" and opponent == "random":
+            actual = {k: v for k, v in value.items() if k not in ("board", "side", "player")}
+            st.require(actual == random_decision(m["seed"], identifier, board, side),
+                       "random decision differs")
+            return
+        strategic = player == "baseline" and opponent == "strategic"
         effective = {**config, "time_limit_ms": m["settings"]["time_limit_ms"],
                      "node_limit": m["settings"]["node_limit"]}
         pins = None
         if m["input_kind"] == "production":
-            pins = {"executable": m["candidate_executable"],
-                    "artifact": candidate_pin if player == "candidate" else m["baseline"]}
+            pins = {"executable": m["candidate_executable"]}
+            if not strategic:
+                pins["artifact"] = candidate_pin if player == "candidate" else m["baseline"]
             if player == "candidate" and partial:
                 pins["fallback"] = m["baseline"]
         players.validate_raw_decision(identifier, board, side, value, effective, expected_pins=pins,
             expected_evaluator=("trained-table32-partial" if partial else "trained-table32")
-            if player == "candidate" else "trained")
+            if player == "candidate" else "strategic" if strategic else "trained")
     results, points, overlaps = [], 0, set()
     exposure = set(forbidden)
     exposure.update(o["canonical_key"] for o in openings)
-    for index in range(200 if extend else 20):
-        if index == 20:
+    total = comparison["pairs"] * 2 if comparison is not None else 200 if extend else 20
+    for index in range(total):
+        if comparison is None and index == 20:
             st.require(points >= 10, "initial 20-game screen does not permit extension")
             driver.computed("explicit-match200", "human-continue", {"stage20_points": points,
                             "extend_to_200": True})
-        phase = "match20" if index < 20 else "explicit-match200"
+        phase = "match20" if comparison is not None or index < 20 else "explicit-match200"
         opening = openings[index // 2]
         def validate_game(saved):
             rows = iter(saved["decisions"])
@@ -231,9 +308,11 @@ def evaluate(driver, artifact, forbidden, *, extend=False):
                 return {k: v for k, v in row.items() if k not in ("board", "side", "player")}
             st.require(table32.match_game(index, opening, replay, config) == saved, "match replay differs")
             st.require(next(rows, None) is None, "extra match decisions")
+            for side in ("B", "W"):
+                check_reserved(saved["terminal_board"], side)
         game = driver.unit(phase, f"game-{index:03d}",
-                           lambda: table32.match_game(index, opening, choose, config), validate_game,
-                           index + 1, 20 if index < 20 else 200)
+                           lambda: table32.match_game(index, opening, comparison_decision, config), validate_game,
+                           index + 1, total if comparison is not None else 20 if index < 20 else 200)
         points += game["points"]
         results.append({"index": index, "score": game["score_candidate"], "points": game["points"]})
         for row in game["decisions"]:
@@ -242,10 +321,10 @@ def evaluate(driver, artifact, forbidden, *, extend=False):
                 overlaps.add(key)
             exposure.add(key)
         exposure.update(inputs.position_key(game["terminal_board"], side) for side in ("B", "W"))
-        if index == 19 and points < 10:
+        if comparison is None and index == 19 and points < 10:
             break
     count = len(results)
-    outcome = st.match_outcome(points, count)
+    outcome = "comparison-complete" if comparison is not None else st.match_outcome(points, count)
     path = root / f"exposure-keys-{count}.jsonl"
     data = b"".join(st.blob(key) for key in sorted(exposure))
     if driver.execute:
@@ -304,8 +383,10 @@ def run(args):
     import table32_process
     root = args.run_root.resolve()
     manifest, artifact, exposure = load(root)
-    st.require(table32.clean_commit() == manifest["producer_commit"], "execution commit changed; use new root")
+    if "comparison" not in manifest:
+        st.require(table32.clean_commit() == manifest["producer_commit"], "execution commit changed; use new root")
     if args.extend_to_200:
+        st.require("comparison" not in manifest, "0058 comparison uses its frozen match count")
         screen = st.read(root / "screening-report.json")
         receipt = st.read(root / "screening-verification.receipt.json")
         st.require(screen == st.seal(screen) and screen.get("outcome") == "awaiting-explicit-continue"
@@ -348,6 +429,12 @@ def main(argv):
     prep.add_argument("--source-root", type=Path, action="append", required=True)
     prep.add_argument("--candidate-executable", type=Path, required=True)
     prep.add_argument("--candidate-source-commit", required=True)
+    prep.add_argument("--opponent", choices=("s0", "strategic", "random"))
+    prep.add_argument("--match-pairs", type=int, default=10)
+    prep.add_argument("--match-depth", type=int)
+    prep.add_argument("--match-exact-empty", type=int)
+    prep.add_argument("--reserved-opening-keys", type=Path)
+    prep.add_argument("--exclude-exposure-keys", type=Path, action="append", default=[])
     for name, value in {"seed": inputs.SEED, "time-limit-ms": 0, "node-limit": 0,
                         "decision-timeout-seconds": 0, "max-wall-seconds": 259200,
                         "producer-rss-kib": 262144, "child-rss-kib": 1572864}.items():

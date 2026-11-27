@@ -981,3 +981,114 @@ report に条件と入力ごとの学習設定を残す。全被覆でも従来�
 
 完成出力または有効な停止結果の独立検証と結論記録が残るため、0054計画は保持する。
 fixture成功やtoolingのマージを、実学習の完了・強度改善・0018合格とは扱わない。
+
+
+## 0058 診断・固定序盤教師と後続phaseの被覆
+
+[0056の診断結果](../../docs/references/table32-0056-analysis/README.md)に整数MSE・MAEの図、
+機械可読表、6つの元rootと再生成コマンドがある。空splitはnull、phase 0の旧表は固定ゼロ。
+診断で参照したtestは後続の最終holdoutに使わない。
+
+[固定コーパス](../../data/table32-opening-corpus/README.md)には0–9の全514,097局面が入る。
+盤面shardと教師shardは別に保持する。教師のversion/levelごとに新しいrootを作り、
+少数のレベル21測定を先に実施する。教師の設定・時間・RSS・再開については
+[ラベルの操作手順](TABLE32-LABELS.md)を参照する。教師・対局の実行は人間が開始する。
+
+### 0–9 固定ラベルで学習
+
+以下はphase 0から始める例。 `runs` はcheckout外の既存保存先、
+`labels` は対応するラベルrootの絶対パスとする。複数phaseを指定する場合は、
+選択範囲の各phaseに必要なラベルを先に揃える。
+
+```bash
+rtk cargo build --release -p reversi-ai --bin reversi-ai-cli
+trainer=tools/reversi-ai-training/start_table32.py
+cli="$(rtk proxy realpath target/release/reversi-ai-cli)"
+build_commit="$(rtk git rev-parse HEAD)"
+
+rtk python3 "$trainer" prepare --data-0058 --run-root "$runs/0058-phase00" \
+  --candidate-executable "$cli" --candidate-source-commit "$build_commit" \
+  --phase-start 0 --phase-end 0 \
+  --fixed-opening-corpus data/table32-opening-corpus --fixed-opening-labels "$labels"
+rtk python3 "$trainer" run --run-root "$runs/0058-phase00" --attempt-wall-seconds 43200
+rtk python3 "$trainer" verify --run-root "$runs/0058-phase00"
+```
+
+`--fixed-opening-limit-per-phase N` はphaseごとに予約を除いた先頭N個のIDを採る。
+未指定なら予約を除いた全件を要求する。ラベル未生成、欠落、または選択した成果物の変更で
+入力準備を停止する。0018予約済みなら `--reserved-opening-keys` にcanonicalな
+`"64文字の盤面:手番"` のJSONLを渡す。phase 0もlabelを学習する。
+固定序盤はtrain専用でvalidation/testは欠測とし、件数は `coverage` を読む。
+検証は保存済みラベル・行・step・整数exportを照合する。phase 9を全件選ぶと1 phaseに最大434,029行
+を読み込むため、少数件の試行から `--producer-rss-kib` とstep上限を見積もる。
+
+### 10–59 自前教師とsplit別の被覆
+
+1 runに1つのgeneration prefixを固定し、対象phaseを分けて準備する。
+既定のtrain/validation/testはprefix当たり12/32/32局。以下は後半の短局や重複除外に備え、
+64局から最低32 unique行を求める例。最低数は各対象phase・splitで教師行を採用できた異なる局数に適用する。
+
+```bash
+rtk python3 "$trainer" prepare --data-0058 --run-root "$runs/0058-phase10-19" \
+  --candidate-executable "$cli" --candidate-source-commit "$build_commit" \
+  --phase-start 10 --phase-end 19 --generation-prefix 10 \
+  --train-per-prefix 24 --validation-per-prefix 64 --test-per-prefix 64 \
+  --minimum-train-rows 12 --minimum-validation-rows 32 --minimum-test-rows 32
+rtk python3 "$trainer" run --run-root "$runs/0058-phase10-19" \
+  --attempt-wall-seconds 43200 --progress-every 10
+rtk python3 "$trainer" verify --run-root "$runs/0058-phase10-19"
+```
+
+本番規模の前に、別rootで同じprefix・教師設定を使い、各split 1局、最低行1、`--max-steps 1` と `--max-proposals 1` の準備を行い、人間が短いattemptで測る。
+`attempts/*/unit-resources.jsonl` の `phase=generation` の完了局ごとの `wall_seconds` と
+`attempts/*/completion.json` の `peak_resources` および `rss_incomplete_samples` を確認する。
+1局の観測範囲を予定局数に掛けて生成時間幅を見積もり、学習とoffline検証の時間を別に積む。
+prefixや残り空き数で費用は変わるため均一な時間は仮定しない。stop後のcheckpointsと
+完成済み局を使う場合は同じrootで `resume --attempt-wall-seconds 43200` を使う。
+`verify` が不足箇所を示した場合は、必要に応じて `--resume-from PHASE` を渡す。
+入力や上限を凍結するprepare設定を変える場合は新規rootを作る。
+
+`report.json` は生成局数、phase到達局数、重複除外前後の行数、手番別、prefix別の偏りと
+不足を保存する。prefix開始後の教師判断から学習行を得る。ゲームごとにsplitを固定し、
+D4同値でsplitをまたぐ行を除く。最低数不足は成功扱いせず、同じrootで設定を変更できない。
+validationは学習制御、testは候補を固定した後の診断。独立対局には過去の診断で露出した
+canonical keysを `--exclude-exposure-keys` で追加する。
+
+### 候補の結合と独立対局
+
+学習終了時の `candidate-artifact.json` とoffline receiptを保存する。全60 phaseへの結合には
+重複のない元rootを全て指定する。下記の `sources` は2つの部分候補を結合する例で、全60 phaseの候補には残りの元rootを追加する。
+明示的に相手を選ぶ0058対局は、それぞれ新しいrootへ保存する。
+
+```bash
+compare=tools/reversi-ai-training/table32_combine.py
+sources=(--source-root "$runs/0058-phase00" --source-root "$runs/0058-phase10-19")
+for opponent in s0 strategic random; do
+  rtk python3 "$compare" prepare --run-root "$runs/0058-vs-$opponent" \
+    --candidate-executable "$cli" --candidate-source-commit "$build_commit" \
+    --opponent "$opponent" --match-pairs 10 --match-depth 12 --match-exact-empty 16 "${sources[@]}"
+done
+rtk python3 "$compare" run --run-root "$runs/0058-vs-s0" --attempt-wall-seconds 43200
+rtk python3 "$compare" verify --run-root "$runs/0058-vs-s0"
+```
+
+各条件ですべてのペアを先後交換する。開始局面は10手以降で、固定序盤、指定済みの予約および
+学習元rootが記録した露出を外す。過去の結果を除くには `--exclude-exposure-keys` を繰り返し
+指定し、0018予約には `--reserved-opening-keys` を使う。ランダムは合法手一様選択でseedを固定する。
+各条件の結果を個別に保存する。開局の制約があるため、序盤固定集合の当てはまりや
+Playgroundの印象と同一の測定にはならない。
+
+### 保存と復元
+
+固定コーパスと完成したモデルは通常Gitで保持する。候補を保存する場合は新規ファイルとし、
+実行manifest、offline receiptと組み合わせて来歴を残す。0019の採用は別の決定とする。
+labelはversion/level別の不変rootで圧縮shard、manifest、進捗、失敗記録を保存する。
+中間データを共有するときはphase/batch単位で圧縮し、各shardのファイル名、SHA-256と
+復元先を保存する。1ファイル50 MiB未満を目標にし、100 MiB超は分割する。通常Gitの総量が
+実用的でない場合は保存先と保存していない範囲を記録する。
+
+復元時は元のディレクトリ構造を戻し、SHA-256、labelの `verify`、学習の `verify` の順に
+照合する。学習rootのmanifestが絶対パスで固定する入力はその場所に復元する。
+一部を再生成する場合は旧shardを上書きせず、新規rootに生成する。
+`--data-0058` の実行は、凍結してあるファイルdigestが一致すれば現在のHEADと記録時の
+producer/build commitの一致を要求しない。保存済み0054/0056は元runの契約を使う。
