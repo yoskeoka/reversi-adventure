@@ -6,6 +6,47 @@
 
 ## 準備と小規模測定
 
+### 運用スクリプト
+
+`run-table32-labels.sh` は 7.8.1 level 21 の測定、本番準備、分割・再開、offline検証を行う。
+リポジトリのルートで、チェックアウト外の保存先と準備済みの runtime receipt を絶対パスで指定する。
+
+```sh
+operator=tools/reversi-ai-training/run-table32-labels.sh
+run_directory=/absolute/path/reversi-ai-runs/0058
+runtime_receipt=/absolute/path/oracle-runtime/runtime.json
+
+rtk proxy bash "$operator" "$run_directory" measure "$runtime_receipt"
+```
+
+`measure` は少数の代表局面を測定し、見積もりを JSON で表示する。同じコマンドで測定を再開できる。
+見積もりの `complete` が true になったら、計測値からバッチサイズと１バッチのタイムアウトを決める。
+以下の 16 局面・7,200 秒は準備の例で、設定は本番 manifest に固定される。
+
+```sh
+LABEL_BATCH_SIZE=16 LABEL_BATCH_TIMEOUT_SECONDS=7200 \
+  rtk proxy bash "$operator" "$run_directory" prepare "$runtime_receipt"
+
+# phase 0–7 を順に進める。予算到達時は同じコマンドで再開する。
+rtk proxy bash "$operator" "$run_directory" run 0 7
+
+# phase 8 と 9 は各 phase の batch を [開始, 終了) で区切れる。
+rtk proxy bash "$operator" "$run_directory" run 8 8 0 64
+rtk proxy bash "$operator" "$run_directory" run 8 8 64 128
+rtk proxy bash "$operator" "$run_directory" run 9 9 0 64
+
+rtk proxy bash "$operator" "$run_directory" verify
+# 残りを実行してから、514,097 件すべての保存済みラベルを照合する。
+rtk proxy bash "$operator" "$run_directory" verify --complete
+```
+
+`run 8 8` や `run 9 9` を実行すると、完了済みバッチを照合しながら対象 phase の残りを進める。
+`JOBS`、`ATTEMPT_WALL_SECONDS`、`MAX_RSS_KIB`、`PROGRESS_EVERY` の既定値は
+それぞれ 1、43,200 秒、1,572,864 KiB、128 局面。測定時の並列度は 1 に固定する。
+保存先は `$run_directory/labels-v7.8.1-level21`。全件検証は Oracle を起動しない。
+
+### 個別コマンド
+
 リポジトリのルートで実行する。`run_directory` はチェックアウト外に置き、以下では絶対パスに置き換える。準備済みの 7.8.1 runtime receipt があれば再利用できる。新しいランタイムが必要な場合は `prepare-runtime` で新規ディレクトリに用意する。 [Oracle runtime の準備](../reversi-ai-oracle/README.md)
 
 ```sh

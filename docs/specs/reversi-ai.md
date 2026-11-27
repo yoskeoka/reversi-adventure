@@ -2422,6 +2422,8 @@ timeout・seed・対象範囲を凍結する。確認済みの石差のみ受理
 digestを照合して再使用する。現在のcheckoutのHEADに過去のproducer/build commitを
 要求せず、同一runの設定または入力の変化時は停止する。labelは別の圧縮成果物として
 version/level別に保存する。実測・本番label生成は人間が開始する。
+運用スクリプトは測定・見積もり、本番rootの準備、phaseまたはbatch範囲の実行・再開、
+offline検証を公開する。全phaseの全batchが揃ったことはoffline完全検証で確かめる。
 
 固定label入力は明示選択とし、必要な局面のlabelが欠けた場合は停止する。
 phase 0を含めて実際の手番のlabelを既存のphase学習と整数exportに渡す。
