@@ -27,6 +27,11 @@ def verify_attempts(root,manifest):
         else:
             st.require(charged + budget <= manifest["limits"]["wall_seconds"],
                        "cumulative execution budget exceeded")
+        if "attempt_rss_limits" in provenance:
+            limits = provenance["attempt_rss_limits"]
+            st.require(isinstance(limits, dict) and set(limits) <= {"producer_rss_kib", "child_rss_kib"}
+                       and all(type(value) is int and value > 0 for value in limits.values()),
+                       "attempt RSS budget invalid")
         charged+=budget
         completion=path/"completion.json"
         if completion.exists():

@@ -1,4 +1,6 @@
 import fcntl
+from contextlib import redirect_stderr
+import io
 import os
 from pathlib import Path
 import signal
@@ -149,6 +151,31 @@ class Table32ProcessTests(unittest.TestCase):
             self.assertEqual(verify_attempts(root, settings), 2)
             with self.assertRaisesRegex(Exception, "cumulative execution budget exhausted"):
                 process.supervise(root, settings, lambda attempt: None)
+
+    def test_attempt_rss_override_preserves_frozen_limits_and_progress_counts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = manifest()
+            metrics = {"producer_rss_kib": 5, "children_rss_kib": 0,
+                       "user_seconds": 0, "system_seconds": 0, "unavailable": []}
+
+            def worker(attempt):
+                st.atomic(attempt / "progress.json", {"phase": 7, "unit": "shard",
+                                                     "completed": 8, "total": 8})
+
+            stderr = io.StringIO()
+            with patch.object(process, "process_resources", return_value=metrics), redirect_stderr(stderr):
+                with self.assertRaisesRegex(Exception, "producer RSS budget exceeded"):
+                    process.supervise(root, settings, lambda attempt: time.sleep(1),
+                                      attempt_rss_limits={"producer_rss_kib": 4})
+                process.supervise(root, settings, worker, attempt_rss_limits={"producer_rss_kib": 6})
+            self.assertIn("phase=7 unit=shard completed=8 total=8", stderr.getvalue())
+            first = st.read(root / "attempts/0000/completion.json")
+            second = st.read(root / "attempts/0001/completion.json")
+            self.assertEqual(first["resource_limits"], settings["limits"])
+            self.assertEqual(first["attempt_rss_limits"], {"producer_rss_kib": 4})
+            self.assertEqual(second["attempt_rss_limits"], {"producer_rss_kib": 6})
+            self.assertGreater(verify_attempts(root, settings), 0)
 
     def test_unlimited_attempt_bypasses_exhausted_old_budget_without_resetting_record(self):
         with tempfile.TemporaryDirectory() as temporary:

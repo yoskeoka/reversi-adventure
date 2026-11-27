@@ -136,10 +136,10 @@ def _validate_artifact(artifact: dict, *, partial: bool) -> dict:
     common = (isinstance(provenance, dict) and _sha(provenance.get("input_manifest_digest"))
               and _sha(provenance.get("producer_commit"), 40))
     trained = (common and provenance.get("trainer_version") == TRAINER and provenance.get("optimizer") == OPTIMIZER
-               and provenance.get("source_kind") == "project-owned" and type(provenance.get("seed")) is int
+               and provenance.get("source_kind") in ("project-owned", "0058-fixed-opening-labels") and type(provenance.get("seed")) is int
                and 0 <= provenance["seed"] < 2**64)
     combined = (common and set(provenance) == {"source_kind", "combine_version", "input_manifest_digest", "producer_commit"}
-                and provenance.get("source_kind") == "combined-project-owned"
+                and provenance.get("source_kind") in ("combined-project-owned", "0058-combined-opening-labels")
                 and provenance.get("combine_version") == COMBINE_VERSION)
     if not (trained or combined):
         raise ValueError("invalid table32 provenance")

@@ -157,7 +157,12 @@ def coverage_plan(seed: int, phases, split_counts: dict, duplicate_limit: int = 
     return {"games": games, "coverage": coverage, "attempts": attempts}
 
 
-def generation_opening(spec: dict, *, max_candidates: int = 1000) -> dict:
+def intersects_reservation(opening: dict, reserved) -> bool:
+    return bool(reserved) and any(position_key(row["board"], row["side"]) in reserved
+                                   for row in (*opening["turns"], opening))
+
+
+def generation_opening(spec: dict, *, max_candidates: int = 1000, reserved=()) -> dict:
     """Skip terminal random candidates before any teacher decision is made."""
     require(type(max_candidates) is int and max_candidates > 0, "invalid opening candidate limit")
     rejected = []
@@ -168,12 +173,14 @@ def generation_opening(spec: dict, *, max_candidates: int = 1000) -> dict:
                                        "candidate": candidate}), 16))
         opening = random_prefix({**spec, "stream_seed": stream}, allow_terminal=True)
         board, side = opening["board"], opening["side"]
-        if rf.legal_moves(board, side) or rf.legal_moves(board, rf.other(side)):
+        legal = rf.legal_moves(board, side) or rf.legal_moves(board, rf.other(side))
+        blocked = intersects_reservation(opening, reserved)
+        if legal and not blocked:
             return {**opening, "candidate_index": candidate, "candidate_stream_seed": stream,
                     "rejected_candidates": rejected}
         rejected.append({"candidate": candidate, "stream_seed": stream,
                          "moves": [turn["move"] for turn in opening["turns"]],
-                         "reason": "terminal"})
+                         "reason": "reserved-opening" if blocked else "terminal"})
     raise training.TrainingError("generation opening candidate limit exhausted")
 
 
@@ -224,15 +231,20 @@ def validate_decision(board: str, side: str, result: dict, settings: dict) -> di
 
 def generate_game(spec: dict, choose: Choose, *, limits: dict | None = None) -> dict:
     settings = search_settings(TEACHER_SETTINGS, limits)
-    opening = generation_opening(spec)
+    reserved = frozenset((limits or {}).get("data_0058", {}).get("reserved_keys", ()))
+    opening = generation_opening(spec, reserved=reserved)
     board, side, decisions = opening["board"], opening["side"], []
     while rf.legal_moves(board, side) or rf.legal_moves(board, rf.other(side)):
         require(len(decisions) < 120, "generation decision ceiling exceeded")
+        require(not reserved or position_key(board, side) not in reserved,
+                "self-play reached a reserved opening")
         result = validate_decision(board, side,
                                    choose(f"{spec['game_id']}-{len(decisions):03}", board, side,
                                           dict(settings)), settings)
         decisions.append({"board": board, "side": side, **result})
         board, side = advance(board, side, result["move"])
+    require(not reserved or all(position_key(board, color) not in reserved for color in ("B", "W")),
+            "generated terminal is a reserved position")
     game = {"schema_version": 1, "version": VERSION,
             "score_contract": training.SCORE_CONTRACT, "spec": dict(spec),
             "opening": opening, "decisions": decisions, "terminal_board": board,
@@ -252,7 +264,8 @@ def replay_game(game: dict, *, limits: dict | None = None) -> list[dict]:
     unsigned = {k: v for k, v in game.items() if k != "game_digest"}
     require(game.get("game_digest") == training.digest(unsigned), "table32 game digest mismatch")
     spec = game["spec"]
-    require(game["opening"] == generation_opening(spec), "random prefix reconstruction mismatch")
+    reserved = frozenset((limits or {}).get("data_0058", {}).get("reserved_keys", ()))
+    require(game["opening"] == generation_opening(spec, reserved=reserved), "random prefix reconstruction mismatch")
     board, side = game["opening"]["board"], game["opening"]["side"]
     rows = []
     require(isinstance(game["decisions"], list) and len(game["decisions"]) <= 120,
@@ -260,6 +273,8 @@ def replay_game(game: dict, *, limits: dict | None = None) -> list[dict]:
     for cursor, decision in enumerate(game["decisions"]):
         require(decision.get("board") == board and decision.get("side") == side,
                 "generation decision state mismatch")
+        require(not reserved or position_key(board, side) not in reserved,
+                "saved self-play reached a reserved opening")
         validate_decision(board, side, decision, settings)
         rows.append({"id": f"{spec['game_id']}-{cursor:03}", "game_id": spec["game_id"],
                      "split": spec["split"], "prefix_length": spec["prefix_length"],
@@ -268,6 +283,8 @@ def replay_game(game: dict, *, limits: dict | None = None) -> list[dict]:
                      "source_kind": "project-owned-s0-terminal", "score_contract": training.SCORE_CONTRACT,
                      "canonical_key": position_key(board, side)})
         board, side = advance(board, side, decision["move"])
+    require(not reserved or all(position_key(board, color) not in reserved for color in ("B", "W")),
+            "saved terminal is a reserved position")
     require(not rf.legal_moves(board, side) and not rf.legal_moves(board, rf.other(side))
             and board == game["terminal_board"] and side == game["terminal_side"]
             and type(game["final_score_black"]) is int

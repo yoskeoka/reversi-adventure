@@ -106,13 +106,20 @@ def _failure(attempt, provenance, error):
 
 
 def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, extend=False,
-              attempt_wall_seconds=None):
+              attempt_wall_seconds=None, attempt_rss_limits=None):
     root = Path(root)
     st.require(type(progress_every) is int and progress_every > 0,
                "progress-every must be positive")
     st.require(attempt_wall_seconds is None or
                (type(attempt_wall_seconds) is int and attempt_wall_seconds >= 0),
                "attempt-wall-seconds must be a nonnegative integer")
+    resource_limits = manifest["limits"]
+    if attempt_rss_limits is not None:
+        st.require(isinstance(attempt_rss_limits, dict)
+                   and set(attempt_rss_limits) <= {"producer_rss_kib", "child_rss_kib"}
+                   and all(type(value) is int and value > 0 for value in attempt_rss_limits.values()),
+                   "attempt RSS limits must be positive integers")
+        resource_limits = {**resource_limits, **attempt_rss_limits}
     lock = (root / "run.lock").open("a+")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -155,6 +162,8 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                       "progress_every": progress_every, "prior_charged_seconds": charged}
         if attempt_wall_seconds is not None:
             provenance["attempt_wall_seconds"] = attempt_wall_seconds
+        if attempt_rss_limits is not None:
+            provenance["attempt_rss_limits"] = attempt_rss_limits
         st.atomic(attempt / "provenance.json", provenance, once=True)
         st.atomic(attempt / "progress.json", {"phase": "input-verification", "unit": "start"})
         # Reserve the first accounting interval before executing.  The worker
@@ -204,8 +213,9 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                                                        "elapsed_seconds": elapsed})
                 if elapsed >= next_heartbeat:
                     context = st.read(attempt / "progress.json")
-                    print(f"table32 phase={context['phase']} unit={context['unit']} completed=0 "
-                          f"total=1 elapsed_seconds={elapsed:.3f} status=running",
+                    print(f"table32 phase={context['phase']} unit={context['unit']} "
+                          f"completed={context.get('completed', 0)} total={context.get('total', 1)} "
+                          f"elapsed_seconds={elapsed:.3f} status=running",
                           file=sys.stderr, flush=True)
                     next_heartbeat = elapsed + 60.0
                 if remaining is not None:
@@ -213,9 +223,9 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
                                "cumulative wall budget exceeded" if attempt_wall_seconds is None
                                else "attempt wall budget exceeded")
                 st.require(metrics["producer_rss_kib"] is None
-                           or metrics["producer_rss_kib"] <= manifest["limits"]["producer_rss_kib"],
+                           or metrics["producer_rss_kib"] <= resource_limits["producer_rss_kib"],
                            "producer RSS budget exceeded")
-                st.require(metrics["children_rss_kib"] <= manifest["limits"]["child_rss_kib"],
+                st.require(metrics["children_rss_kib"] <= resource_limits["child_rss_kib"],
                            "child process group RSS budget exceeded")
                 time.sleep(0.2)
         except BaseException as error:
@@ -243,8 +253,9 @@ def supervise(root, manifest, worker, *, progress_every=1, resume_from=None, ext
             "rss_incomplete_samples": incomplete_samples}), once=True)
         context=st.read(attempt/"progress.json")
         succeeded=status==0 and failure is None
-        print(f"table32 phase={context['phase']} unit={context['unit']} completed={int(succeeded)} "
-              f"total=1 elapsed_seconds={elapsed:.3f} status={'complete' if succeeded else 'failed'}",
+        print(f"table32 phase={context['phase']} unit={context['unit']} "
+              f"completed={context.get('completed', int(succeeded))} total={context.get('total', 1)} "
+              f"elapsed_seconds={elapsed:.3f} status={'complete' if succeeded else 'failed'}",
               file=sys.stderr,flush=True)
         st.require(status == 0 and failure is None,
                    failure or f"table32 attempt failed; inspect {attempt / 'failure.json'}")

@@ -2386,3 +2386,68 @@ phase解決規則は探索キャッシュのcontextに含める。既存artifact
 現行の深さ4評価では独立 opening が8着手以降のため、phase 0–11 のみの候補は評価準備時に拒否する。後の phase と結合してから評価する。保存済み最終局の後に出力公開が中断された場合も、完了 unit を再検証して不足する出力を再生成する。
 
 manifest、完了 unit、候補と比較結果は固定し、中断後は検証済みの成果から再開する。設定や入力の変更には新 root を使う。attempt ごとの資源と累積、unit の進捗、phase と停止理由を記録し、既存の進捗形式と rate 制御に従う。offline verify は結合元との対応、露出、対局、gate と report を再構成し、trainer、candidate CLI、Oracle を起動しない。
+
+## Table32 診断と固定序盤教師 (0058)
+
+0058で明示的に選んだ新規runに限り、0–9 placementsの教師に
+Egaroucidの探索値を使用できる。10–59の教師は引き続き自前生成とする。
+0054/0056既存runの教師条件・入力・成果物、結合候補、0019採用モデルを保持する。
+0058の診断・候補作成と0018 acceptanceは独立した操作とする。
+
+### 保存済み候補のoffline診断
+
+結合artifactと検証済み学習rootの抽出行を照合し、全60 phaseの各splitについて
+runtimeと同じ手番視点・raw32の集計後丸め・clipでMSE（石差²）とMAE（石差）を算出する。
+phase別に入力root、教師、候補digest、件数、観測・未観測parameter数、出現頻度を表で
+保存し、MSEとMAEを別図にする。空splitの誤差はnullで欠測理由を記録する。
+旧phase 0は暫定固定ゼロと表示する。float参考値を出す場合は別系列とし、
+整数系列を保存済みstepの更新前lossで代用しない。原本には書き込まず、
+teacher、trainer、対局を起動しない。少数標本と露出済みtestを後続の評価計画に明記する。
+
+### 固定序盤コーパスとラベル
+
+0–9 placementsを合法展開し、黒・白・手番とD4で正規化した局面をphase別に格納する。
+強制passはplacementを増やさず、着手可能な側へ手番を渡す。終局は展開を終了する。
+phase 0–9の既知件数は1, 1, 3, 14, 60, 322, 1773, 10649, 67245, 434029。
+コーパスはラベルを含まない。決定的なID・圧縮shardと生成規則・件数・digestを記録し、
+独立した合法展開と正規化で照合する。通常Gitのshardは50 MiB未満を目標とし、
+100 MiBを超える場合は分割する。
+
+labelは新規rootに局面IDと1対1で保存する。Egaroucid 7.8.1 level 21を初期設定とし、
+operatorがruntimeとlevelを選択する。source・binary/resourcesと探索設定・手番視点・単位・
+timeout・seed・対象範囲を凍結する。確認済みの石差のみ受理し、合法手・強制pass・終局を
+検証する。序盤探索値は探索時点の推定値とする。終局は既存winner-empty規約に合わせる。
+小規模の代表局面をphase別に測定し、時間・RSS・未完了を保存した上で、operatorが
+時間予算・RSS上限・並列度・範囲を選んでbatchを開始または再開する。完成済みshardは
+digestを照合して再使用する。現在のcheckoutのHEADに過去のproducer/build commitを
+要求せず、同一runの設定または入力の変化時は停止する。labelは別の圧縮成果物として
+version/level別に保存する。実測・本番label生成は人間が開始する。
+運用スクリプトは測定・見積もり、本番rootの準備、phaseまたはbatch範囲の実行・再開、
+offline検証を公開する。全phaseの全batchが揃ったことはoffline完全検証で確かめる。
+
+固定label入力は明示選択とし、必要な局面のlabelが欠けた場合は停止する。
+phase 0を含めて実際の手番のlabelを既存のphase学習と整数exportに渡す。
+全局面から決定的に選んだtrain subsetの上限を指定できる。0018予約局面がある場合は
+canonical board-and-sideを照合し、同じ局面をtrainから除外する。全コーパスは変えない。
+全局面を選んだphaseのvalidation/testは独立データがないため欠測とする。
+0018が未選定の場合は公開コーパスと実際の露出の双方を後続の独立opening選定で照合する。
+
+### 局数と独立性
+
+10–59の新規0058 runはprefixごとにtrain、validation、testの局数を固定する。
+初期設定はtrain 12、validation 32、test 32で、各splitを独立に指定できる。
+game IDとcanonical D4 keyでsplitを分離し、他splitとの重複位置を教師から除く。
+予定局数と生成数、phase別の到達・unique・採用数を保存し、対象phaseの各splitが
+教師行を採用できた異なる局数が凍結した最低数に届かないときは入力不足として停止する。
+同じphaseのpassで行が増えても局数は増えない。phase範囲・step上限・
+再開位置を指定できる。新規runには固有の出力rootを用いる。
+validationは学習制御、testは候補固定後の診断に使用する。診断に露出したtestは最終holdout
+から除く。独立対局はS0・StrategicEvaluator・randomの条件を別々に固定し、depth、seed、
+先後、opening、時間を記録する。0018の予約や採用判定に流用しない。
+
+生成とlabel付けのstderr進捗は
+`table32 phase=PHASE unit=UNIT completed=N total=T elapsed_seconds=S status=STATUS`
+とする。labelの完成単位は公開済みshard内の局面、生成は完成局または完成shardとし、
+`--progress-every`は既定1（固定コーパス生成の既定は1 shard）。開始・停止・完了は常時表示する。
+中断・資源超過後も完成済みunitを保存して再開する。小規模fixture、コーパス列挙、
+保存済み候補のoffline診断を実装検証に用いる。追加自己対局、実学習、独立対局は人間が開始する。

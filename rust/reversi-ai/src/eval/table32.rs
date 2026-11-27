@@ -172,12 +172,18 @@ impl Table32Evaluator {
         let provenance = &artifact["provenance"];
         let trained = provenance["trainer_version"] == "reversi-ai-table32-training-v1"
             && provenance["optimizer"] == "table32_full_batch_adam_v1"
-            && provenance["source_kind"] == "project-owned"
+            && matches!(
+                provenance["source_kind"].as_str(),
+                Some("project-owned" | "0058-fixed-opening-labels")
+            )
             && provenance["seed"].as_u64().is_some();
         let combined = provenance
             .as_object()
             .is_some_and(|object| object.len() == 4)
-            && provenance["source_kind"] == "combined-project-owned"
+            && matches!(
+                provenance["source_kind"].as_str(),
+                Some("combined-project-owned" | "0058-combined-opening-labels")
+            )
             && provenance["combine_version"] == "table32-combine-v1";
         if !(trained || combined)
             || !sha(&provenance["input_manifest_digest"], 64)

@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import table32_data
 import table32_extract as extraction
 import table32_inputs as inputs
 import table32_model as model
@@ -123,6 +124,10 @@ def settings(args):
              "early_candidates_per_phase", "pool_sequences", "max_steps", "max_proposals",
              "decision_timeout_seconds", "time_limit_ms", "node_limit")
     value = {name: getattr(args, name) for name in names}
+    for split in ("validation", "test"):
+        key = f"{split}_per_prefix"
+        if value[key] is None:
+            value[key] = 32 if getattr(args, "data_0058", False) else inputs.SPLIT_COUNTS[split]
     resources = ("decision_timeout_seconds", "time_limit_ms", "node_limit")
     st.require(all(type(v) is int and (v >= 0 if k in resources else v > 0)
                    for k, v in value.items()), "invalid settings")
@@ -135,6 +140,13 @@ def settings(args):
                and (value["decision_timeout_seconds"] is not None) == bounded
                and (not bounded or value["decision_timeout_seconds"] * 1000 > value["time_limit_ms"]),
                "search limits must all be zero or all positive with timeout exceeding search time")
+    if getattr(args, "data_0058", False):
+        return table32_data.settings(args, value)
+    st.require(not getattr(args, "exclude_exposure_keys", None) and
+        all(getattr(args, name, None) is None for name in
+            ("fixed_opening_corpus", "fixed_opening_labels", "fixed_opening_limit_per_phase",
+             "reserved_opening_keys", *(f"minimum_{s}_rows" for s in table32_data.SPLITS))),
+        "0058 inputs require --data-0058")
     start = getattr(args, "phase_start", None)
     end = getattr(args, "phase_end", None)
     prefix = getattr(args, "generation_prefix", None)
@@ -184,6 +196,12 @@ def prepare(args):
     producer = clean_commit()
     baseline = st.pin(checkout / "models/trained/0019-20261020-02.json")
     st.require(baseline["sha256"] == st.BASELINE_SHA, "adopted S0 changed")
+    if "data_0058" in config:
+        return table32_data.prepare(root, args, config, baseline, candidate, candidate_commit,
+                                    producer, seed, source_hashes())
+    st.require(all(getattr(args, name) is not None for name in ("source_manifest",
+        "source_comparison_root", "source_evaluation_root", "oracle_runtime_receipt")),
+        "0054/0056 prepare requires historical roots and an Oracle runtime receipt")
     originals, snapshot = historical(args.source_manifest, args.source_comparison_root,
                                       args.source_evaluation_root,
                                       runtime_receipt=args.oracle_runtime_receipt, seed=seed)
@@ -246,6 +264,8 @@ def load(root, *, verify_originals=True):
                and manifest["sources"] == source_hashes(), "table32 producer/feature/seed identity changed; use a new root")
     st.require(st.read(root / "prepare.receipt.json") == st.seal({"manifest_digest": st.digest(manifest),
                "snapshot_digest": manifest["snapshot_digest"]}), "prepare receipt differs")
+    if "data_0058" in manifest["settings"]:
+        return manifest, table32_data.load(root, manifest)
     for name in ("baseline", "candidate_executable", "oracle_runtime_receipt"):
         st.check_pin(manifest[name])
     st.require(os.access(manifest["candidate_executable"]["path"], os.X_OK),
@@ -393,7 +413,7 @@ def phase_precision_metrics(rows, floats, integers):
                 "export_rate": clipped_export / count if count else None}}
 
 
-def opening_plan(seed, forbidden, *, prefix_min=12, prefix_max=30):
+def opening_plan(seed, forbidden, *, prefix_min=12, prefix_max=30, pairs=100, reserved=()):
     import random
     rng = random.Random(inputs.seed_stream(seed, "independent-match"))
     result, seen = [], set(forbidden)
@@ -405,11 +425,12 @@ def opening_plan(seed, forbidden, *, prefix_min=12, prefix_max=30):
         except training.TrainingError:
             continue
         key = inputs.position_key(opening["board"], opening["side"])
-        if key in seen or not inputs.rf.legal_moves(opening["board"], opening["side"]):
+        if (key in seen or not inputs.rf.legal_moves(opening["board"], opening["side"])
+                or inputs.intersects_reservation(opening, reserved)):
             continue
         result.append({**opening, "canonical_key": key, "attempt": attempt})
         seen.add(key)
-        if len(result) == 100:
+        if len(result) == pairs:
             return result
     raise ValueError("independent match opening pool exhausted")
 
@@ -539,7 +560,7 @@ def cycle(driver, snapshot, *, extend=False):
                     if kind=="candidate" else "trained")
     choose, solve = (driver.providers if driver.providers is not None else production_providers(driver))
     driver.computed("input-verification", "snapshot", {"snapshot_digest": m["snapshot_digest"],
-                     "limits": m["limits"], "acceptance_reservation": "not-yet-selected"})
+                     "limits": m["limits"], "acceptance_reservation": m.get("acceptance_reservation", "not-yet-selected")})
     target_phases = config.get("target_phases")
     partial = target_phases is not None
     coverage_plan = None
@@ -635,6 +656,7 @@ def cycle(driver, snapshot, *, extend=False):
     if imported_games:
         import table32_import
         table32_import.validate_splits([*imported_games, *_events(root, gen_start, gen_end)])
+    policy = config.get("data_0058")
     def data_build(folder):
         import itertools
         return extraction.build(itertools.chain(imported_games, _events(root, gen_start, gen_end)),
@@ -643,8 +665,11 @@ def cycle(driver, snapshot, *, extend=False):
             early_limit=config["early_positions"], limits=config, target_phases=target_phases,
             expected_prefixes=sorted({spec["prefix_length"] for spec in generation_plan}),
             trusted_import_count=len(imported_games),
-            train_collision_priority=config.get("training_only", False),
-            opening_coverage=coverage_plan is not None)
+            train_collision_priority=config.get("training_only", False) and policy is None,
+            opening_coverage=coverage_plan is not None,
+            fixed_rows=table32_data.fixed_rows(m) if policy is not None else (),
+            coverage_minima=policy["minimum_rows"] if policy is not None else None,
+            reserved_keys=snapshot.get("reserved_keys", ()))
     folder = root / "extracted"
     def validate_extraction(saved):
         with tempfile.TemporaryDirectory(prefix="table32-replay-") as temporary:
@@ -659,9 +684,10 @@ def cycle(driver, snapshot, *, extend=False):
     if paused is not None:
         return final_report(m, driver, "export-paused", {"resume_phase": "export", "phase": paused})
     artifact_factory = model.make_partial_artifact if partial else model.make_artifact
+    source_kind = table32_data.FIXED_SOURCE if m.get("fixed_openings") else "project-owned"
     artifact = artifact_factory(phase_weights, {"trainer_version":model.TRAINER,"seed":m["seed"],
         "input_manifest_digest": st.digest(m),"producer_commit":m["producer_commit"],
-        "source_kind":"project-owned","optimizer":model.OPTIMIZER})
+        "source_kind":source_kind,"optimizer":model.OPTIMIZER})
     driver.computed("export", "candidate-artifact", artifact)
     if driver.execute:
         st.atomic(root / "candidate-artifact.json", artifact, once=True)
@@ -692,7 +718,14 @@ def cycle(driver, snapshot, *, extend=False):
             st.require(exposure_path.read_bytes() == exposure_bytes, "training exposure keys do not reconstruct")
         exposure = {"path": exposure_path.name, "sha256": training.sha256_file(exposure_path), "count": len(forbidden)}
         driver.computed("export", "training-exposure", exposure)
+        detail = {}
+        if policy is not None:
+            detail["test_once_after_candidate_freeze"] = {
+                str(phase): phase_metric(extraction.phase_rows(folder, "test", phase), phase_weights[str(phase)])
+                for phase in target_phases
+            }
         return final_report(m, driver, "training-complete", {"candidate_digest": model.digest(artifact),
+            **detail,
             "exposure_keys": exposure, "coverage": extracted, "phases": phase_diagnostics,
             **({"opening_coverage": coverage_plan["coverage"]} if coverage_plan is not None else {})})
     if partial:
@@ -828,19 +861,22 @@ def production_providers(driver):
         instances.clear()
     def choose(kind, identifier, board, side, config):
         st.require(driver.execute,"offline replay attempted to start a candidate")
-        artifact = (driver.root / "candidate-artifact.json" if kind=="candidate"
-                    else Path(driver.m["baseline"]["path"]))
+        artifact = (driver.root / "candidate-artifact.json" if kind == "candidate"
+                    else None if kind == "strategic" else Path(driver.m["baseline"]["path"]))
         key = (kind,st.digest(config))
         if key not in instances:
             effective = {**config,"time_limit_ms":driver.m["settings"]["time_limit_ms"],
                          "node_limit":driver.m["settings"]["node_limit"]}
             partial = kind == "candidate" and "target_phases" in driver.m["settings"]
-            pins = {"executable": driver.m["candidate_executable"], "artifact": st.pin(artifact)}
+            pins = {"executable": driver.m["candidate_executable"]}
+            if artifact is not None:
+                pins["artifact"] = st.pin(artifact)
             if partial:
                 pins["fallback"] = driver.m["baseline"]
             instances[key] = players.Player(driver.m["candidate_executable"]["path"],artifact,effective,
                 driver.m["settings"]["decision_timeout_seconds"],
-                evaluator=("trained-table32-partial" if partial else "trained-table32") if kind=="candidate" else "trained",
+                evaluator=("trained-table32-partial" if partial else "trained-table32")
+                if kind == "candidate" else "strategic" if kind == "strategic" else "trained",
                 log=driver.attempt / "decisions.jsonl",expected_pins=pins,
                 fallback_artifact=driver.m["baseline"]["path"] if partial else None)
         return instances[key].decision(identifier,board,side)
@@ -857,7 +893,8 @@ def run(args):
     import table32_process
     root = args.run_root.resolve()
     manifest,snapshot = load(root,verify_originals=False)
-    st.require(clean_commit()==manifest["producer_commit"],"execution commit changed; use prepared producer")
+    if "data_0058" not in manifest["settings"]:
+        st.require(clean_commit()==manifest["producer_commit"],"execution commit changed; use prepared producer")
     if args.extend_to_200:
         st.require(not manifest["settings"].get("training_only", False), "training-only run cannot extend matches")
         from table32_verify import verify
@@ -923,17 +960,18 @@ def main(argv):
     prep=commands.add_parser("prepare")
     for name in ("run-root","source-manifest","source-comparison-root","source-evaluation-root",
                  "candidate-executable","oracle-runtime-receipt"):
-        prep.add_argument("--"+name,type=Path,required=True)
+        prep.add_argument("--"+name,type=Path,required=name in ("run-root", "candidate-executable"))
     prep.add_argument("--candidate-source-commit", required=True)
     prep.add_argument("--phase-start", type=int)
     prep.add_argument("--phase-end", type=int)
     prep.add_argument("--generation-prefix", type=int)
     prep.add_argument("--training-only", action="store_true", help="finish after export without evaluation")
+    table32_data.add_arguments(prep)
     prep.add_argument("--import-games-from", type=Path)
     prep.add_argument("--opening-coverage", action="store_true")
     prep.add_argument("--duplicate-limit", type=int, default=10)
     prep.add_argument("--coverage-attempt-limit", type=int, default=10000)
-    defaults={"seed":inputs.SEED,"train-per-prefix":12,"validation-per-prefix":2,"test-per-prefix":2,
+    defaults={"seed":inputs.SEED,"train-per-prefix":12,"validation-per-prefix":None,"test-per-prefix":None,
         "early-positions":256,"early-candidates-per-phase":32,"pool-sequences":10000,
         "max-steps":1000,"max-proposals":1000,"decision-timeout-seconds":0,
         "time-limit-ms":0,"node-limit":0,"max-wall-seconds":259200,
@@ -955,6 +993,8 @@ def main(argv):
         from table32_verify import verify
         result=verify(args.run_root)
     print(f"table32 {args.action} root={args.run_root} digest={st.digest(result)} outcome={result.get('outcome','prepared')}")
+    if args.action == "run" and result.get("coverage", {}).get("coverage_minima") is not None:
+        return 2 if result["outcome"] in ("input-coverage-unavailable", "training-phase-unavailable") else 0
     return 0
 
 
